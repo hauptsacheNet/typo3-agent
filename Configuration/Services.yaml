@@ -1,0 +1,11 @@
+services:
+  _defaults:
+    autowire: true
+    autoconfigure: true
+    public: false
+
+  Hn\Agent\:
+    resource: '../Classes/*'
+
+  Hn\Agent\Service\AgentService:
+    public: true

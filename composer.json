@@ -1,0 +1,51 @@
+{
+    "name": "hn/typo3-agent",
+    "type": "typo3-cms-extension",
+    "description": "TYPO3 extension that integrates an AI agent directly into TYPO3, using the MCP ToolRegistry for native tool execution with an OpenAI-compatible LLM API",
+    "license": "GPL-2.0-or-later",
+    "authors": [
+        {
+            "name": "Marco Pfeiffer",
+            "email": "marco@hauptsache.net"
+        }
+    ],
+    "require": {
+        "php": ">=8.1.0",
+        "hn/typo3-mcp-server": "*",
+        "typo3/cms-backend": "^13.4",
+        "typo3/cms-core": "^13.4"
+    },
+    "require-dev": {
+        "typo3/testing-framework": "^9.2.0",
+        "typo3/cms-install": "^13.4"
+    },
+    "autoload": {
+        "psr-4": {
+            "Hn\\Agent\\": "Classes/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Hn\\Agent\\Tests\\": "Tests/"
+        }
+    },
+    "extra": {
+        "typo3/cms": {
+            "extension-key": "agent"
+        }
+    },
+    "scripts": {
+        "test": [
+            "@test:functional"
+        ],
+        "test:functional": [
+            "phpunit -c phpunit.xml.dist"
+        ]
+    },
+    "config": {
+        "allow-plugins": {
+            "typo3/class-alias-loader": true,
+            "typo3/cms-composer-installers": true
+        }
+    }
+}

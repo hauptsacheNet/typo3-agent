@@ -1,0 +1,17 @@
+# files typo3 creates when installed
+/config
+/public
+/var
+/vendor
+
+# a lock file does not make sense for a library
+/composer.lock
+
+# build artifacts
+/.build
+/dist
+/Resources/Private/PHP/vendor
+/Resources/Private/PHP/composer.lock
+
+# other
+*.local
