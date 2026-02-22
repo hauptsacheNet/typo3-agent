@@ -34,10 +34,10 @@ apiUrl: https://openrouter.ai/api/v1/
 model: anthropic/claude-haiku-4-5
 ```
 
-**Scaleway**:
+**OpenAI**:
 ```
-apiUrl: https://api.scaleway.ai/v1/
-model: claude-haiku-4-5
+apiUrl: https://api.openai.com/v1/
+model: gpt-5.2
 ```
 
 **Any OpenAI-compatible API**:
