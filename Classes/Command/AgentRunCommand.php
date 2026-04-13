@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Hn\Agent\Command;
 
 use Hn\Agent\Service\AgentService;
+use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
@@ -13,6 +14,10 @@ use TYPO3\CMS\Core\Configuration\Tca\TcaFactory;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
+#[AsCommand(
+    name: 'agent:run',
+    description: 'Process pending AI agent tasks',
+)]
 class AgentRunCommand extends Command
 {
     public function __construct(
