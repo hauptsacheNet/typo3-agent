@@ -12,6 +12,7 @@ use TYPO3\CMS\Core\Configuration\Tca\TcaFactory;
 use TYPO3\CMS\Core\Context\Context;
 use TYPO3\CMS\Core\Context\UserAspect;
 use TYPO3\CMS\Core\Context\WorkspaceAspect;
+use Doctrine\DBAL\Types\Types;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
@@ -175,21 +176,17 @@ class AgentService
     /**
      * Decode messages from a task record.
      *
-     * Handles both raw JSON strings (from fetchAssociative) and already-decoded arrays
-     * (from Doctrine JSON type handling). Also handles double-encoded JSON.
+     * fetchAssociative() returns the raw JSON string from the database;
+     * decode it here. Returns null for empty/missing data.
      */
     private function decodeMessages(mixed $raw): ?array
     {
-        if (is_array($raw) && !empty($raw)) {
-            return $raw;
+        if (is_array($raw)) {
+            return $raw !== [] ? $raw : null;
         }
         if (is_string($raw) && $raw !== '' && $raw !== 'null') {
             $decoded = json_decode($raw, true);
-            // Handle potential double-encoding (Doctrine JSON type + manual json_encode)
-            if (is_string($decoded)) {
-                $decoded = json_decode($decoded, true);
-            }
-            if (is_array($decoded) && !empty($decoded)) {
+            if (is_array($decoded) && $decoded !== []) {
                 return $decoded;
             }
         }
@@ -279,16 +276,21 @@ class AgentService
         ];
 
         if ($messages !== null) {
-            $data['messages'] = json_encode($messages);
+            $data['messages'] = $messages;
         }
 
         if ($result !== null) {
             $data['result'] = $result;
         }
 
+        $types = [];
+        if (array_key_exists('messages', $data)) {
+            $types['messages'] = Types::JSON;
+        }
+
         $this->connectionPool
             ->getConnectionForTable('tx_agent_task')
-            ->update('tx_agent_task', $data, ['uid' => $taskUid]);
+            ->update('tx_agent_task', $data, ['uid' => $taskUid], $types);
     }
 
     /**
