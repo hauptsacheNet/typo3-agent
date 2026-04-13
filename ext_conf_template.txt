@@ -1,0 +1,14 @@
+# cat=basic/api/010; type=string; label=API URL: OpenAI-compatible API base URL (e.g. https://openrouter.ai/api/v1/)
+apiUrl = https://openrouter.ai/api/v1/
+
+# cat=basic/api/020; type=string; label=API Key: Bearer token for the LLM API
+apiKey =
+
+# cat=basic/api/030; type=string; label=Model: Model identifier (e.g. anthropic/claude-haiku-4-5)
+model = anthropic/claude-haiku-4-5
+
+# cat=basic/agent/040; type=text; label=System Prompt: Initial system prompt for the agent
+systemPrompt = You are a helpful TYPO3 CMS assistant. You have access to tools that let you read and modify TYPO3 pages, content, and database records. Use these tools to fulfill the user's request. Always verify your changes by reading the data back after writing.
+
+# cat=basic/agent/050; type=int+; label=Max Iterations: Safety limit for the agent loop
+maxIterations = 20
