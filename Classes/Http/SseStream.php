@@ -27,6 +27,7 @@ class SseStream implements SelfEmittableStreamInterface
             apache_setenv('no-gzip', '1');
         }
         ini_set('zlib.output_compression', '0');
+        ini_set('output_buffering', '0');
         ob_implicit_flush(true);
         while (ob_get_level() > 0) {
             ob_end_flush();
@@ -40,6 +41,7 @@ class SseStream implements SelfEmittableStreamInterface
             foreach ($serverEvent as $part) {
                 echo $part;
             }
+            ob_flush();
             flush();
         };
 
