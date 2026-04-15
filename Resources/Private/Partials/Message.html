@@ -1,0 +1,42 @@
+<html xmlns:f="http://typo3.org/ns/TYPO3/CMS/Fluid/ViewHelpers"
+      data-namespace-typo3-fluid="true">
+
+<f:switch expression="{message.role}">
+    <f:case value="system">
+        <div class="chat-msg chat-msg-tool">
+            <div class="chat-msg-role">system</div>
+            <pre>{message.content}</pre>
+        </div>
+    </f:case>
+    <f:case value="user">
+        <div class="chat-msg chat-msg-user">
+            <div class="chat-msg-role">you</div>
+            <pre>{message.content}</pre>
+        </div>
+    </f:case>
+    <f:case value="assistant">
+        <div class="chat-msg chat-msg-assistant">
+            <div class="chat-msg-role">assistant</div>
+            <f:if condition="{message.content}">
+                <pre>{message.content}</pre>
+            </f:if>
+            <f:if condition="{message.tool_calls}">
+                <f:for each="{message.tool_calls}" as="tc">
+                    <details class="chat-toolcall">
+                        <summary>🔧 {tc.function.name}</summary>
+                        <div>args: <code>{tc.function.arguments}</code></div>
+                    </details>
+                </f:for>
+            </f:if>
+        </div>
+    </f:case>
+    <f:case value="tool">
+        <div class="chat-msg chat-msg-tool">
+            <details>
+                <summary class="chat-msg-role">tool result</summary>
+                <pre>{message.content}</pre>
+            </details>
+        </div>
+    </f:case>
+</f:switch>
+</html>

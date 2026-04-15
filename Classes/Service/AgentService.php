@@ -4,15 +4,21 @@ declare(strict_types=1);
 
 namespace Hn\Agent\Service;
 
+use Hn\Agent\Domain\AgentTaskRepository;
+use Hn\Agent\Domain\TaskStatus;
+use Hn\Agent\Event\AfterAssistantMessageEvent;
+use Hn\Agent\Event\AfterToolExecutionEvent;
+use Hn\Agent\Event\BeforeLlmCallEvent;
+use Hn\Agent\Event\BeforeToolExecutionEvent;
 use Hn\McpServer\MCP\ToolRegistry;
 use Hn\McpServer\Service\WorkspaceContextService;
+use Psr\EventDispatcher\EventDispatcherInterface;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
 use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
 use TYPO3\CMS\Core\Configuration\Tca\TcaFactory;
 use TYPO3\CMS\Core\Context\Context;
 use TYPO3\CMS\Core\Context\UserAspect;
 use TYPO3\CMS\Core\Context\WorkspaceAspect;
-use Doctrine\DBAL\Types\Types;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
@@ -25,6 +31,8 @@ class AgentService
         private readonly ToolRegistry $toolRegistry,
         private readonly ExtensionConfiguration $extensionConfiguration,
         private readonly ConnectionPool $connectionPool,
+        private readonly EventDispatcherInterface $eventDispatcher,
+        private readonly AgentTaskRepository $repository,
     ) {}
 
     /**
@@ -40,31 +48,74 @@ class AgentService
      * Messages are saved after every iteration for resumability.
      *
      * @param int $taskUid The UID of the tx_agent_task record
-     * @param callable|null $onIteration Optional callback(int $iteration, array $assistantMessage) for progress output
      */
-    public function processTask(int $taskUid, ?callable $onIteration = null): void
+    public function processTask(int $taskUid): void
     {
-        $task = $this->loadTask($taskUid);
+        $task = $this->repository->findByUid($taskUid);
         if ($task === false) {
             throw new \RuntimeException('Task with UID ' . $taskUid . ' not found.');
         }
 
         // Atomically claim the task: only set to in_progress if it's still pending/failed
         // This prevents race conditions when multiple agent:run processes run concurrently
-        $claimed = $this->claimTask($taskUid, (int)$task['status']);
+        $claimed = $this->repository->claim($taskUid, TaskStatus::from((int)$task['status']));
         if (!$claimed) {
             throw new \RuntimeException('Task #' . $taskUid . ' could not be claimed (already in progress by another process?).');
         }
 
-        $messages = null;
+        // Set up backend user context from task's cruser_id
+        $this->setupBackendUserContext((int)($task['cruser_id'] ?? 0));
 
+        // Load or build messages
+        $messages = $this->buildMessages($task);
+
+        $this->runLoop($taskUid, $messages);
+    }
+
+    /**
+     * Continue an existing chat conversation by appending a new user message
+     * and running the agent loop.
+     *
+     * Used by the backend chat module to send follow-up messages.
+     *
+     * @param int $taskUid
+     * @param string $userMessage The new user message to append
+     * @return array The full updated messages array
+     */
+    public function continueChat(int $taskUid, string $userMessage): array
+    {
+        $task = $this->repository->findByUid($taskUid);
+        if ($task === false) {
+            throw new \RuntimeException('Task with UID ' . $taskUid . ' not found.');
+        }
+
+        // Set up backend user context from task's cruser_id
+        $this->setupBackendUserContext((int)($task['cruser_id'] ?? 0));
+
+        // Load or build existing messages, then append the new user message
+        $messages = $this->buildMessages($task);
+        $messages[] = ['role' => 'user', 'content' => $userMessage];
+
+        // Persist the user message + reset status to pending so claim succeeds
+        $this->repository->saveState($taskUid, $messages, TaskStatus::Pending);
+
+        // Atomically claim with status=0 we just wrote
+        $claimed = $this->repository->claim($taskUid, TaskStatus::Pending);
+        if (!$claimed) {
+            throw new \RuntimeException('Task #' . $taskUid . ' could not be claimed (already in progress by another process?).');
+        }
+
+        return $this->runLoop($taskUid, $messages);
+    }
+
+    /**
+     * Core agent loop: call LLM, execute tool calls, repeat until done or max iterations.
+     *
+     * Caller must ensure: task is claimed (status=1), BE_USER context is set up.
+     */
+    private function runLoop(int $taskUid, array $messages): array
+    {
         try {
-            // Set up backend user context from task's cruser_id
-            $this->setupBackendUserContext((int)($task['cruser_id'] ?? 0));
-
-            // Load or build messages
-            $messages = $this->buildMessages($task);
-
             // Convert MCP tools to OpenAI format
             $tools = $this->toolConverterService->convertTools($this->toolRegistry);
 
@@ -74,6 +125,8 @@ class AgentService
             $reachedLimit = false;
 
             for ($iteration = 0; $iteration < $maxIterations; $iteration++) {
+                $this->eventDispatcher->dispatch(new BeforeLlmCallEvent($taskUid, $iteration));
+
                 // Call LLM
                 $assistantMessage = $this->llmService->chatCompletion($messages, $tools);
 
@@ -81,12 +134,9 @@ class AgentService
                 $messages[] = $assistantMessage;
 
                 // Save checkpoint
-                $this->saveTaskState($taskUid, $messages, 1);
+                $this->repository->saveState($taskUid, $messages, TaskStatus::InProgress);
 
-                // Notify progress
-                if ($onIteration !== null) {
-                    $onIteration($iteration, $assistantMessage);
-                }
+                $this->eventDispatcher->dispatch(new AfterAssistantMessageEvent($taskUid, $iteration, $assistantMessage));
 
                 // Check for tool calls
                 $toolCalls = $assistantMessage['tool_calls'] ?? null;
@@ -101,6 +151,8 @@ class AgentService
                     $toolArguments = $toolCall['function']['arguments'] ?? '{}';
                     $toolCallId = $toolCall['id'] ?? '';
 
+                    $this->eventDispatcher->dispatch(new BeforeToolExecutionEvent($taskUid, $iteration, $toolCallId, $toolName, $toolArguments));
+
                     $toolResult = $this->toolConverterService->executeToolCall(
                         $this->toolRegistry,
                         $toolName,
@@ -113,10 +165,12 @@ class AgentService
                         'tool_call_id' => $toolCallId,
                         'content' => $toolResult,
                     ];
+
+                    $this->eventDispatcher->dispatch(new AfterToolExecutionEvent($taskUid, $iteration, $toolCallId, $toolName, $toolResult));
                 }
 
                 // Save checkpoint after tool execution
-                $this->saveTaskState($taskUid, $messages, 1);
+                $this->repository->saveState($taskUid, $messages, TaskStatus::InProgress);
 
                 if ($iteration === $maxIterations - 1) {
                     $reachedLimit = true;
@@ -129,48 +183,17 @@ class AgentService
             if ($reachedLimit) {
                 $result = '[Agent stopped: reached maximum of ' . $maxIterations . ' iterations]'
                     . ($result !== '' ? "\n\n" . $result : '');
-                $this->saveTaskState($taskUid, $messages, 3, $result);
+                $this->repository->saveState($taskUid, $messages, TaskStatus::Failed, $result);
             } else {
-                $this->saveTaskState($taskUid, $messages, 2, $result);
+                $this->repository->saveState($taskUid, $messages, TaskStatus::Ended, $result);
             }
+
+            return $messages;
         } catch (\Throwable $e) {
             // Preserve progress on failure
-            $this->saveTaskState($taskUid, $messages, 3, 'Error: ' . $e->getMessage());
+            $this->repository->saveState($taskUid, $messages, TaskStatus::Failed, 'Error: ' . $e->getMessage());
             throw $e;
         }
-    }
-
-    /**
-     * Atomically claim a task by setting status to in_progress only if current status matches.
-     * Returns true if the task was successfully claimed.
-     */
-    private function claimTask(int $taskUid, int $currentStatus): bool
-    {
-        $connection = $this->connectionPool->getConnectionForTable('tx_agent_task');
-        $affectedRows = $connection->update(
-            'tx_agent_task',
-            ['status' => 1, 'tstamp' => time()],
-            ['uid' => $taskUid, 'status' => $currentStatus],
-        );
-        return $affectedRows > 0;
-    }
-
-    /**
-     * Load a task record from the database.
-     */
-    private function loadTask(int $taskUid): array|false
-    {
-        $queryBuilder = $this->connectionPool
-            ->getQueryBuilderForTable('tx_agent_task');
-
-        $queryBuilder->getRestrictions()->removeAll();
-
-        return $queryBuilder
-            ->select('*')
-            ->from('tx_agent_task')
-            ->where($queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($taskUid)))
-            ->executeQuery()
-            ->fetchAssociative();
     }
 
     /**
@@ -179,7 +202,7 @@ class AgentService
      * fetchAssociative() returns the raw JSON string from the database;
      * decode it here. Returns null for empty/missing data.
      */
-    private function decodeMessages(mixed $raw): ?array
+    public function decodeMessages(mixed $raw): ?array
     {
         if (is_array($raw)) {
             return $raw !== [] ? $raw : null;
@@ -263,34 +286,6 @@ class AgentService
             }
         }
         return '';
-    }
-
-    /**
-     * Save task state (messages, status, result) to the database.
-     */
-    private function saveTaskState(int $taskUid, ?array $messages, int $status, ?string $result = null): void
-    {
-        $data = [
-            'status' => $status,
-            'tstamp' => time(),
-        ];
-
-        if ($messages !== null) {
-            $data['messages'] = $messages;
-        }
-
-        if ($result !== null) {
-            $data['result'] = $result;
-        }
-
-        $types = [];
-        if (array_key_exists('messages', $data)) {
-            $types['messages'] = Types::JSON;
-        }
-
-        $this->connectionPool
-            ->getConnectionForTable('tx_agent_task')
-            ->update('tx_agent_task', $data, ['uid' => $taskUid], $types);
     }
 
     /**

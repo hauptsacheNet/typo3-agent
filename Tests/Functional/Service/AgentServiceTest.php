@@ -4,10 +4,14 @@ declare(strict_types=1);
 
 namespace Hn\Agent\Tests\Functional\Service;
 
+use Hn\Agent\Domain\AgentTaskRepository;
+use Hn\Agent\Event\AfterAssistantMessageEvent;
+use Hn\Agent\Event\BeforeLlmCallEvent;
 use Hn\Agent\Service\AgentService;
 use Hn\Agent\Service\LlmService;
 use Hn\Agent\Service\ToolConverterService;
 use Hn\McpServer\MCP\ToolRegistry;
+use Psr\EventDispatcher\EventDispatcherInterface;
 use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
@@ -45,7 +49,7 @@ class AgentServiceTest extends FunctionalTestCase
     /**
      * Create a task record directly in the database and return its UID.
      */
-    private function createTask(string $title, string $prompt, int $pid = 0, int $status = 0, ?string $messages = null): int
+    private function createTask(string $title, string $prompt, int $pid = 0, int $status = 0, ?array $messages = null): int
     {
         $connection = $this->connectionPool->getConnectionForTable('tx_agent_task');
         $connection->insert('tx_agent_task', [
@@ -102,7 +106,7 @@ class AgentServiceTest extends FunctionalTestCase
     /**
      * Build an AgentService with a mocked LlmService that returns canned responses.
      */
-    private function buildAgentServiceWithMock(array $responses): AgentService
+    private function buildAgentServiceWithMock(array $responses, ?EventDispatcherInterface $eventDispatcher = null): AgentService
     {
         $callIndex = 0;
         $llmMock = $this->createMock(LlmService::class);
@@ -121,6 +125,8 @@ class AgentServiceTest extends FunctionalTestCase
             GeneralUtility::makeInstance(ToolRegistry::class),
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
             $this->connectionPool,
+            $eventDispatcher ?? $this->createStub(EventDispatcherInterface::class),
+            new AgentTaskRepository($this->connectionPool),
         );
     }
 
@@ -184,14 +190,14 @@ class AgentServiceTest extends FunctionalTestCase
     public function testResumeFromExistingMessages(): void
     {
         // Pre-fill messages as if the task was interrupted mid-conversation
-        $existingMessages = json_encode([
+        $existingMessages = [
             ['role' => 'system', 'content' => 'You are a TYPO3 assistant.'],
             ['role' => 'user', 'content' => 'List all pages'],
             ['role' => 'assistant', 'content' => null, 'tool_calls' => [
                 ['id' => 'call_001', 'type' => 'function', 'function' => ['name' => 'GetPageTree', 'arguments' => '{}']],
             ]],
             ['role' => 'tool', 'tool_call_id' => 'call_001', 'content' => 'Home, About'],
-        ]);
+        ];
 
         $taskUid = $this->createTask('Resume test', 'List all pages', 0, 0, $existingMessages);
 
@@ -225,6 +231,8 @@ class AgentServiceTest extends FunctionalTestCase
             GeneralUtility::makeInstance(ToolRegistry::class),
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
             $this->connectionPool,
+            $this->createStub(EventDispatcherInterface::class),
+            new AgentTaskRepository($this->connectionPool),
         );
 
         try {
@@ -262,19 +270,30 @@ class AgentServiceTest extends FunctionalTestCase
         self::assertStringContainsString('page context', strtolower($systemContent));
     }
 
-    public function testProgressCallbackIsCalled(): void
+    public function testEventsAreDispatched(): void
     {
-        $taskUid = $this->createTask('Callback test', 'Hello');
+        $taskUid = $this->createTask('Event test', 'Hello');
 
-        $agentService = $this->buildAgentServiceWithMock([
-            ['role' => 'assistant', 'content' => 'Done.'],
-        ]);
+        $dispatchedEvents = [];
+        $eventDispatcher = $this->createMock(EventDispatcherInterface::class);
+        $eventDispatcher->method('dispatch')->willReturnCallback(
+            function (object $event) use (&$dispatchedEvents) {
+                $dispatchedEvents[] = $event;
+                return $event;
+            }
+        );
 
-        $iterations = [];
-        $agentService->processTask($taskUid, function (int $iteration, array $message) use (&$iterations) {
-            $iterations[] = $iteration;
-        });
+        $agentService = $this->buildAgentServiceWithMock(
+            [['role' => 'assistant', 'content' => 'Done.']],
+            $eventDispatcher,
+        );
 
-        self::assertSame([0], $iterations);
+        $agentService->processTask($taskUid);
+
+        self::assertCount(2, $dispatchedEvents);
+        self::assertInstanceOf(BeforeLlmCallEvent::class, $dispatchedEvents[0]);
+        self::assertSame(0, $dispatchedEvents[0]->getIteration());
+        self::assertInstanceOf(AfterAssistantMessageEvent::class, $dispatchedEvents[1]);
+        self::assertSame(0, $dispatchedEvents[1]->getIteration());
     }
 }
