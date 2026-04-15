@@ -2,6 +2,13 @@
  * AI Chat backend module — sends messages via fetch and renders responses.
  * Supports SSE streaming for real-time updates.
  */
+import { marked } from 'marked';
+
+marked.setOptions({
+    breaks: true,
+    gfm: true,
+});
+
 class ChatModule {
     constructor() {
         this.container = document.getElementById('chat-container');
@@ -23,11 +30,27 @@ class ChatModule {
             }
         });
 
+        this.upgradeExistingAssistantMessages();
         this.scrollToBottom();
 
         if (this.container.dataset.autoStart === '1' && this.streamUri) {
             this.autoStart();
         }
+    }
+
+    renderMarkdown(text) {
+        return marked.parse(text ?? '');
+    }
+
+    upgradeExistingAssistantMessages() {
+        const bubbles = this.messagesEl.querySelectorAll('.chat-msg-assistant > pre');
+        bubbles.forEach((pre) => {
+            const raw = pre.textContent;
+            const content = document.createElement('div');
+            content.className = 'chat-msg-content';
+            content.innerHTML = this.renderMarkdown(raw);
+            pre.replaceWith(content);
+        });
     }
 
     async autoStart() {
@@ -91,7 +114,7 @@ class ChatModule {
 
     async sendStreaming(message) {
         const toolElements = {};
-        const streamState = { bubble: null, pre: null };
+        const streamState = { bubble: null, content: null, buffer: '' };
 
         try {
             const formData = new FormData();
@@ -168,9 +191,11 @@ class ChatModule {
                 if (!streamState.bubble) {
                     const built = this.createStreamingBubble();
                     streamState.bubble = built.bubble;
-                    streamState.pre = built.pre;
+                    streamState.content = built.content;
+                    streamState.buffer = '';
                 }
-                streamState.pre.textContent += data.text || '';
+                streamState.buffer += data.text || '';
+                streamState.content.innerHTML = this.renderMarkdown(streamState.buffer);
                 this.scrollToBottom();
                 break;
 
@@ -194,11 +219,12 @@ class ChatModule {
                         streamState.bubble.classList.remove('chat-msg-streaming');
                         // Trust the final content (in case last delta was dropped)
                         if (data.message?.content) {
-                            streamState.pre.textContent = data.message.content;
+                            streamState.content.innerHTML = this.renderMarkdown(data.message.content);
                         }
                     }
                     streamState.bubble = null;
-                    streamState.pre = null;
+                    streamState.content = null;
+                    streamState.buffer = '';
                 } else {
                     this.appendMessage(data.message);
                 }
@@ -238,12 +264,13 @@ class ChatModule {
         roleEl.textContent = 'assistant';
         bubble.appendChild(roleEl);
 
-        const pre = document.createElement('pre');
-        bubble.appendChild(pre);
+        const content = document.createElement('div');
+        content.className = 'chat-msg-content';
+        bubble.appendChild(content);
 
         this.messagesEl.appendChild(bubble);
         this.scrollToBottom();
-        return { bubble, pre };
+        return { bubble, content };
     }
 
     showThinkingIndicator() {
@@ -325,9 +352,17 @@ class ChatModule {
         wrapper.appendChild(roleEl);
 
         if (msg.content) {
-            const pre = document.createElement('pre');
-            pre.textContent = msg.content;
-            wrapper.appendChild(pre);
+            if (role === 'assistant') {
+                const content = document.createElement('div');
+                content.className = 'chat-msg-content';
+                content.innerHTML = this.renderMarkdown(msg.content);
+                wrapper.appendChild(content);
+            } else {
+                // User/System/Tool stay as plain text to avoid HTML injection
+                const pre = document.createElement('pre');
+                pre.textContent = msg.content;
+                wrapper.appendChild(pre);
+            }
         }
 
         if (Array.isArray(msg.tool_calls)) {
