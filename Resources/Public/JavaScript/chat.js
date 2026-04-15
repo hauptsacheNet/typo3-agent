@@ -91,6 +91,7 @@ class ChatModule {
 
     async sendStreaming(message) {
         const toolElements = {};
+        const streamState = { bubble: null, pre: null };
 
         try {
             const formData = new FormData();
@@ -120,7 +121,7 @@ class ChatModule {
                 buffer = result.remainder;
 
                 for (const evt of result.parsed) {
-                    this.handleSseEvent(evt.event, evt.data, toolElements);
+                    this.handleSseEvent(evt.event, evt.data, toolElements, streamState);
                 }
             }
         } catch (err) {
@@ -156,15 +157,51 @@ class ChatModule {
         return { parsed, remainder };
     }
 
-    handleSseEvent(event, data, toolElements) {
+    handleSseEvent(event, data, toolElements, streamState) {
         switch (event) {
             case 'llm_start':
                 this.showThinkingIndicator();
                 break;
 
+            case 'content_delta':
+                this.removeThinkingIndicator();
+                if (!streamState.bubble) {
+                    const built = this.createStreamingBubble();
+                    streamState.bubble = built.bubble;
+                    streamState.pre = built.pre;
+                }
+                streamState.pre.textContent += data.text || '';
+                this.scrollToBottom();
+                break;
+
+            case 'tool_call_delta':
+                this.removeThinkingIndicator();
+                // Currently only used as a live signal that a tool call is being
+                // prepared. The finalized tool call is rendered via assistant_message
+                // (tool_calls array) + tool_start/tool_result.
+                break;
+
             case 'assistant_message':
                 this.removeThinkingIndicator();
-                this.appendMessage(data.message);
+                if (streamState.bubble) {
+                    // Finalize the streaming bubble: strip streaming class and,
+                    // if the final message contains tool_calls, replace it with
+                    // the fully rendered version so tool_call <details> show up.
+                    if (Array.isArray(data.message?.tool_calls) && data.message.tool_calls.length > 0) {
+                        streamState.bubble.remove();
+                        this.appendMessage(data.message);
+                    } else {
+                        streamState.bubble.classList.remove('chat-msg-streaming');
+                        // Trust the final content (in case last delta was dropped)
+                        if (data.message?.content) {
+                            streamState.pre.textContent = data.message.content;
+                        }
+                    }
+                    streamState.bubble = null;
+                    streamState.pre = null;
+                } else {
+                    this.appendMessage(data.message);
+                }
                 break;
 
             case 'tool_start': {
@@ -190,6 +227,23 @@ class ChatModule {
                 this.showError(data.error || 'Unknown error');
                 break;
         }
+    }
+
+    createStreamingBubble() {
+        const bubble = document.createElement('div');
+        bubble.className = 'chat-msg chat-msg-assistant chat-msg-streaming';
+
+        const roleEl = document.createElement('div');
+        roleEl.className = 'chat-msg-role';
+        roleEl.textContent = 'assistant';
+        bubble.appendChild(roleEl);
+
+        const pre = document.createElement('pre');
+        bubble.appendChild(pre);
+
+        this.messagesEl.appendChild(bubble);
+        this.scrollToBottom();
+        return { bubble, pre };
     }
 
     showThinkingIndicator() {

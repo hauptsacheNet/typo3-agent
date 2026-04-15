@@ -21,21 +21,36 @@ class LlmServiceTest extends FunctionalTestCase
         'agent',
     ];
 
-    public function testChatCompletionThrowsOnMissingApiKey(): void
+    private function buildService(): LlmService
     {
-        // Ensure apiKey is empty (default)
-        $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['agent']['apiKey'] = '';
-
-        $llmService = new LlmService(
+        return new LlmService(
             GeneralUtility::makeInstance(RequestFactory::class),
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
         );
+    }
+
+    public function testChatCompletionThrowsOnMissingApiKey(): void
+    {
+        $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['agent']['apiKey'] = '';
 
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessageMatches('/apiKey is not configured/');
 
-        $llmService->chatCompletion([
+        $this->buildService()->chatCompletion([
             ['role' => 'user', 'content' => 'Hello'],
         ]);
+    }
+
+    public function testChatCompletionStreamThrowsOnMissingApiKey(): void
+    {
+        $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['agent']['apiKey'] = '';
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessageMatches('/apiKey is not configured/');
+
+        $this->buildService()->chatCompletionStream(
+            [['role' => 'user', 'content' => 'Hello']],
+            [],
+        );
     }
 }

@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Hn\Agent\Controller;
 
 use Hn\Agent\Domain\AgentTaskRepository;
-use Hn\Agent\EventListener\AgentEventRelay;
 use Hn\Agent\Http\SseStream;
 use Hn\Agent\Service\AgentService;
 use Psr\Http\Message\ResponseInterface;
@@ -40,7 +39,6 @@ class ChatController
         private readonly IconFactory           $iconFactory,
         private readonly AgentTaskRepository   $repository,
         private readonly AgentService          $agentService,
-        private readonly AgentEventRelay       $agentEventRelay,
     )
     {
     }
@@ -211,31 +209,24 @@ class ChatController
         }
 
         $agentService = $this->agentService;
-        $agentEventRelay = $this->agentEventRelay;
 
         if ($isInitialProcessing) {
-            return $this->buildSseResponse(static function (callable $send) use ($agentService, $agentEventRelay, $taskUid): void {
-                $agentEventRelay->setCallback($send);
+            return $this->buildSseResponse(static function (callable $send) use ($agentService, $taskUid): void {
                 try {
-                    $agentService->processTask($taskUid);
+                    $agentService->processTask($taskUid, $send);
                     $send('done', ['status' => 2]);
                 } catch (\Throwable $e) {
                     $send('error', ['error' => $e->getMessage(), 'status' => 3]);
-                } finally {
-                    $agentEventRelay->clearCallback();
                 }
             });
         }
 
-        return $this->buildSseResponse(static function (callable $send) use ($agentService, $agentEventRelay, $taskUid, $message): void {
-            $agentEventRelay->setCallback($send);
+        return $this->buildSseResponse(static function (callable $send) use ($agentService, $taskUid, $message): void {
             try {
-                $messages = $agentService->continueChat($taskUid, $message);
+                $messages = $agentService->continueChat($taskUid, $message, $send);
                 $send('done', ['status' => 2, 'messages' => $messages]);
             } catch (\Throwable $e) {
                 $send('error', ['error' => $e->getMessage(), 'status' => 3]);
-            } finally {
-                $agentEventRelay->clearCallback();
             }
         });
     }

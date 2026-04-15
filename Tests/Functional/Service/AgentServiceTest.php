@@ -5,13 +5,10 @@ declare(strict_types=1);
 namespace Hn\Agent\Tests\Functional\Service;
 
 use Hn\Agent\Domain\AgentTaskRepository;
-use Hn\Agent\Event\AfterAssistantMessageEvent;
-use Hn\Agent\Event\BeforeLlmCallEvent;
 use Hn\Agent\Service\AgentService;
 use Hn\Agent\Service\LlmService;
 use Hn\Agent\Service\ToolConverterService;
 use Hn\McpServer\MCP\ToolRegistry;
-use Psr\EventDispatcher\EventDispatcherInterface;
 use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
@@ -106,11 +103,11 @@ class AgentServiceTest extends FunctionalTestCase
     /**
      * Build an AgentService with a mocked LlmService that returns canned responses.
      */
-    private function buildAgentServiceWithMock(array $responses, ?EventDispatcherInterface $eventDispatcher = null): AgentService
+    private function buildAgentServiceWithMock(array $responses): AgentService
     {
         $callIndex = 0;
         $llmMock = $this->createMock(LlmService::class);
-        $llmMock->method('chatCompletion')->willReturnCallback(
+        $llmMock->method('chatCompletionStream')->willReturnCallback(
             function () use (&$callIndex, $responses) {
                 if ($callIndex >= count($responses)) {
                     throw new \RuntimeException('LlmService mock exhausted: no more responses');
@@ -125,7 +122,6 @@ class AgentServiceTest extends FunctionalTestCase
             GeneralUtility::makeInstance(ToolRegistry::class),
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
             $this->connectionPool,
-            $eventDispatcher ?? $this->createStub(EventDispatcherInterface::class),
             new AgentTaskRepository($this->connectionPool),
         );
     }
@@ -221,7 +217,7 @@ class AgentServiceTest extends FunctionalTestCase
         $taskUid = $this->createTask('Fail test', 'Do something');
 
         $llmMock = $this->createMock(LlmService::class);
-        $llmMock->method('chatCompletion')->willThrowException(
+        $llmMock->method('chatCompletionStream')->willThrowException(
             new \RuntimeException('API connection failed')
         );
 
@@ -231,7 +227,6 @@ class AgentServiceTest extends FunctionalTestCase
             GeneralUtility::makeInstance(ToolRegistry::class),
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
             $this->connectionPool,
-            $this->createStub(EventDispatcherInterface::class),
             new AgentTaskRepository($this->connectionPool),
         );
 
@@ -270,30 +265,28 @@ class AgentServiceTest extends FunctionalTestCase
         self::assertStringContainsString('page context', strtolower($systemContent));
     }
 
-    public function testEventsAreDispatched(): void
+    public function testCallbackReceivesProgressUpdates(): void
     {
         $taskUid = $this->createTask('Event test', 'Hello');
 
-        $dispatchedEvents = [];
-        $eventDispatcher = $this->createMock(EventDispatcherInterface::class);
-        $eventDispatcher->method('dispatch')->willReturnCallback(
-            function (object $event) use (&$dispatchedEvents) {
-                $dispatchedEvents[] = $event;
-                return $event;
-            }
-        );
+        $calls = [];
+        $progress = function (string $event, array $data) use (&$calls): void {
+            $calls[] = [$event, $data];
+        };
 
         $agentService = $this->buildAgentServiceWithMock(
             [['role' => 'assistant', 'content' => 'Done.']],
-            $eventDispatcher,
         );
 
-        $agentService->processTask($taskUid);
+        $agentService->processTask($taskUid, $progress);
 
-        self::assertCount(2, $dispatchedEvents);
-        self::assertInstanceOf(BeforeLlmCallEvent::class, $dispatchedEvents[0]);
-        self::assertSame(0, $dispatchedEvents[0]->getIteration());
-        self::assertInstanceOf(AfterAssistantMessageEvent::class, $dispatchedEvents[1]);
-        self::assertSame(0, $dispatchedEvents[1]->getIteration());
+        self::assertCount(2, $calls);
+
+        self::assertSame('llm_start', $calls[0][0]);
+        self::assertSame(0, $calls[0][1]['iteration']);
+
+        self::assertSame('assistant_message', $calls[1][0]);
+        self::assertSame(0, $calls[1][1]['iteration']);
+        self::assertSame('Done.', $calls[1][1]['message']['content']);
     }
 }

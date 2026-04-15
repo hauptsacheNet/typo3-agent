@@ -6,13 +6,8 @@ namespace Hn\Agent\Service;
 
 use Hn\Agent\Domain\AgentTaskRepository;
 use Hn\Agent\Domain\TaskStatus;
-use Hn\Agent\Event\AfterAssistantMessageEvent;
-use Hn\Agent\Event\AfterToolExecutionEvent;
-use Hn\Agent\Event\BeforeLlmCallEvent;
-use Hn\Agent\Event\BeforeToolExecutionEvent;
 use Hn\McpServer\MCP\ToolRegistry;
 use Hn\McpServer\Service\WorkspaceContextService;
-use Psr\EventDispatcher\EventDispatcherInterface;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
 use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
 use TYPO3\CMS\Core\Configuration\Tca\TcaFactory;
@@ -31,7 +26,6 @@ class AgentService
         private readonly ToolRegistry $toolRegistry,
         private readonly ExtensionConfiguration $extensionConfiguration,
         private readonly ConnectionPool $connectionPool,
-        private readonly EventDispatcherInterface $eventDispatcher,
         private readonly AgentTaskRepository $repository,
     ) {}
 
@@ -48,8 +42,12 @@ class AgentService
      * Messages are saved after every iteration for resumability.
      *
      * @param int $taskUid The UID of the tx_agent_task record
+     * @param callable(string, array): void|null $progress Optional progress callback.
+     *        Invoked with (string $event, array $data) where $event is one of
+     *        'llm_start', 'assistant_message', 'tool_start', 'tool_result',
+     *        'content_delta', 'tool_call_delta'.
      */
-    public function processTask(int $taskUid): void
+    public function processTask(int $taskUid, ?callable $progress = null): void
     {
         $task = $this->repository->findByUid($taskUid);
         if ($task === false) {
@@ -69,7 +67,7 @@ class AgentService
         // Load or build messages
         $messages = $this->buildMessages($task);
 
-        $this->runLoop($taskUid, $messages);
+        $this->runLoop($taskUid, $messages, $progress);
     }
 
     /**
@@ -80,9 +78,10 @@ class AgentService
      *
      * @param int $taskUid
      * @param string $userMessage The new user message to append
+     * @param callable(string, array): void|null $progress Optional progress callback, see processTask().
      * @return array The full updated messages array
      */
-    public function continueChat(int $taskUid, string $userMessage): array
+    public function continueChat(int $taskUid, string $userMessage, ?callable $progress = null): array
     {
         $task = $this->repository->findByUid($taskUid);
         if ($task === false) {
@@ -105,15 +104,17 @@ class AgentService
             throw new \RuntimeException('Task #' . $taskUid . ' could not be claimed (already in progress by another process?).');
         }
 
-        return $this->runLoop($taskUid, $messages);
+        return $this->runLoop($taskUid, $messages, $progress);
     }
 
     /**
      * Core agent loop: call LLM, execute tool calls, repeat until done or max iterations.
      *
      * Caller must ensure: task is claimed (status=1), BE_USER context is set up.
+     *
+     * @param callable(string, array): void|null $progress
      */
-    private function runLoop(int $taskUid, array $messages): array
+    private function runLoop(int $taskUid, array $messages, ?callable $progress): array
     {
         try {
             // Convert MCP tools to OpenAI format
@@ -125,10 +126,33 @@ class AgentService
             $reachedLimit = false;
 
             for ($iteration = 0; $iteration < $maxIterations; $iteration++) {
-                $this->eventDispatcher->dispatch(new BeforeLlmCallEvent($taskUid, $iteration));
+                if ($progress !== null) {
+                    $progress('llm_start', ['iteration' => $iteration]);
+                }
 
-                // Call LLM
-                $assistantMessage = $this->llmService->chatCompletion($messages, $tools);
+                // Per-delta callback for streaming LLM chunks. Rewrites raw SSE
+                // delta types ('content', 'tool_call', 'finish') into the agent-level
+                // progress events ('content_delta', 'tool_call_delta'); 'finish' is
+                // intentionally dropped since 'assistant_message' below marks the
+                // end of an iteration for downstream consumers.
+                $onDelta = $progress === null
+                    ? null
+                    : static function (string $deltaType, array $payload) use ($progress, $iteration): void {
+                        if ($deltaType === 'content') {
+                            $progress('content_delta', [
+                                'iteration' => $iteration,
+                                'text' => $payload['text'] ?? '',
+                            ]);
+                            return;
+                        }
+                        if ($deltaType === 'tool_call') {
+                            $progress('tool_call_delta', ['iteration' => $iteration] + $payload);
+                        }
+                    };
+
+                // Call LLM (streaming — invokes $onDelta per chunk, returns
+                // aggregated message with same shape as chatCompletion())
+                $assistantMessage = $this->llmService->chatCompletionStream($messages, $tools, $onDelta);
 
                 // Append assistant message
                 $messages[] = $assistantMessage;
@@ -136,7 +160,12 @@ class AgentService
                 // Save checkpoint
                 $this->repository->saveState($taskUid, $messages, TaskStatus::InProgress);
 
-                $this->eventDispatcher->dispatch(new AfterAssistantMessageEvent($taskUid, $iteration, $assistantMessage));
+                if ($progress !== null) {
+                    $progress('assistant_message', [
+                        'iteration' => $iteration,
+                        'message' => $assistantMessage,
+                    ]);
+                }
 
                 // Check for tool calls
                 $toolCalls = $assistantMessage['tool_calls'] ?? null;
@@ -151,7 +180,14 @@ class AgentService
                     $toolArguments = $toolCall['function']['arguments'] ?? '{}';
                     $toolCallId = $toolCall['id'] ?? '';
 
-                    $this->eventDispatcher->dispatch(new BeforeToolExecutionEvent($taskUid, $iteration, $toolCallId, $toolName, $toolArguments));
+                    if ($progress !== null) {
+                        $progress('tool_start', [
+                            'iteration' => $iteration,
+                            'tool_call_id' => $toolCallId,
+                            'tool_name' => $toolName,
+                            'arguments' => $toolArguments,
+                        ]);
+                    }
 
                     $toolResult = $this->toolConverterService->executeToolCall(
                         $this->toolRegistry,
@@ -166,7 +202,14 @@ class AgentService
                         'content' => $toolResult,
                     ];
 
-                    $this->eventDispatcher->dispatch(new AfterToolExecutionEvent($taskUid, $iteration, $toolCallId, $toolName, $toolResult));
+                    if ($progress !== null) {
+                        $progress('tool_result', [
+                            'iteration' => $iteration,
+                            'tool_call_id' => $toolCallId,
+                            'tool_name' => $toolName,
+                            'content' => $toolResult,
+                        ]);
+                    }
                 }
 
                 // Save checkpoint after tool execution
