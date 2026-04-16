@@ -3,6 +3,7 @@
  * Supports SSE streaming for real-time updates.
  */
 import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 
 marked.setOptions({
     breaks: true,
@@ -39,7 +40,7 @@ class ChatModule {
     }
 
     renderMarkdown(text) {
-        return marked.parse(text ?? '');
+        return DOMPurify.sanitize(marked.parse(text ?? ''));
     }
 
     upgradeExistingAssistantMessages() {
