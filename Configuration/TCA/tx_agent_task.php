@@ -13,6 +13,9 @@ return [
         ],
         'iconfile' => 'EXT:agent/Resources/Public/Icons/Extension.svg',
         'searchFields' => 'title,prompt',
+        'security' => [
+            'ignorePageTypeRestriction' => true,
+        ],
     ],
     'types' => [
         '0' => [
