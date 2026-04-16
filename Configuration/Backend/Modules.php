@@ -4,9 +4,9 @@ use Hn\Agent\Controller\ChatController;
 
 return [
     'ai_agent_chat' => [
-        'parent' => 'system',
+        'parent' => 'web',
         'access' => 'user',
-        'path' => '/module/system/ai-agent-chat',
+        'path' => '/module/web/ai-agent-chat',
         'iconIdentifier' => 'module-ai-agent-chat',
         'labels' => [
             'title' => 'AI Chat',

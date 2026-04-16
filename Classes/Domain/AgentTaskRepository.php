@@ -52,20 +52,24 @@ class AgentTaskRepository
 
     /**
      * Load chat list for a backend user, ordered by last update.
+     * When $pid > 0, only chats on that page are returned.
      *
      * @return array<int, array{uid: int, title: string, status: int, tstamp: int, crdate: int}>
      */
-    public function findChatsForUser(int $userId, int $limit = 100): array
+    public function findChatsForUser(int $userId, int $pid = 0, int $limit = 100): array
     {
         $qb = $this->connectionPool->getQueryBuilderForTable(self::TABLE);
-        return $qb
-            ->select('uid', 'title', 'status', 'tstamp', 'crdate')
+        $qb->select('uid', 'title', 'status', 'tstamp', 'crdate')
             ->from(self::TABLE)
             ->where($qb->expr()->eq('cruser_id', $qb->createNamedParameter($userId, ParameterType::INTEGER)))
             ->orderBy('tstamp', 'DESC')
-            ->setMaxResults($limit)
-            ->executeQuery()
-            ->fetchAllAssociative();
+            ->setMaxResults($limit);
+
+        if ($pid > 0) {
+            $qb->andWhere($qb->expr()->eq('pid', $qb->createNamedParameter($pid, ParameterType::INTEGER)));
+        }
+
+        return $qb->executeQuery()->fetchAllAssociative();
     }
 
     /**

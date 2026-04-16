@@ -5,18 +5,26 @@
 <f:section name="Content">
     <h1>AI Chat</h1>
 
-
-    <form action="{newUri}" method="post" class="mb-4">
-        <div class="input-group">
-            <input type="text"
-                   name="message"
-                   class="form-control"
-                   placeholder="Start a new chat — type your first message…"
-                   autofocus
-                   required>
-            <button type="submit" class="btn btn-primary">New Chat</button>
-        </div>
-    </form>
+    <f:if condition="{pageId}">
+        <f:then>
+            <form action="{newUri}" method="post" class="mb-4">
+                <div class="input-group">
+                    <input type="text"
+                           name="message"
+                           class="form-control"
+                           placeholder="Start a new chat — type your first message…"
+                           autofocus
+                           required>
+                    <button type="submit" class="btn btn-primary">New Chat</button>
+                </div>
+            </form>
+        </f:then>
+        <f:else>
+            <div class="callout callout-info mb-4">
+                <div class="callout-body">Please select a page in the page tree to start a new chat.</div>
+            </div>
+        </f:else>
+    </f:if>
 
     <f:if condition="{chats}">
         <f:then>
@@ -43,7 +51,7 @@
                             </td>
                             <td><f:format.date format="Y-m-d H:i">@{chat.tstamp}</f:format.date></td>
                             <td>
-                                <a href="{f:be.uri(route:'ai_agent_chat.show', parameters:'{task:chat.uid}')}"
+                                <a href="{f:be.uri(route:'ai_agent_chat.show', parameters:'{task:chat.uid, id:pageId}')}"
                                    class="btn btn-sm btn-default">Open</a>
                             </td>
                         </tr>
@@ -52,7 +60,9 @@
             </table>
         </f:then>
         <f:else>
-            <p class="text-muted">No chats yet. Start one above.</p>
+            <f:if condition="{pageId}">
+                <p class="text-muted">No chats yet on this page. Start one above.</p>
+            </f:if>
         </f:else>
     </f:if>
 </f:section>
