@@ -26,25 +26,44 @@ Go to **Settings > Extension Configuration > agent** and configure:
 | `systemPrompt` | *(built-in)* | System prompt for the agent |
 | `maxIterations` | `20` | Safety limit for the agent loop |
 
+As soon as `apiUrl` and `apiKey` are filled in, the **Model** field turns into
+a dropdown populated live from the provider's `/models` endpoint (no save
+required — the backend proxies the call to avoid CORS and keep the key out of
+cross-origin traffic). If the endpoint is unreachable or unsupported, the
+field falls back to a free-text input so you can type the model ID manually.
+
 ### Provider Examples
 
 **OpenRouter** (default — access to many models):
 ```
 apiUrl: https://openrouter.ai/api/v1/
-model: anthropic/claude-haiku-4-5
+model:  anthropic/claude-haiku-4-5
 ```
+Sign up at [openrouter.ai](https://openrouter.ai/) and create a key.
 
 **OpenAI**:
 ```
 apiUrl: https://api.openai.com/v1/
-model: gpt-5.2
+model:  gpt-4.1
 ```
+Keys from [platform.openai.com](https://platform.openai.com/api-keys).
+
+**Mittwald AI** (GDPR-compliant hosting in Germany):
+```
+apiUrl: https://api.openai.mittwald.de/v1/
+model:  (pick from dropdown once the key is entered)
+```
+Available via mStudio for Mittwald customers. The endpoint is OpenAI-compatible
+and data stays in the EU — a good fit when OpenRouter / OpenAI raise data
+protection concerns.
 
 **Any OpenAI-compatible API**:
 ```
 apiUrl: https://your-provider.com/v1/
-model: your-model-id
+model:  your-model-id
 ```
+The extension only requires a provider that speaks the OpenAI chat-completions
+protocol (including tool calling and SSE streaming). No code changes needed.
 
 ## Usage
 

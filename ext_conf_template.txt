@@ -4,7 +4,7 @@ apiUrl = https://openrouter.ai/api/v1/
 # cat=basic/api/020; type=string; label=API Key: Bearer token for the LLM API
 apiKey =
 
-# cat=basic/api/030; type=string; label=Model: Model identifier (e.g. anthropic/claude-haiku-4-5)
+# cat=basic/api/030; type=user[Hn\Agent\Form\ModelFieldRenderer->render]; label=Model: Select a model (loaded live from the provider once apiUrl + apiKey are set)
 model = anthropic/claude-haiku-4-5
 
 # cat=basic/agent/040; type=text; label=System Prompt: Initial system prompt for the agent
