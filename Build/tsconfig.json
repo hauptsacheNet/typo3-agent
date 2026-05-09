@@ -1,0 +1,34 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "baseUrl": ".",
+    "noEmit": true,
+
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitOverride": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+
+    "experimentalDecorators": true,
+    "useDefineForClassFields": false,
+
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+
+    "paths": {
+      "@typo3/*": ["./.typo3-core-types/Build/Sources/TypeScript/*"],
+      "lit": ["./node_modules/lit"],
+      "lit/*": ["./node_modules/lit/*"],
+      "@lit/reactive-element": ["./node_modules/@lit/reactive-element"],
+      "@lit/reactive-element/*": ["./node_modules/@lit/reactive-element/*"],
+      "@hn/agent/*": ["./Sources/TypeScript/*"]
+    }
+  },
+  "include": [
+    "./Sources/TypeScript/**/*.ts",
+    "./types/**/*.d.ts"
+  ]
+}

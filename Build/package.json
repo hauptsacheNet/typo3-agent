@@ -1,0 +1,15 @@
+{
+  "private": true,
+  "name": "hn-agent-build",
+  "scripts": {
+    "build": "esbuild ./Sources/TypeScript/*.ts --outdir=../Resources/Public/JavaScript --format=esm --sourcemap --target=es2022 --tsconfig=tsconfig.json",
+    "watch": "esbuild ./Sources/TypeScript/*.ts --outdir=../Resources/Public/JavaScript --format=esm --sourcemap --target=es2022 --tsconfig=tsconfig.json --watch",
+    "check": "tsc --project tsconfig.json",
+    "setup-types": "git clone --depth 1 --filter=blob:none --sparse --branch 13.4 https://github.com/TYPO3/typo3.git .typo3-core-types && cd .typo3-core-types && git sparse-checkout set Build/Sources/TypeScript Build/types"
+  },
+  "devDependencies": {
+    "typescript": "~5.8",
+    "esbuild": "^0.25.0",
+    "lit": "^3.2.0"
+  }
+}

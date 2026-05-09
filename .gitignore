@@ -13,5 +13,9 @@
 /Resources/Private/PHP/vendor
 /Resources/Private/PHP/composer.lock
 
+# Node.js / Build
+/Build/node_modules
+/Build/.typo3-core-types
+
 # other
 *.local

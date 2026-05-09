@@ -1,0 +1,7 @@
+{
+  "version": 3,
+  "sources": ["../../../Build/Sources/TypeScript/example-element.ts"],
+  "sourcesContent": ["import {css, html, LitElement} from 'lit';\nimport {customElement, property} from 'lit/decorators.js';\n\n@customElement('hn-agent-example')\nexport class ExampleElement extends LitElement {\n  static override styles = css`:host { display: block; }`;\n\n  @property() name: string = 'World';\n\n  override render() {\n    return html`<p>Hello, ${this.name}!</p>`;\n  }\n}\n"],
+  "mappings": ";;;;;;;;;;AAAA,SAAQ,KAAK,MAAM,kBAAiB;AACpC,SAAQ,eAAe,gBAAe;AAG/B,IAAM,iBAAN,cAA6B,WAAW;AAAA,EAAxC;AAAA;AAGO,gBAAe;AAAA;AAAA,EAElB,SAAS;AAChB,WAAO,iBAAiB,KAAK,IAAI;AAAA,EACnC;AACF;AARa,eACK,SAAS;AAEb;AAAA,EAAX,SAAS;AAAA,GAHC,eAGC;AAHD,iBAAN;AAAA,EADN,cAAc,kBAAkB;AAAA,GACpB;",
+  "names": []
+}
