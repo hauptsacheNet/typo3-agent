@@ -16,7 +16,7 @@
 # Node.js / Build
 /Build/node_modules
 /Build/.typo3-core-types
-/Build/types/typo3-global.d.ts
+/Build/.typo3-core-dts
 
 # other
 *.local

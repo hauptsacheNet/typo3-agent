@@ -1,0 +1,37 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023", "DOM", "ESNext.Collection"],
+
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "noEmit": false,
+    "noCheck": true,
+    "skipLibCheck": true,
+
+    "experimentalDecorators": true,
+    "useDefineForClassFields": false,
+    "allowSyntheticDefaultImports": true,
+    "verbatimModuleSyntax": false,
+
+    "baseUrl": ".",
+    "rootDir": "./.typo3-core-types/Build/Sources/TypeScript",
+    "outDir": "./.typo3-core-dts",
+
+    "paths": {
+      "@typo3/*": ["./.typo3-core-types/Build/Sources/TypeScript/*"],
+      "*": ["./.typo3-core-types/Build/types/*"]
+    }
+  },
+  "include": [
+    "./.typo3-core-types/Build/Sources/TypeScript/**/*.ts"
+  ],
+  "exclude": [
+    "./.typo3-core-types/Build/Sources/TypeScript/**/tests/**",
+    "./.typo3-core-types/Build/Sources/TypeScript/backend/tree/file-storage-tree-container.ts",
+    "./.typo3-core-types/Build/Sources/TypeScript/backend/tree/page-tree-element.ts",
+    "./.typo3-core-types/Build/Sources/TypeScript/backend/tree/tree-module-state.ts"
+  ]
+}

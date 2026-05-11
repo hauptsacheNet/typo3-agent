@@ -19,7 +19,7 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
 
     "paths": {
-      "@typo3/*": ["./.typo3-core-types/Build/Sources/TypeScript/*"],
+      "@typo3/*": ["./.typo3-core-dts/*"],
       "lit": ["./node_modules/lit"],
       "lit/*": ["./node_modules/lit/*"],
       "@lit/reactive-element": ["./node_modules/@lit/reactive-element"],
@@ -29,6 +29,7 @@
   },
   "include": [
     "./Sources/TypeScript/**/*.ts",
-    "./types/**/*.d.ts"
+    "./types/**/*.d.ts",
+    "./.typo3-core-types/Build/types/TYPO3/index.d.ts"
   ]
 }
