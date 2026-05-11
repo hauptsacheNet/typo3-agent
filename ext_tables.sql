@@ -9,3 +9,10 @@ CREATE TABLE tx_agent_task (
     context_uid int(11) unsigned DEFAULT '0' NOT NULL,
     return_url text,
 );
+
+CREATE TABLE tx_agent_task_change (
+    task_uid int(11) unsigned DEFAULT '0' NOT NULL,
+    tablename varchar(255) DEFAULT '' NOT NULL,
+    record_uid int(11) unsigned DEFAULT '0' NOT NULL,
+    workspace_record_uid int(11) unsigned DEFAULT '0' NOT NULL,
+);

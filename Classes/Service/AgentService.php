@@ -16,6 +16,7 @@ use TYPO3\CMS\Core\Context\UserAspect;
 use TYPO3\CMS\Core\Context\WorkspaceAspect;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
+use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
 class AgentService
@@ -194,6 +195,9 @@ class AgentService
                         $toolName,
                         $toolArguments,
                     );
+
+                    // Track workspace changes from write operations
+                    $this->trackChange($taskUid, $toolResult);
 
                     // Append tool result message
                     $messages[] = [
@@ -400,5 +404,44 @@ class AgentService
 
         $languageServiceFactory = GeneralUtility::makeInstance(LanguageServiceFactory::class);
         $GLOBALS['LANG'] = $languageServiceFactory->create('default');
+    }
+
+    /**
+     * Track a workspace change from a tool result.
+     *
+     * Parses the JSON result of a WriteTableTool call and stores the
+     * relationship between the task and the workspace version record.
+     */
+    private function trackChange(int $taskUid, string $toolResult): void
+    {
+        $data = json_decode($toolResult, true);
+        if (!is_array($data) || !isset($data['action'], $data['table'], $data['uid'])) {
+            return;
+        }
+
+        $table = (string)$data['table'];
+        $uid = (int)$data['uid'];
+        $action = (string)$data['action'];
+        $workspaceId = (int)($GLOBALS['BE_USER']->workspace ?? 0);
+
+        if ($workspaceId === 0) {
+            // No workspace — changes went directly to live, nothing to track
+            return;
+        }
+
+        if ($action === 'create' || $action === 'translate') {
+            // For new records, the returned UID is already the workspace record UID
+            // (NEW_PLACEHOLDER with t3ver_state=1)
+            $workspaceRecordUid = $uid;
+        } else {
+            // For update/delete, look up the workspace version of the live record
+            $wsVersion = BackendUtility::getWorkspaceVersionOfRecord($workspaceId, $table, $uid, 'uid');
+            if ($wsVersion === false) {
+                return;
+            }
+            $workspaceRecordUid = (int)$wsVersion['uid'];
+        }
+
+        $this->repository->addChange($taskUid, $table, $uid, $workspaceRecordUid);
     }
 }

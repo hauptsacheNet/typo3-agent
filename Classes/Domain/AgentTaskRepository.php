@@ -11,6 +11,7 @@ use TYPO3\CMS\Core\Database\ConnectionPool;
 class AgentTaskRepository
 {
     private const TABLE = 'tx_agent_task';
+    private const CHANGE_TABLE = 'tx_agent_task_change';
 
     public function __construct(
         private readonly ConnectionPool $connectionPool,
@@ -159,5 +160,55 @@ class AgentTaskRepository
         $this->connectionPool
             ->getConnectionForTable(self::TABLE)
             ->update(self::TABLE, $data, ['uid' => $taskUid], $types);
+    }
+
+    /**
+     * Record a workspace change associated with a task.
+     */
+    public function addChange(int $taskUid, string $tablename, int $recordUid, int $workspaceRecordUid): void
+    {
+        $this->connectionPool
+            ->getConnectionForTable(self::CHANGE_TABLE)
+            ->insert(self::CHANGE_TABLE, [
+                'task_uid' => $taskUid,
+                'tablename' => $tablename,
+                'record_uid' => $recordUid,
+                'workspace_record_uid' => $workspaceRecordUid,
+            ]);
+    }
+
+    /**
+     * Get all tracked changes for a task.
+     *
+     * @return array<int, array{task_uid: int, tablename: string, record_uid: int, workspace_record_uid: int}>
+     */
+    public function getChanges(int $taskUid): array
+    {
+        $qb = $this->connectionPool->getQueryBuilderForTable(self::CHANGE_TABLE);
+        return $qb
+            ->select('*')
+            ->from(self::CHANGE_TABLE)
+            ->where($qb->expr()->eq('task_uid', $qb->createNamedParameter($taskUid, ParameterType::INTEGER)))
+            ->executeQuery()
+            ->fetchAllAssociative();
+    }
+
+    /**
+     * Remove tracked changes matching a table and record UID.
+     * Matches against both record_uid and workspace_record_uid since the
+     * provided UID may refer to either the live or the workspace version.
+     */
+    public function removeChangeByRecord(string $tablename, int $uid): void
+    {
+        $qb = $this->connectionPool->getQueryBuilderForTable(self::CHANGE_TABLE);
+        $qb->delete(self::CHANGE_TABLE)
+            ->where(
+                $qb->expr()->eq('tablename', $qb->createNamedParameter($tablename)),
+                $qb->expr()->or(
+                    $qb->expr()->eq('record_uid', $qb->createNamedParameter($uid, ParameterType::INTEGER)),
+                    $qb->expr()->eq('workspace_record_uid', $qb->createNamedParameter($uid, ParameterType::INTEGER)),
+                ),
+            )
+            ->executeStatement();
     }
 }

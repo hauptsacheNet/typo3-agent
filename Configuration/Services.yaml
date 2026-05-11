@@ -7,5 +7,8 @@ services:
   Hn\Agent\:
     resource: '../Classes/*'
 
+  Hn\Agent\Domain\AgentTaskRepository:
+    public: true
+
   Hn\Agent\Service\AgentService:
     public: true
