@@ -10,8 +10,10 @@
     "prepare-types": "npm run setup-types && npm run generate-dts"
   },
   "devDependencies": {
-    "typescript": "~5.8",
+    "dompurify": "^3.4.2",
     "esbuild": "^0.25.0",
-    "lit": "^3.2.0"
+    "lit": "^3.2.0",
+    "marked": "^18.0.3",
+    "typescript": "~5.8"
   }
 }
