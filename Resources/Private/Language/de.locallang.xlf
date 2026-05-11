@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<xliff version="1.2" xmlns="urn:oasis:names:tc:xliff:document:1.2">
+    <file source-language="en" target-language="de" datatype="plaintext" original="EXT:agent/Resources/Private/Language/locallang.xlf" date="2026-05-11T00:00:00Z" product-name="agent">
+        <header/>
+        <body>
+            <trans-unit id="placeholder.page" resname="placeholder.page">
+                <source>Describe what you'd like to create or change on page "%s"...</source>
+                <target>Beschreibe, was du auf der Seite "%s" erstellen oder ändern möchtest...</target>
+            </trans-unit>
+            <trans-unit id="placeholder.record" resname="placeholder.record">
+                <source>Describe what you'd like to change on "%s" (%s)...</source>
+                <target>Beschreibe, was du an "%s" (%s) ändern möchtest...</target>
+            </trans-unit>
+            <trans-unit id="placeholder.default" resname="placeholder.default">
+                <source>Describe the task you'd like the AI agent to perform...</source>
+                <target>Beschreibe die Aufgabe, die der KI-Agent ausführen soll...</target>
+            </trans-unit>
+            <trans-unit id="button.submit.title" resname="button.submit.title">
+                <source>Start a new AI agent task (Ctrl+Enter)</source>
+                <target>Neue KI-Agent-Aufgabe starten (Strg+Eingabe)</target>
+            </trans-unit>
+            <trans-unit id="button.backToOrigin" resname="button.backToOrigin">
+                <source>Back to origin</source>
+                <target>Zurück zum Ursprung</target>
+            </trans-unit>
+        </body>
+    </file>
+</xliff>

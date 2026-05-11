@@ -7,4 +7,5 @@ CREATE TABLE tx_agent_task (
     cruser_id int(11) unsigned DEFAULT '0' NOT NULL,
     context_table varchar(255) DEFAULT '' NOT NULL,
     context_uid int(11) unsigned DEFAULT '0' NOT NULL,
+    return_url text,
 );

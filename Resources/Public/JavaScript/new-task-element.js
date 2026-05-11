@@ -17,11 +17,18 @@ let NewTaskElement = class extends LitElement {
     this.table = "";
     this.uid = 0;
     this.placeholder = TYPO3?.lang?.["placeholder.default"] ?? "Describe the task you'd like the AI agent to perform...";
+    this.returnUrl = "";
     this.message = "";
   }
   // No Shadow DOM — use TYPO3 backend Bootstrap CSS
   createRenderRoot() {
     return this;
+  }
+  connectedCallback() {
+    super.connectedCallback();
+    if (!this.returnUrl) {
+      this.returnUrl = window.location.href;
+    }
   }
   onInput(e) {
     this.message = e.target.value;
@@ -41,6 +48,7 @@ let NewTaskElement = class extends LitElement {
         <form action=${this.actionUri} method="post">
           <input type="hidden" name="table" .value=${this.table}>
           <input type="hidden" name="uid" .value=${String(this.uid)}>
+          <input type="hidden" name="return_url" .value=${this.returnUrl}>
           <div class="px-3">
             <div style="
               display: flex;
@@ -110,6 +118,9 @@ __decorateClass([
 __decorateClass([
   property()
 ], NewTaskElement.prototype, "placeholder", 2);
+__decorateClass([
+  property({ attribute: "return-url" })
+], NewTaskElement.prototype, "returnUrl", 2);
 __decorateClass([
   state()
 ], NewTaskElement.prototype, "message", 2);

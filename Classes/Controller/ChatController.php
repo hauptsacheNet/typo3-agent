@@ -15,6 +15,7 @@ use TYPO3\CMS\Backend\Template\ModuleTemplateFactory;
 use TYPO3\CMS\Core\Http\JsonResponse;
 use TYPO3\CMS\Core\Http\RedirectResponse;
 use TYPO3\CMS\Core\Http\Response;
+use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Imaging\IconFactory;
 use TYPO3\CMS\Core\Imaging\IconSize;
 
@@ -77,7 +78,8 @@ class ChatController
         $view = $this->moduleTemplateFactory->create($request);
         $view->setTitle('AI Chat', $task['title']);
 
-        $this->addBackButton($view, $pageId);
+        $returnUrl = GeneralUtility::sanitizeLocalUrl((string)($task['return_url'] ?? ''));
+        $this->addBackButton($view, $pageId, $returnUrl);
 
         $messages = $this->agentService->decodeMessages($task['messages'] ?? null) ?? [];
         $isNewTask = $messages === [] && !empty($task['prompt']);
@@ -108,9 +110,10 @@ class ChatController
 
         $contextTable = (string)($body['table'] ?? '');
         $contextUid = (int)($body['uid'] ?? 0);
+        $returnUrl = GeneralUtility::sanitizeLocalUrl((string)($body['return_url'] ?? ''));
 
         $userId = (int)($GLOBALS['BE_USER']->user['uid'] ?? 0);
-        $taskUid = $this->repository->insert($pageId, $userId, mb_substr($message, 0, 80), $message, $contextTable, $contextUid);
+        $taskUid = $this->repository->insert($pageId, $userId, mb_substr($message, 0, 80), $message, $contextTable, $contextUid, $returnUrl);
         return new RedirectResponse((string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat.show', [
             'task' => $taskUid,
             'id' => $pageId,
@@ -178,7 +181,7 @@ class ChatController
         $buttonBar->addButton($reloadButton);
     }
 
-    private function addBackButton($view, int $pageId = 0): void
+    private function addBackButton($view, int $pageId = 0, string $returnUrl = ''): void
     {
         $buttonBar = $view->getDocHeaderComponent()->getButtonBar();
         $backButton = $buttonBar->makeLinkButton()
@@ -187,6 +190,15 @@ class ChatController
             ->setShowLabelText(true)
             ->setIcon($this->iconFactory->getIcon('actions-view-go-back', IconSize::SMALL));
         $buttonBar->addButton($backButton);
+
+        if ($returnUrl !== '') {
+            $originButton = $buttonBar->makeLinkButton()
+                ->setHref($returnUrl)
+                ->setTitle($GLOBALS['LANG']->sL('LLL:EXT:agent/Resources/Private/Language/locallang.xlf:button.backToOrigin') ?: 'Back to origin')
+                ->setShowLabelText(true)
+                ->setIcon($this->iconFactory->getIcon('actions-view-go-back', IconSize::SMALL));
+            $buttonBar->addButton($originButton, \TYPO3\CMS\Backend\Template\Components\ButtonBar::BUTTON_POSITION_LEFT, 2);
+        }
     }
 
     private function getPageId(ServerRequestInterface $request): int

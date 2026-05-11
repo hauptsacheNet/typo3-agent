@@ -20,8 +20,16 @@ export class NewTaskElement extends LitElement {
   @property() table = '';
   @property({type: Number}) uid = 0;
   @property() placeholder = TYPO3?.lang?.['placeholder.default'] ?? 'Describe the task you\'d like the AI agent to perform...';
+  @property({attribute: 'return-url'}) returnUrl = '';
 
   @state() private message = '';
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    if (!this.returnUrl) {
+      this.returnUrl = window.location.href;
+    }
+  }
 
   private onInput(e: Event): void {
     this.message = (e.target as HTMLTextAreaElement).value;
@@ -44,6 +52,7 @@ export class NewTaskElement extends LitElement {
         <form action=${this.actionUri} method="post">
           <input type="hidden" name="table" .value=${this.table}>
           <input type="hidden" name="uid" .value=${String(this.uid)}>
+          <input type="hidden" name="return_url" .value=${this.returnUrl}>
           <div class="px-3">
             <div style="
               display: flex;
