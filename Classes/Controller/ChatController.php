@@ -100,13 +100,17 @@ class ChatController
     public function newAction(ServerRequestInterface $request): ResponseInterface
     {
         $pageId = $this->getPageId($request);
-        $message = trim((string)($request->getParsedBody()['message'] ?? ''));
+        $body = (array)$request->getParsedBody();
+        $message = trim((string)($body['message'] ?? ''));
         if ($message === '') {
             return new RedirectResponse((string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat', ['id' => $pageId]));
         }
 
+        $contextTable = (string)($body['table'] ?? '');
+        $contextUid = (int)($body['uid'] ?? 0);
+
         $userId = (int)($GLOBALS['BE_USER']->user['uid'] ?? 0);
-        $taskUid = $this->repository->insert($pageId, $userId, mb_substr($message, 0, 80), $message);
+        $taskUid = $this->repository->insert($pageId, $userId, mb_substr($message, 0, 80), $message, $contextTable, $contextUid);
         return new RedirectResponse((string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat.show', [
             'task' => $taskUid,
             'id' => $pageId,
