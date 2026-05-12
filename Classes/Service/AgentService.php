@@ -280,19 +280,73 @@ class AgentService
         $config = $this->extensionConfiguration->get('agent');
         $systemPrompt = $config['systemPrompt'] ?? 'You are a helpful TYPO3 CMS assistant.';
 
-        // Add page context if task is on a specific page
-        $pid = (int)($task['pid'] ?? 0);
-        if ($pid > 0) {
-            $pageContext = $this->getPageContext($pid);
-            if ($pageContext !== '') {
-                $systemPrompt .= "\n\n## Current page context\n" . $pageContext;
-            }
-        }
-
         $messages = [
             ['role' => 'system', 'content' => $systemPrompt],
             ['role' => 'user', 'content' => $task['prompt'] ?? ''],
         ];
+
+        // Build context tool calls to inject as a simulated assistant turn.
+        // This makes the LLM see the context as structured tool output rather
+        // than prose, so it knows the data is already fetched and which tools
+        // produced it.
+        $pid = (int)($task['pid'] ?? 0);
+        $contextTable = (string)($task['context_table'] ?? '');
+        $contextUid = (int)($task['context_uid'] ?? 0);
+
+        $toolCalls = [];
+        $toolResults = [];
+
+        // Page context via GetPage
+        if ($pid > 0) {
+            $pageContext = $this->getPageContext($pid);
+            if ($pageContext !== '') {
+                $callId = 'page_context_' . $pid;
+                $toolCalls[] = [
+                    'id' => $callId,
+                    'type' => 'function',
+                    'function' => [
+                        'name' => 'GetPage',
+                        'arguments' => json_encode(['uid' => $pid]),
+                    ],
+                ];
+                $toolResults[] = [
+                    'role' => 'tool',
+                    'tool_call_id' => $callId,
+                    'content' => $pageContext,
+                ];
+            }
+        }
+
+        // Record context via ReadTable
+        if ($contextTable !== '' && $contextUid > 0) {
+            $recordContext = $this->getRecordContext($contextTable, $contextUid);
+            if ($recordContext !== '') {
+                $callId = 'record_context_' . $contextTable . '_' . $contextUid;
+                $toolCalls[] = [
+                    'id' => $callId,
+                    'type' => 'function',
+                    'function' => [
+                        'name' => 'ReadTable',
+                        'arguments' => json_encode(['table' => $contextTable, 'uid' => $contextUid]),
+                    ],
+                ];
+                $toolResults[] = [
+                    'role' => 'tool',
+                    'tool_call_id' => $callId,
+                    'content' => $recordContext,
+                ];
+            }
+        }
+
+        // Append the simulated assistant tool-call turn + results
+        if ($toolCalls !== []) {
+            $messages[] = [
+                'role' => 'assistant',
+                'content' => null,
+                'tool_calls' => $toolCalls,
+            ];
+            array_push($messages, ...$toolResults);
+        }
 
         return $messages;
     }
@@ -318,6 +372,30 @@ class AgentService
             return implode("\n", $parts);
         } catch (\Throwable $e) {
             return 'Could not load page context: ' . $e->getMessage();
+        }
+    }
+
+    /**
+     * Get record context by executing the ReadTable tool.
+     */
+    private function getRecordContext(string $table, int $uid): string
+    {
+        $readTableTool = $this->toolRegistry->getTool('ReadTable');
+        if ($readTableTool === null) {
+            return '';
+        }
+
+        try {
+            $result = $readTableTool->execute(['table' => $table, 'uid' => $uid]);
+            $parts = [];
+            foreach ($result->content as $content) {
+                if ($content instanceof \Mcp\Types\TextContent) {
+                    $parts[] = $content->text;
+                }
+            }
+            return implode("\n", $parts);
+        } catch (\Throwable $e) {
+            return 'Could not load record context: ' . $e->getMessage();
         }
     }
 
