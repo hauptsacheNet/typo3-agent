@@ -18,6 +18,9 @@
             <trans-unit id="button.backToOrigin" resname="button.backToOrigin">
                 <source>Back to origin</source>
             </trans-unit>
+            <trans-unit id="context.label" resname="context.label">
+                <source>Task for %s</source>
+            </trans-unit>
         </body>
     </file>
 </xliff>

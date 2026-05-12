@@ -7,6 +7,16 @@
 
     <h1>{task.title}</h1>
 
+    <f:if condition="{contextLabel}">
+        <p class="text-muted">
+            <f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:context.label" arguments="{0: contextTableLabel}" />:
+            <f:if condition="{returnUrl}">
+                <f:then><a href="{returnUrl}">{contextLabel} (UID: {contextUid})</a></f:then>
+                <f:else>{contextLabel} (UID: {contextUid})</f:else>
+            </f:if>
+        </p>
+    </f:if>
+
     <hn-agent-chat
         send-uri="{sendUri}"
         stream-uri="{streamUri}"

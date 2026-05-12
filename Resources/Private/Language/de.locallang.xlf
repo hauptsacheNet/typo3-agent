@@ -23,6 +23,10 @@
                 <source>Back to origin</source>
                 <target>Zurück zum Ursprung</target>
             </trans-unit>
+            <trans-unit id="context.label" resname="context.label">
+                <source>Task for %s</source>
+                <target>Aufgabe zu %s</target>
+            </trans-unit>
         </body>
     </file>
 </xliff>

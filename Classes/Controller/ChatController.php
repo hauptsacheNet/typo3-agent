@@ -15,6 +15,7 @@ use TYPO3\CMS\Backend\Template\ModuleTemplateFactory;
 use TYPO3\CMS\Core\Http\JsonResponse;
 use TYPO3\CMS\Core\Http\RedirectResponse;
 use TYPO3\CMS\Core\Http\Response;
+use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Imaging\IconFactory;
 use TYPO3\CMS\Core\Imaging\IconSize;
@@ -81,6 +82,18 @@ class ChatController
         $returnUrl = GeneralUtility::sanitizeLocalUrl((string)($task['return_url'] ?? ''));
         $this->addBackButton($view, $pageId, $returnUrl);
 
+        $contextTable = (string)($task['context_table'] ?? '');
+        $contextUid = (int)($task['context_uid'] ?? 0);
+        $contextLabel = '';
+        $contextTableLabel = '';
+        if ($contextTable !== '' && $contextUid > 0) {
+            $record = BackendUtility::getRecord($contextTable, $contextUid);
+            if ($record !== null) {
+                $contextLabel = BackendUtility::getRecordTitle($contextTable, $record);
+                $contextTableLabel = $GLOBALS['LANG']->sL($GLOBALS['TCA'][$contextTable]['ctrl']['title'] ?? '') ?: $contextTable;
+            }
+        }
+
         $messages = $this->agentService->decodeMessages($task['messages'] ?? null) ?? [];
         $isNewTask = $messages === [] && !empty($task['prompt']);
 
@@ -88,6 +101,10 @@ class ChatController
             'task' => $task,
             'messages' => $messages,
             'isNewTask' => $isNewTask,
+            'contextLabel' => $contextLabel,
+            'contextTableLabel' => $contextTableLabel,
+            'contextUid' => $contextUid,
+            'returnUrl' => $returnUrl,
             'sendUri' => (string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat.sendMessage', [
                 'task' => $taskUid,
                 'id' => $pageId,
