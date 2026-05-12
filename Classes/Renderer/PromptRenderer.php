@@ -54,6 +54,6 @@ class PromptRenderer
         $this->pageRenderer->addInlineSetting('Agent', 'uid', (string)$uid);
         $this->pageRenderer->addInlineSetting('Agent', 'placeholder', $placeholder);
         $this->pageRenderer->addInlineLanguageLabelFile('EXT:agent/Resources/Private/Language/locallang.xlf');
-        $this->pageRenderer->loadJavaScriptModule('@hn/agent/new-task-element.js');
+        $this->pageRenderer->loadJavaScriptModule('@hn/agent/auto-insert-new-task.js');
     }
 }

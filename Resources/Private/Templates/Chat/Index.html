@@ -3,28 +3,10 @@
 <f:layout name="Module" />
 
 <f:section name="Content">
+    <f:asset.module identifier="@hn/agent/new-task-element.js" />
     <h1><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:index.heading" /></h1>
 
-    <f:if condition="{pageId}">
-        <f:then>
-            <form action="{newUri}" method="post" class="mb-4">
-                <div class="input-group">
-                    <input type="text"
-                           name="message"
-                           class="form-control"
-                           placeholder="{f:translate(key:'LLL:EXT:agent/Resources/Private/Language/locallang.xlf:index.placeholder')}"
-                           autofocus
-                           required>
-                    <button type="submit" class="btn btn-primary"><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:index.button.new" /></button>
-                </div>
-            </form>
-        </f:then>
-        <f:else>
-            <div class="callout callout-info mb-4">
-                <div class="callout-body"><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:index.callout.selectPage" /></div>
-            </div>
-        </f:else>
-    </f:if>
+    <hn-agent-new-task action-uri="{newUri}" page="{pageId}" placeholder="{f:translate(key:'LLL:EXT:agent/Resources/Private/Language/locallang.xlf:placeholder.default')}"></hn-agent-new-task>
 
     <f:if condition="{tasks}">
         <f:then>

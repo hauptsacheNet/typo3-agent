@@ -24,12 +24,6 @@ let NewTaskElement = class extends LitElement {
   createRenderRoot() {
     return this;
   }
-  connectedCallback() {
-    super.connectedCallback();
-    if (!this.returnUrl) {
-      this.returnUrl = window.location.href;
-    }
-  }
   onInput(e) {
     this.message = e.target.value;
   }
@@ -52,7 +46,7 @@ let NewTaskElement = class extends LitElement {
           <div class="">
             <div class="position-relative">
               <textarea
-                  class="d-block w-100 rounded-5 border p-3 bg-white "
+                  class="d-block w-100 rounded-4 border p-3 bg-white "
                   name="message"
                   rows="1"
                   placeholder=${this.placeholder}
@@ -102,29 +96,6 @@ __decorateClass([
 NewTaskElement = __decorateClass([
   customElement("hn-agent-new-task")
 ], NewTaskElement);
-function autoInsert() {
-  const settings = TYPO3?.settings?.Agent;
-  if (!settings?.newTaskUri) {
-    return;
-  }
-  if (document.querySelector("hn-agent-new-task")) {
-    return;
-  }
-  const el = document.createElement("hn-agent-new-task");
-  el.setAttribute("action-uri", settings.newTaskUri);
-  el.setAttribute("table", settings.table ?? "");
-  el.setAttribute("uid", settings.uid ?? "0");
-  el.setAttribute("placeholder", settings.placeholder ?? "");
-  const target = document.querySelector(".t3js-module-body");
-  if (target) {
-    target.insertBefore(el, target.firstChild);
-  }
-}
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", autoInsert);
-} else {
-  autoInsert();
-}
 export {
   NewTaskElement
 };

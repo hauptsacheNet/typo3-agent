@@ -94,70 +94,66 @@ export class ChatElement extends LitElement {
 
   override render() {
     return html`
-      <div class="chat-container" style="display:flex;flex-direction:column;gap:1rem;max-width:900px;">
-        <div class="chat-messages" style="border:1px solid #ddd;border-radius:4px;padding:1rem;background:#fafafa;min-height:300px;max-height:60vh;overflow-y:auto;">
+      <div class="chat-container d-flex flex-column message-fade" style="max-width:900px;">
+        <div class="chat-messages d-flex flex-column gap-3 overflow-auto mx-3 pb-3"
+             style="min-height:300px;max-height:60vh;">
           ${this.messages.map(msg => this.renderMessage(msg))}
           ${this.renderActiveTools()}
           ${this.isStreaming ? this.renderStreamingBubble() : nothing}
           ${this.thinking && !this.isStreaming ? this.renderThinkingIndicator() : nothing}
         </div>
-
-        <form style="display:flex;gap:0.5rem;" @submit=${this.onSubmit}>
+  
+        <form class="position-relative" @submit=${this.onSubmit}>
           <textarea
-            name="message"
-            class="form-control"
-            rows="2"
-            placeholder="Type a follow-up message\u2026"
-            .value=${this.inputValue}
-            ?disabled=${this.loading}
-            @input=${this.onInput}
-            @keydown=${this.onKeydown}
-            required
+              name="message"
+              class="d-block w-100 rounded-4 border p-3 bg-white"
+              style="outline: none;field-sizing: content;resize: none;"
+              rows="2"
+              placeholder="Type a follow-up message\u2026"
+              .value=${this.inputValue}
+              ?disabled=${this.loading}
+              @input=${this.onInput}
+              @keydown=${this.onKeydown}
+              required
           ></textarea>
-          <button type="submit" class="btn btn-primary" ?disabled=${this.loading}>
-            ${this.loading ? 'Thinking\u2026' : 'Send'}
-          </button>
+          <div class="position-absolute bottom-0 end-0 p-2">
+            <button type="submit" class="btn" ?disabled=${this.loading}>
+              <typo3-backend-icon
+                  identifier="actions-arrow-down-start-alt"
+                  size="small"/>
+            </button>
+          </div>
         </form>
 
         ${this.errorMessage
-          ? html`<div class="alert alert-danger">${this.errorMessage}</div>`
-          : nothing}
+            ? html`
+              <div class="alert alert-danger">${this.errorMessage}</div>`
+            : nothing}
       </div>
 
       <style>
-        .chat-msg { margin-bottom: 0.75rem; padding: 0.5rem 0.75rem; border-radius: 6px; }
-        .chat-msg-user { background: #d6e9ff; }
-        .chat-msg-assistant { background: #fff; border: 1px solid #e0e0e0; }
-        .chat-msg-tool { background: #f0f0f0; font-family: monospace; font-size: 0.85em; }
-        .chat-msg-role { font-weight: bold; font-size: 0.8em; opacity: 0.7; margin-bottom: 0.25rem; text-transform: uppercase; }
-        .chat-toolcall { margin-top: 0.5rem; padding: 0.4rem; background: #fffae6; border-left: 3px solid #f0c000; font-family: monospace; font-size: 0.85em; }
-        .chat-toolcall summary { cursor: pointer; }
-        .chat-msg pre { white-space: pre-wrap; margin: 0; }
-        .chat-msg-content p:first-child { margin-top: 0; }
-        .chat-msg-content p:last-child { margin-bottom: 0; }
-        .chat-msg-content pre {
-          background: #f5f5f5;
-          padding: 0.5rem 0.75rem;
-          border-radius: 4px;
-          overflow-x: auto;
-          white-space: pre-wrap;
+        .message-fade {
+          position: relative;
         }
-        .chat-msg-content code {
-          background: #f0f0f0;
-          padding: 0.1em 0.3em;
-          border-radius: 3px;
-          font-size: 0.9em;
+
+        .message-fade > div {
+          padding-top: 30px !important;
         }
-        .chat-msg-content pre code { background: transparent; padding: 0; }
-        .chat-msg-content ul,
-        .chat-msg-content ol { margin: 0.25rem 0 0.25rem 1.25rem; }
-        .chat-msg-content h1,
-        .chat-msg-content h2,
-        .chat-msg-content h3 { margin: 0.5rem 0 0.25rem; font-size: 1.05em; }
-        .chat-msg-content table { border-collapse: collapse; margin: 0.5rem 0; }
-        .chat-msg-content th,
-        .chat-msg-content td { border: 1px solid #ddd; padding: 0.25rem 0.5rem; }
-        .chat-thinking-dots { opacity: 0.6; font-style: italic; }
+
+        .message-fade::before {
+          content: ' ';
+          position: absolute;
+          z-index: 1;
+          display: block;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 30px;
+          background: var(--bs-light);
+          /*noinspection CssInvalidPropertyValue,CssInvalidFunction*/
+          -webkit-mask-image: -webkit-gradient(linear, left top, left bottom, from(rgba(0, 0, 0, 1)), to(rgba(0, 0, 0, 0)));
+        }
+        
       </style>
     `;
   }
@@ -169,8 +165,8 @@ export class ChatElement extends LitElement {
 
     if (role === 'assistant') {
       return html`
-        <div class="chat-msg chat-msg-assistant">
-          <div class="chat-msg-role">${roleLabel}</div>
+        <div class="rounded-4 bg-white border p-3">
+          <div class="chat-msg-role fw-bold small opacity-75 mb-1 text-uppercase">${roleLabel}</div>
           ${msg.content
             ? html`<div class="chat-msg-content">${unsafeHTML(this.renderMarkdown(msg.content))}</div>`
             : nothing}
@@ -179,48 +175,44 @@ export class ChatElement extends LitElement {
       `;
     }
 
-    if (role === 'tool') {
-      return html`
-        <div class="chat-msg chat-msg-tool">
-          <details>
-            <summary class="chat-msg-role">tool result</summary>
-            <pre>${msg.content ?? ''}</pre>
-          </details>
-        </div>
-      `;
-    }
 
     // user, system, unknown
     return html`
-      <div class="chat-msg chat-msg-${role}">
-        <div class="chat-msg-role">${roleLabel}</div>
-        <pre>${msg.content ?? ''}</pre>
+      <div class="rounded-4 bg-success-subtle border p-3 align-self-end">
+        <div class="chat-msg-role fw-bold small opacity-75 mb-1 text-uppercase">${roleLabel}</div>
+        <pre class="m-0">${msg.content ?? ''}</pre>
       </div>
     `;
   }
 
   private renderToolCall(tc: ToolCall): TemplateResult {
     return html`
-      <details class="chat-toolcall">
+      <details class="bg-warning-subtle mt-2 p-2 border-start border-3 border-warning font-monospace small">
         <summary>
-          <typo3-backend-icon identifier="actions-rocket" size="small"></typo3-backend-icon>
-          ${tc.function?.name ?? 'unknown'}</summary>
-        <div>
+          ${tc.function?.name ?? 'unknown'}
+        </summary>
+        <div class="py-3">
+
+          <div class="mb-3">
             <strong>Args</strong><br/>
             <code>${tc.function?.arguments ?? ''}</code>
+          </div>
+          ${tc.result !== undefined
+              ? html`
+                <div>
+                  <strong>Result</strong><br/>
+                  <pre class="m-0">${tc.result}</pre>
+                </div>`
+              : nothing}
         </div>
-        ${tc.result !== undefined
-          ? html`<div><strong>Result</strong><br/>
-            <pre>${tc.result}</pre></div>`
-          : nothing}
       </details>
     `;
   }
 
   private renderStreamingBubble(): TemplateResult {
     return html`
-      <div class="chat-msg chat-msg-assistant chat-msg-streaming">
-        <div class="chat-msg-role">assistant</div>
+      <div class="rounded-4 bg-white border p-3">
+        <div class="chat-msg-role fw-bold small opacity-75 mb-1 text-uppercase">assistant</div>
         <div class="chat-msg-content">
           ${unsafeHTML(this.renderMarkdown(this.streamingBuffer))}
         </div>
@@ -230,9 +222,8 @@ export class ChatElement extends LitElement {
 
   private renderThinkingIndicator(): TemplateResult {
     return html`
-      <div class="chat-msg chat-msg-assistant">
-        <div class="chat-msg-role">assistant</div>
-        <div class="chat-thinking-dots">Thinking\u2026</div>
+      <div class="p-3 align-self-start">
+        <div class="fst-italic">Thinking\u2026</div>
       </div>
     `;
   }
@@ -242,8 +233,8 @@ export class ChatElement extends LitElement {
 
     return html`
       ${[...this.activeTools.entries()].map(([id, p]) => html`
-        <div class="chat-msg chat-msg-tool" data-tool-call-id=${id}>
-          <div class="chat-msg-role">tool</div>
+        <div class="chat-msg chat-msg-tool rounded bg-light font-monospace small" data-tool-call-id=${id}>
+          <div class="chat-msg-role fw-bold small opacity-75 mb-1 text-uppercase">tool</div>
           <div class="chat-tool-status">\u2699\uFE0F Executing: ${p.toolName}\u2026</div>
         </div>
       `)}
@@ -336,6 +327,7 @@ export class ChatElement extends LitElement {
 
   private async sendStreaming(message: string): Promise<void> {
     try {
+      this.thinking = true;
       const formData = new FormData();
       formData.append('message', message);
 
