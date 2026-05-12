@@ -49,15 +49,15 @@ class ChatController
     {
         $pageId = $this->getPageId($request);
         $view = $this->moduleTemplateFactory->create($request);
-        $view->setTitle('AI Chat');
+        $view->setTitle($GLOBALS['LANG']->sL('LLL:EXT:agent/Resources/Private/Language/locallang.xlf:index.heading'));
 
         $userId = (int)($GLOBALS['BE_USER']->user['uid'] ?? 0);
-        $chats = $this->repository->findChatsForUser($userId, $pageId);
+        $tasks = $this->repository->findTasksForUser($userId, $pageId);
 
         $this->addReloadButton($view, $request);
 
         return $view->assignMultiple([
-            'chats' => $chats,
+            'tasks' => $tasks,
             'pageId' => $pageId,
             'newUri' => (string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat.new', ['id' => $pageId]),
         ])->renderResponse('Chat/Index');
@@ -77,7 +77,7 @@ class ChatController
         }
 
         $view = $this->moduleTemplateFactory->create($request);
-        $view->setTitle('AI Chat', $task['title']);
+        $view->setTitle($GLOBALS['LANG']->sL('LLL:EXT:agent/Resources/Private/Language/locallang.xlf:index.heading'), $task['title']);
 
         $returnUrl = GeneralUtility::sanitizeLocalUrl((string)($task['return_url'] ?? ''));
         $this->addBackButton($view, $pageId, $returnUrl);
@@ -207,15 +207,6 @@ class ChatController
             ->setShowLabelText(true)
             ->setIcon($this->iconFactory->getIcon('actions-view-go-back', IconSize::SMALL));
         $buttonBar->addButton($backButton);
-
-        if ($returnUrl !== '') {
-            $originButton = $buttonBar->makeLinkButton()
-                ->setHref($returnUrl)
-                ->setTitle($GLOBALS['LANG']->sL('LLL:EXT:agent/Resources/Private/Language/locallang.xlf:button.backToOrigin') ?: 'Back to origin')
-                ->setShowLabelText(true)
-                ->setIcon($this->iconFactory->getIcon('actions-view-go-back', IconSize::SMALL));
-            $buttonBar->addButton($originButton, \TYPO3\CMS\Backend\Template\Components\ButtonBar::BUTTON_POSITION_LEFT, 2);
-        }
     }
 
     private function getPageId(ServerRequestInterface $request): int

@@ -3,17 +3,61 @@
     <file source-language="en" target-language="de" datatype="plaintext" original="EXT:agent/Resources/Private/Language/locallang.xlf" date="2026-05-11T00:00:00Z" product-name="agent">
         <header/>
         <body>
+            <trans-unit id="module.title" resname="module.title">
+                <source>AI Tasks</source>
+                <target>KI-Aufgaben</target>
+            </trans-unit>
+            <trans-unit id="module.description" resname="module.description">
+                <source>Create and manage AI agent tasks</source>
+                <target>KI-Agent-Aufgaben erstellen und verwalten</target>
+            </trans-unit>
+            <trans-unit id="index.heading" resname="index.heading">
+                <source>AI Tasks</source>
+                <target>KI-Aufgaben</target>
+            </trans-unit>
+            <trans-unit id="index.button.new" resname="index.button.new">
+                <source>New Task</source>
+                <target>Neue Aufgabe</target>
+            </trans-unit>
+            <trans-unit id="index.placeholder" resname="index.placeholder">
+                <source>Start a new task — describe what the AI should do…</source>
+                <target>Neue Aufgabe starten — beschreibe, was die KI tun soll…</target>
+            </trans-unit>
+            <trans-unit id="index.callout.selectPage" resname="index.callout.selectPage">
+                <source>Please select a page in the page tree to start a new task.</source>
+                <target>Bitte wähle eine Seite im Seitenbaum aus, um eine neue Aufgabe zu starten.</target>
+            </trans-unit>
+            <trans-unit id="index.empty" resname="index.empty">
+                <source>No tasks yet on this page. Start one above.</source>
+                <target>Noch keine Aufgaben auf dieser Seite. Starte eine oben.</target>
+            </trans-unit>
+            <trans-unit id="status.pending" resname="status.pending">
+                <source>Pending</source>
+                <target>Ausstehend</target>
+            </trans-unit>
+            <trans-unit id="status.inProgress" resname="status.inProgress">
+                <source>In Progress</source>
+                <target>In Bearbeitung</target>
+            </trans-unit>
+            <trans-unit id="status.ended" resname="status.ended">
+                <source>Ended</source>
+                <target>Abgeschlossen</target>
+            </trans-unit>
+            <trans-unit id="status.failed" resname="status.failed">
+                <source>Failed</source>
+                <target>Fehlgeschlagen</target>
+            </trans-unit>
             <trans-unit id="placeholder.page" resname="placeholder.page">
-                <source>Describe what you'd like to create or change on page "%s"...</source>
-                <target>Beschreibe, was du auf der Seite "%s" erstellen oder ändern möchtest...</target>
+                <source>Describe what you'd like to create or change on page "%s", e.g. fix typos, add a new content element…</source>
+                <target>Beschreibe, was du auf der Seite "%s" erstellen oder ändern möchtest, z.B. Rechtschreibfehler korrigieren, neues Content-Element anlegen…</target>
             </trans-unit>
             <trans-unit id="placeholder.record" resname="placeholder.record">
-                <source>Describe what you'd like to change on "%s" (%s)...</source>
-                <target>Beschreibe, was du an "%s" (%s) ändern möchtest...</target>
+                <source>Describe what you'd like to change on "%s" (%s), e.g. fix typos, revise the title…</source>
+                <target>Beschreibe, was du an "%s" (%s) ändern möchtest, z.B. Rechtschreibfehler korrigieren, Titel überarbeiten…</target>
             </trans-unit>
             <trans-unit id="placeholder.default" resname="placeholder.default">
-                <source>Describe the task you'd like the AI agent to perform...</source>
-                <target>Beschreibe die Aufgabe, die der KI-Agent ausführen soll...</target>
+                <source>Describe the task you'd like the AI agent to perform, e.g. fix typos, revise the title…</source>
+                <target>Beschreibe die Aufgabe, die der KI-Agent ausführen soll, z.B. Rechtschreibfehler korrigieren, Titel überarbeiten…</target>
             </trans-unit>
             <trans-unit id="button.submit.title" resname="button.submit.title">
                 <source>Start a new AI agent task (Ctrl+Enter)</source>

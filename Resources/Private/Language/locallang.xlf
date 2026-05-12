@@ -3,14 +3,47 @@
     <file source-language="en" datatype="plaintext" original="EXT:agent/Resources/Private/Language/locallang.xlf" date="2026-05-11T00:00:00Z" product-name="agent">
         <header/>
         <body>
+            <trans-unit id="module.title" resname="module.title">
+                <source>AI Tasks</source>
+            </trans-unit>
+            <trans-unit id="module.description" resname="module.description">
+                <source>Create and manage AI agent tasks</source>
+            </trans-unit>
+            <trans-unit id="index.heading" resname="index.heading">
+                <source>AI Tasks</source>
+            </trans-unit>
+            <trans-unit id="index.button.new" resname="index.button.new">
+                <source>New Task</source>
+            </trans-unit>
+            <trans-unit id="index.placeholder" resname="index.placeholder">
+                <source>Start a new task — describe what the AI should do…</source>
+            </trans-unit>
+            <trans-unit id="index.callout.selectPage" resname="index.callout.selectPage">
+                <source>Please select a page in the page tree to start a new task.</source>
+            </trans-unit>
+            <trans-unit id="index.empty" resname="index.empty">
+                <source>No tasks yet on this page. Start one above.</source>
+            </trans-unit>
+            <trans-unit id="status.pending" resname="status.pending">
+                <source>Pending</source>
+            </trans-unit>
+            <trans-unit id="status.inProgress" resname="status.inProgress">
+                <source>In Progress</source>
+            </trans-unit>
+            <trans-unit id="status.ended" resname="status.ended">
+                <source>Ended</source>
+            </trans-unit>
+            <trans-unit id="status.failed" resname="status.failed">
+                <source>Failed</source>
+            </trans-unit>
             <trans-unit id="placeholder.page" resname="placeholder.page">
-                <source>Describe what you'd like to create or change on page "%s"...</source>
+                <source>Describe what you'd like to create or change on page "%s", e.g. fix typos, add a new content element…</source>
             </trans-unit>
             <trans-unit id="placeholder.record" resname="placeholder.record">
-                <source>Describe what you'd like to change on "%s" (%s)...</source>
+                <source>Describe what you'd like to change on "%s" (%s), e.g. fix typos, revise the title…</source>
             </trans-unit>
             <trans-unit id="placeholder.default" resname="placeholder.default">
-                <source>Describe the task you'd like the AI agent to perform...</source>
+                <source>Describe the task you'd like the AI agent to perform, e.g. fix typos, revise the title…</source>
             </trans-unit>
             <trans-unit id="button.submit.title" resname="button.submit.title">
                 <source>Start a new AI agent task (Ctrl+Enter)</source>

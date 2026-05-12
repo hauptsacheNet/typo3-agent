@@ -9,8 +9,8 @@ return [
         'path' => '/module/web/ai-agent-chat',
         'iconIdentifier' => 'module-ai-agent-chat',
         'labels' => [
-            'title' => 'AI Chat',
-            'description' => 'Chat with the AI agent using TYPO3 tools',
+            'title' => 'LLL:EXT:agent/Resources/Private/Language/locallang.xlf:module.title',
+            'description' => 'LLL:EXT:agent/Resources/Private/Language/locallang.xlf:module.description',
         ],
         'routes' => [
             '_default' => [

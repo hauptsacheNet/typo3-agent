@@ -52,12 +52,12 @@ class AgentTaskRepository
     }
 
     /**
-     * Load chat list for a backend user, ordered by last update.
-     * When $pid > 0, only chats on that page are returned.
+     * Load task list for a backend user, ordered by last update.
+     * When $pid > 0, only tasks on that page are returned.
      *
      * @return array<int, array{uid: int, title: string, status: int, tstamp: int, crdate: int}>
      */
-    public function findChatsForUser(int $userId, int $pid = 0, int $limit = 100): array
+    public function findTasksForUser(int $userId, int $pid = 0, int $limit = 100): array
     {
         $qb = $this->connectionPool->getQueryBuilderForTable(self::TABLE);
         $qb->select('uid', 'title', 'status', 'tstamp', 'crdate')

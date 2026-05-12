@@ -3,7 +3,7 @@
 <f:layout name="Module" />
 
 <f:section name="Content">
-    <h1>AI Chat</h1>
+    <h1><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:index.heading" /></h1>
 
     <f:if condition="{pageId}">
         <f:then>
@@ -12,21 +12,21 @@
                     <input type="text"
                            name="message"
                            class="form-control"
-                           placeholder="Start a new chat — type your first message…"
+                           placeholder="{f:translate(key:'LLL:EXT:agent/Resources/Private/Language/locallang.xlf:index.placeholder')}"
                            autofocus
                            required>
-                    <button type="submit" class="btn btn-primary">New Chat</button>
+                    <button type="submit" class="btn btn-primary"><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:index.button.new" /></button>
                 </div>
             </form>
         </f:then>
         <f:else>
             <div class="callout callout-info mb-4">
-                <div class="callout-body">Please select a page in the page tree to start a new chat.</div>
+                <div class="callout-body"><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:index.callout.selectPage" /></div>
             </div>
         </f:else>
     </f:if>
 
-    <f:if condition="{chats}">
+    <f:if condition="{tasks}">
         <f:then>
             <table class="table table-striped">
                 <thead>
@@ -38,20 +38,20 @@
                     </tr>
                 </thead>
                 <tbody>
-                    <f:for each="{chats}" as="chat">
+                    <f:for each="{tasks}" as="task">
                         <tr>
-                            <td>{chat.title}</td>
+                            <td>{task.title}</td>
                             <td>
-                                <f:switch expression="{chat.status}">
-                                    <f:case value="0"><span class="badge badge-warning">Pending</span></f:case>
-                                    <f:case value="1"><span class="badge badge-info">In Progress</span></f:case>
-                                    <f:case value="2"><span class="badge badge-success">Ended</span></f:case>
-                                    <f:case value="3"><span class="badge badge-danger">Failed</span></f:case>
+                                <f:switch expression="{task.status}">
+                                    <f:case value="0"><span class="badge badge-warning"><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:status.pending" /></span></f:case>
+                                    <f:case value="1"><span class="badge badge-info"><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:status.inProgress" /></span></f:case>
+                                    <f:case value="2"><span class="badge badge-success"><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:status.ended" /></span></f:case>
+                                    <f:case value="3"><span class="badge badge-danger"><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:status.failed" /></span></f:case>
                                 </f:switch>
                             </td>
-                            <td><f:format.date format="Y-m-d H:i">@{chat.tstamp}</f:format.date></td>
+                            <td><f:format.date format="Y-m-d H:i">@{task.tstamp}</f:format.date></td>
                             <td>
-                                <a href="{f:be.uri(route:'ai_agent_chat.show', parameters:'{task:chat.uid, id:pageId}')}"
+                                <a href="{f:be.uri(route:'ai_agent_chat.show', parameters:'{task:task.uid, id:pageId}')}"
                                    class="btn btn-sm btn-default">Open</a>
                             </td>
                         </tr>
@@ -61,7 +61,7 @@
         </f:then>
         <f:else>
             <f:if condition="{pageId}">
-                <p class="text-muted">No chats yet on this page. Start one above.</p>
+                <p class="text-muted"><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:index.empty" /></p>
             </f:if>
         </f:else>
     </f:if>
