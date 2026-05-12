@@ -22,6 +22,8 @@ let ChatElement = class extends LitElement {
     this.autoStart = "";
     this.initialPrompt = "";
     this.initialMessages = [];
+    this.initialChanges = [];
+    this.changes = [];
     this.messages = [];
     this.inputValue = "";
     this.loading = false;
@@ -38,6 +40,7 @@ let ChatElement = class extends LitElement {
   // -- Lifecycle -------------------------------------------------------------
   firstUpdated() {
     this.messages = this.mergeToolResults(this.initialMessages);
+    this.changes = [...this.initialChanges];
     this.scrollToBottom();
     if ((this.autoStart === "1" || this.autoStart === "true") && this.streamUri) {
       this.doAutoStart();
@@ -79,6 +82,8 @@ let ChatElement = class extends LitElement {
             </button>
           </div>
         </form>
+        
+        ${this.changes.map((change) => html`<div>change: ${JSON.stringify(change)}</div>`)}
 
         ${this.errorMessage ? html`
               <div class="alert alert-danger">${this.errorMessage}</div>` : nothing}
@@ -362,6 +367,12 @@ let ChatElement = class extends LitElement {
         this.activeTools = next;
         break;
       }
+      case "change_tracked": {
+        const change = data;
+        this.changes = [...this.changes, change];
+        console.log("change_tracked", change);
+        break;
+      }
       case "done":
         this.thinking = false;
         this.isStreaming = false;
@@ -440,6 +451,24 @@ __decorateClass([
     }
   })
 ], ChatElement.prototype, "initialMessages", 2);
+__decorateClass([
+  property({
+    attribute: "initial-changes",
+    converter: {
+      fromAttribute(value) {
+        if (!value) return [];
+        try {
+          return JSON.parse(value);
+        } catch {
+          return [];
+        }
+      }
+    }
+  })
+], ChatElement.prototype, "initialChanges", 2);
+__decorateClass([
+  state()
+], ChatElement.prototype, "changes", 2);
 __decorateClass([
   state()
 ], ChatElement.prototype, "messages", 2);

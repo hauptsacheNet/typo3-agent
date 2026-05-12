@@ -23,6 +23,7 @@
         auto-start="{f:if(condition: isNewTask, then: '1', else: '0')}"
         initial-prompt="{task.prompt}"
         initial-messages="{messages -> f:format.json()}"
+        initial-changes="{changes -> f:format.json()}"
     ></hn-agent-chat>
 </f:section>
 </html>

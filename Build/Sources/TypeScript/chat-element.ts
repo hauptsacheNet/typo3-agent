@@ -25,6 +25,15 @@ interface ToolProgress {
   toolName: string;
 }
 
+interface TrackedChange {
+  tablename: string;
+  record_uid: number;
+  workspace_record_uid: number;
+  page_id: number;
+  workspace_page_id: number;
+  task_uid?: number;
+}
+
 interface SseParsed {
   event: string;
   data: Record<string, unknown>;
@@ -62,8 +71,24 @@ export class ChatElement extends LitElement {
   })
   initialMessages: ChatMessage[] = [];
 
+  @property({
+    attribute: 'initial-changes',
+    converter: {
+      fromAttribute(value: string | null): TrackedChange[] {
+        if (!value) return [];
+        try {
+          return JSON.parse(value) as TrackedChange[];
+        } catch {
+          return [];
+        }
+      },
+    },
+  })
+  initialChanges: TrackedChange[] = [];
+
   // -- Internal state --------------------------------------------------------
 
+  @state() private changes: TrackedChange[] = [];
   @state() private messages: ChatMessage[] = [];
   @state() private inputValue = '';
   @state() private loading = false;
@@ -79,6 +104,8 @@ export class ChatElement extends LitElement {
 
   override firstUpdated(): void {
     this.messages = this.mergeToolResults(this.initialMessages);
+    this.changes = [...this.initialChanges];
+
     this.scrollToBottom();
 
     if ((this.autoStart === '1' || this.autoStart === 'true') && this.streamUri) {
@@ -124,6 +151,8 @@ export class ChatElement extends LitElement {
             </button>
           </div>
         </form>
+        
+        ${this.changes.map(change => html `<div>change: ${JSON.stringify(change)}</div>`)}
 
         ${this.errorMessage
             ? html`
@@ -465,6 +494,13 @@ export class ChatElement extends LitElement {
         const next = new Map(this.activeTools);
         next.delete(toolCallId);
         this.activeTools = next;
+        break;
+      }
+
+      case 'change_tracked': {
+        const change = data as unknown as TrackedChange;
+        this.changes = [...this.changes, change];
+        console.log('change_tracked', change);
         break;
       }
 

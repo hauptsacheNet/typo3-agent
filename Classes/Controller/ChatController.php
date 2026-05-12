@@ -96,10 +96,12 @@ class ChatController
 
         $messages = $this->agentService->decodeMessages($task['messages'] ?? null) ?? [];
         $isNewTask = $messages === [] && !empty($task['prompt']);
+        $changes = $this->repository->getChanges($taskUid);
 
         return $view->assignMultiple([
             'task' => $task,
             'messages' => $messages,
+            'changes' => $changes,
             'isNewTask' => $isNewTask,
             'contextLabel' => $contextLabel,
             'contextTableLabel' => $contextTableLabel,
