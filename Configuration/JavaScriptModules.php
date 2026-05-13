@@ -4,6 +4,7 @@ return [
     'dependencies' => [
         'backend',
         'core',
+        'workspaces',
     ],
     'imports' => [
         '@hn/agent/' => 'EXT:agent/Resources/Public/JavaScript/',

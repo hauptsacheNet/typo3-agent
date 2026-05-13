@@ -152,8 +152,6 @@ export class ChatElement extends LitElement {
           </div>
         </form>
         
-        ${this.changes.map(change => html `<div>change: ${JSON.stringify(change)}</div>`)}
-
         ${this.errorMessage
             ? html`
               <div class="alert alert-danger">${this.errorMessage}</div>`
@@ -500,7 +498,7 @@ export class ChatElement extends LitElement {
       case 'change_tracked': {
         const change = data as unknown as TrackedChange;
         this.changes = [...this.changes, change];
-        console.log('change_tracked', change);
+        document.dispatchEvent(new CustomEvent('agent:record-changed'));
         break;
       }
 
@@ -509,6 +507,7 @@ export class ChatElement extends LitElement {
         this.isStreaming = false;
         // Move completed tools out of activeTools — they are already rendered inline
         this.activeTools = new Map();
+        document.dispatchEvent(new CustomEvent('agent:record-changed'));
         break;
 
       case 'error':

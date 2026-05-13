@@ -83,8 +83,6 @@ let ChatElement = class extends LitElement {
           </div>
         </form>
         
-        ${this.changes.map((change) => html`<div>change: ${JSON.stringify(change)}</div>`)}
-
         ${this.errorMessage ? html`
               <div class="alert alert-danger">${this.errorMessage}</div>` : nothing}
       </div>
@@ -370,13 +368,14 @@ let ChatElement = class extends LitElement {
       case "change_tracked": {
         const change = data;
         this.changes = [...this.changes, change];
-        console.log("change_tracked", change);
+        document.dispatchEvent(new CustomEvent("agent:record-changed"));
         break;
       }
       case "done":
         this.thinking = false;
         this.isStreaming = false;
         this.activeTools = /* @__PURE__ */ new Map();
+        document.dispatchEvent(new CustomEvent("agent:record-changed"));
         break;
       case "error":
         this.thinking = false;
