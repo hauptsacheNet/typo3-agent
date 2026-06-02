@@ -46,7 +46,7 @@
                 <source>Describe the task you'd like the AI agent to perform, e.g. fix typos, revise the title…</source>
             </trans-unit>
             <trans-unit id="button.submit.title" resname="button.submit.title">
-                <source>Start a new AI agent task (Ctrl+Enter)</source>
+                <source>Start a new AI agent task (Enter)</source>
             </trans-unit>
             <trans-unit id="button.backToOrigin" resname="button.backToOrigin">
                 <source>Back to origin</source>

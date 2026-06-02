@@ -60,8 +60,8 @@
                 <target>Beschreibe die Aufgabe, die der KI-Agent ausführen soll, z.B. Rechtschreibfehler korrigieren, Titel überarbeiten…</target>
             </trans-unit>
             <trans-unit id="button.submit.title" resname="button.submit.title">
-                <source>Start a new AI agent task (Ctrl+Enter)</source>
-                <target>Neue KI-Agent-Aufgabe starten (Strg+Eingabe)</target>
+                <source>Start a new AI agent task (Enter)</source>
+                <target>Neue KI-Agent-Aufgabe starten (Eingabe)</target>
             </trans-unit>
             <trans-unit id="button.backToOrigin" resname="button.backToOrigin">
                 <source>Back to origin</source>

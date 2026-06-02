@@ -22,7 +22,7 @@ export class NewTaskElement extends LitElement {
   }
 
   private onKeydown(e: KeyboardEvent): void {
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && this.message.trim()) {
+    if (e.key === 'Enter' && !e.shiftKey && this.message.trim()) {
       e.preventDefault();
       this.renderRoot.querySelector('form')?.submit();
     }
@@ -57,7 +57,7 @@ export class NewTaskElement extends LitElement {
                     class="btn"
                     type="submit"
                     ?disabled=${!this.message.trim()}
-                    title=${TYPO3?.lang?.['button.submit.title'] ?? 'Start a new AI agent task (Ctrl+Enter)'}
+                    title=${TYPO3?.lang?.['button.submit.title'] ?? 'Start a new AI agent task (Enter)'}
                 >
                   <typo3-backend-icon
                       identifier="actions-arrow-down-start-alt"

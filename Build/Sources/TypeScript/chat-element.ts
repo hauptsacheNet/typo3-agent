@@ -117,7 +117,7 @@ export class ChatElement extends LitElement {
               required
           ></textarea>
           <div class="position-absolute bottom-0 end-0 p-2">
-            <button type="submit" class="btn" ?disabled=${this.loading}>
+            <button type="submit" class="btn" ?disabled=${this.loading || !this.inputValue.trim()}>
               <typo3-backend-icon
                   identifier="actions-arrow-down-start-alt"
                   size="small"/>
