@@ -18,16 +18,22 @@ let NewTaskElement = class extends LitElement {
     this.uid = 0;
     this.placeholder = "";
     this.returnUrl = "";
+    this.workspaceId = 0;
+    this.workspaceTitle = "";
     this.message = "";
   }
   // No Shadow DOM — use TYPO3 backend Bootstrap CSS
   createRenderRoot() {
     return this;
   }
+  get isLive() {
+    return this.workspaceId <= 0;
+  }
   onInput(e) {
     this.message = e.target.value;
   }
   onKeydown(e) {
+    if (this.isLive) return;
     if (e.key === "Enter" && !e.shiftKey && this.message.trim()) {
       e.preventDefault();
       this.renderRoot.querySelector("form")?.submit();
@@ -36,6 +42,9 @@ let NewTaskElement = class extends LitElement {
   render() {
     if (!this.actionUri) {
       return nothing;
+    }
+    if (this.isLive) {
+      return this.renderLiveCallout();
     }
     return html`
       <div style="margin-bottom: calc(var(--typo3-spacing) * 2);">
@@ -74,6 +83,14 @@ let NewTaskElement = class extends LitElement {
       </div>
     `;
   }
+  renderLiveCallout() {
+    const text = TYPO3?.lang?.["workspace.callout.selectWorkspace"] ?? "Please switch to a workspace before starting a task.";
+    return html`
+      <div class="alert alert-warning" style="margin-bottom: calc(var(--typo3-spacing) * 2);">
+        ${text}
+      </div>
+    `;
+  }
 };
 __decorateClass([
   property({ attribute: "action-uri" })
@@ -90,6 +107,12 @@ __decorateClass([
 __decorateClass([
   property({ attribute: "return-url" })
 ], NewTaskElement.prototype, "returnUrl", 2);
+__decorateClass([
+  property({ attribute: "workspace-id", type: Number })
+], NewTaskElement.prototype, "workspaceId", 2);
+__decorateClass([
+  property({ attribute: "workspace-title" })
+], NewTaskElement.prototype, "workspaceTitle", 2);
 __decorateClass([
   state()
 ], NewTaskElement.prototype, "message", 2);

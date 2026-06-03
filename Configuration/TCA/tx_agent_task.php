@@ -19,7 +19,7 @@ return [
     ],
     'types' => [
         '0' => [
-            'showitem' => 'title, prompt, --div--;Status, status, --div--;Result, result, messages',
+            'showitem' => 'title, prompt, workspace_id, --div--;Status, status, --div--;Result, result, messages',
         ],
     ],
     'columns' => [
@@ -66,6 +66,13 @@ return [
             'config' => [
                 'type' => 'text',
                 'rows' => 15,
+                'readOnly' => true,
+            ],
+        ],
+        'workspace_id' => [
+            'label' => 'Workspace',
+            'config' => [
+                'type' => 'input',
                 'readOnly' => true,
             ],
         ],

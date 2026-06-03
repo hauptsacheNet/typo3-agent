@@ -21,6 +21,11 @@ let ChatElement = class extends LitElement {
     this.streamUri = "";
     this.autoStart = "";
     this.initialPrompt = "";
+    this.taskWorkspaceId = 0;
+    this.taskWorkspaceTitle = "";
+    this.activeWorkspaceId = 0;
+    this.activeWorkspaceTitle = "";
+    this.switchWorkspaceUri = "";
     this.initialMessages = [];
     this.messages = [];
     this.inputValue = "";
@@ -39,15 +44,21 @@ let ChatElement = class extends LitElement {
   firstUpdated() {
     this.messages = this.mergeToolResults(this.initialMessages);
     this.scrollToBottom();
-    if ((this.autoStart === "1" || this.autoStart === "true") && this.streamUri) {
+    if ((this.autoStart === "1" || this.autoStart === "true") && this.streamUri && !this.isWorkspaceMismatch()) {
       this.doAutoStart();
     }
+  }
+  isWorkspaceMismatch() {
+    if (!this.taskWorkspaceId) return false;
+    return this.taskWorkspaceId !== this.activeWorkspaceId;
   }
   updated() {
     this.scrollToBottom();
   }
   // -- Render ----------------------------------------------------------------
   render() {
+    const mismatch = this.isWorkspaceMismatch();
+    const inputDisabled = this.loading || mismatch;
     return html`
       <div class="chat-container message-fade">
         <div class="chat-messages d-flex flex-column gap-3 overflow-auto mx-3 pb-3">
@@ -57,31 +68,62 @@ let ChatElement = class extends LitElement {
           ${this.thinking && !this.isStreaming ? this.renderThinkingIndicator() : nothing}
         </div>
 
-        <form class="position-relative" @submit=${this.onSubmit}>
+        <div>
+
+          ${mismatch ? this.renderWorkspaceMismatch() : nothing}
+
+          <form class="position-relative" @submit=${this.onSubmit}>
           <textarea
               name="message"
               class="chat-input d-block w-100 rounded-4 border p-3 bg-white"
               rows="2"
               placeholder="Type a follow-up message\u2026"
               .value=${this.inputValue}
-              ?disabled=${this.loading}
+              ?disabled=${inputDisabled}
               @input=${this.onInput}
               @keydown=${this.onKeydown}
               required
           ></textarea>
-          <div class="position-absolute bottom-0 end-0 p-2">
-            <button type="submit" class="btn" ?disabled=${this.loading || !this.inputValue.trim()}>
-              <typo3-backend-icon
-                  identifier="actions-arrow-down-start-alt"
-                  size="small"/>
-            </button>
-          </div>
-        </form>
+            <div class="position-absolute bottom-0 end-0 p-2">
+              <button type="submit" class="btn" ?disabled=${inputDisabled || !this.inputValue.trim()}>
+                <typo3-backend-icon
+                    identifier="actions-arrow-down-start-alt"
+                    size="small"/>
+              </button>
+            </div>
+          </form>
+          ${this.errorMessage ? html`
+                <div class="alert alert-danger">${this.errorMessage}</div>` : nothing}
+        </div>
 
-        ${this.errorMessage ? html`
-              <div class="alert alert-danger">${this.errorMessage}</div>` : nothing}
       </div>
     `;
+  }
+  renderWorkspaceMismatch() {
+    const mismatchTemplate = TYPO3?.lang?.["workspace.chat.mismatch"] ?? 'This task belongs to workspace "%s", but you are currently in "%s". Switch to "%s" to continue the conversation.';
+    const buttonTemplate = TYPO3?.lang?.["workspace.chat.switchButton"] ?? 'Switch to workspace "%s"';
+    const taskTitle = this.taskWorkspaceTitle || `#${this.taskWorkspaceId}`;
+    const activeTitle = this.activeWorkspaceTitle || (this.activeWorkspaceId > 0 ? `#${this.activeWorkspaceId}` : "Live");
+    const message = mismatchTemplate.replace("%s", taskTitle).replace("%s", activeTitle).replace("%s", taskTitle);
+    const buttonLabel = buttonTemplate.replace("%s", taskTitle);
+    return html`
+      <div class="alert alert-warning d-flex align-items-center justify-content-between mx-3 mb-2 gap-3">
+        <div>${message}</div>
+        <a href=${this.switchWorkspaceUri}
+           target="_top"
+           class="btn btn-warning ${this.switchWorkspaceUri ? "" : "disabled"}"
+           @click=${this.onSwitchClick}>
+          ${buttonLabel}
+        </a>
+      </div>
+    `;
+  }
+  onSwitchClick(e) {
+    if (!this.switchWorkspaceUri) return;
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+    e.preventDefault();
+    const topWindow = window.top ?? window;
+    topWindow.location.href = this.switchWorkspaceUri;
   }
   renderMessage(msg) {
     const role = msg.role || "unknown";
@@ -159,6 +201,7 @@ let ChatElement = class extends LitElement {
   // -- Event handlers --------------------------------------------------------
   onSubmit(e) {
     e.preventDefault();
+    if (this.isWorkspaceMismatch()) return;
     const message = this.inputValue.trim();
     if (!message) return;
     this.errorMessage = "";
@@ -398,6 +441,21 @@ __decorateClass([
 __decorateClass([
   property({ attribute: "initial-prompt" })
 ], ChatElement.prototype, "initialPrompt", 2);
+__decorateClass([
+  property({ attribute: "task-workspace-id", type: Number })
+], ChatElement.prototype, "taskWorkspaceId", 2);
+__decorateClass([
+  property({ attribute: "task-workspace-title" })
+], ChatElement.prototype, "taskWorkspaceTitle", 2);
+__decorateClass([
+  property({ attribute: "active-workspace-id", type: Number })
+], ChatElement.prototype, "activeWorkspaceId", 2);
+__decorateClass([
+  property({ attribute: "active-workspace-title" })
+], ChatElement.prototype, "activeWorkspaceTitle", 2);
+__decorateClass([
+  property({ attribute: "switch-workspace-uri" })
+], ChatElement.prototype, "switchWorkspaceUri", 2);
 __decorateClass([
   property({
     attribute: "initial-messages",

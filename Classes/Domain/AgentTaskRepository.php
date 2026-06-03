@@ -138,7 +138,7 @@ class AgentTaskRepository
     /**
      * Insert a new task and return its UID.
      */
-    public function insert(int $pid, int $cruserId, string $title, string $prompt, string $contextTable = '', int $contextUid = 0, string $returnUrl = ''): int
+    public function insert(int $pid, int $cruserId, string $title, string $prompt, string $contextTable = '', int $contextUid = 0, string $returnUrl = '', int $workspaceId = 0): int
     {
         $now = time();
         $connection = $this->connectionPool->getConnectionForTable(self::TABLE);
@@ -155,6 +155,7 @@ class AgentTaskRepository
             'context_table' => $contextTable,
             'context_uid' => $contextUid,
             'return_url' => $returnUrl,
+            'workspace_id' => $workspaceId,
         ]);
         return (int)$connection->lastInsertId();
     }

@@ -83,6 +83,34 @@
                 <source>Task for %s</source>
                 <target>Aufgabe zu %s</target>
             </trans-unit>
+            <trans-unit id="workspace.label" resname="workspace.label">
+                <source>Workspace</source>
+                <target>Workspace</target>
+            </trans-unit>
+            <trans-unit id="workspace.live" resname="workspace.live">
+                <source>Live</source>
+                <target>Live</target>
+            </trans-unit>
+            <trans-unit id="workspace.callout.selectWorkspace" resname="workspace.callout.selectWorkspace">
+                <source>Please switch to a workspace via the workspace selector in the top toolbar before starting a task. In the Live workspace changes go public immediately, so the agent does not write there.</source>
+                <target>Bitte wechsle über die Workspace-Auswahl in der oberen Toolbar in einen Workspace, bevor du eine Aufgabe startest. Im Live-Workspace werden Änderungen sofort öffentlich, daher schreibt der Agent dort nicht.</target>
+            </trans-unit>
+            <trans-unit id="workspace.writingTo" resname="workspace.writingTo">
+                <source>Writing in workspace: %s</source>
+                <target>Schreibt in Workspace: %s</target>
+            </trans-unit>
+            <trans-unit id="workspace.chat.mismatch" resname="workspace.chat.mismatch">
+                <source>This task belongs to workspace "%s", but you are currently in "%s". Switch to "%s" to continue the conversation.</source>
+                <target>Diese Aufgabe gehört zum Workspace „%s“, du bist aktuell jedoch in „%s“. Wechsle zu „%s“, um den Chat fortzusetzen.</target>
+            </trans-unit>
+            <trans-unit id="workspace.chat.switchButton" resname="workspace.chat.switchButton">
+                <source>Switch to workspace "%s"</source>
+                <target>Zu Workspace „%s“ wechseln</target>
+            </trans-unit>
+            <trans-unit id="workspace.chat.switching" resname="workspace.chat.switching">
+                <source>Switching workspace…</source>
+                <target>Workspace wird gewechselt…</target>
+            </trans-unit>
         </body>
     </file>
 </xliff>

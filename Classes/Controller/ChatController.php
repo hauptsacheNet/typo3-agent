@@ -34,6 +34,7 @@ use TYPO3\CMS\Core\Imaging\IconSize;
  *  - ai_agent_chat.show         → showAction   (single chat view)
  *  - ai_agent_chat.new          → newAction    (POST: create chat)
  *  - ai_agent_chat.sendMessage  → sendMessageAction (POST: follow-up)
+ *  - ai_agent_chat.switchWorkspace → switchWorkspaceAction (POST: switch BE workspace)
  */
 #[AsController]
 class ChatController
@@ -79,6 +80,7 @@ class ChatController
             'pageId' => $pageId,
             'newUri' => (string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat.new', ['id' => $pageId]),
             'placeholder' => $placeholder,
+            'workspace' => $this->getActiveWorkspaceInfo(),
         ])->renderResponse('Chat/Index');
     }
 
@@ -210,11 +212,17 @@ class ChatController
             'contextTableLabel' => $contextTableLabel,
             'contextUid' => $contextUid,
             'returnUrl' => $returnUrl,
+            'taskWorkspace' => $this->getWorkspaceInfoById((int)($task['workspace_id'] ?? 0)),
+            'activeWorkspace' => $this->getActiveWorkspaceInfo(),
             'sendUri' => (string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat.sendMessage', [
                 'task' => $taskUid,
                 'id' => $pageId,
             ]),
             'streamUri' => (string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat.streamMessage', [
+                'task' => $taskUid,
+                'id' => $pageId,
+            ]),
+            'switchWorkspaceUri' => (string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat.switchWorkspace', [
                 'task' => $taskUid,
                 'id' => $pageId,
             ]),
@@ -230,16 +238,84 @@ class ChatController
             return new RedirectResponse((string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat', ['id' => $pageId]));
         }
 
+        $workspaceId = (int)($GLOBALS['BE_USER']->workspace ?? 0);
+        if ($workspaceId === 0) {
+            // Live workspace blocked server-side too — UI normally prevents reaching this branch.
+            return new RedirectResponse((string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat', ['id' => $pageId]));
+        }
+
         $contextTable = (string)($body['table'] ?? '');
         $contextUid = (int)($body['uid'] ?? 0);
         $returnUrl = GeneralUtility::sanitizeLocalUrl((string)($body['return_url'] ?? ''));
 
         $userId = (int)($GLOBALS['BE_USER']->user['uid'] ?? 0);
-        $taskUid = $this->repository->insert($pageId, $userId, mb_substr($message, 0, 80), $message, $contextTable, $contextUid, $returnUrl);
+        $taskUid = $this->repository->insert($pageId, $userId, mb_substr($message, 0, 80), $message, $contextTable, $contextUid, $returnUrl, $workspaceId);
         return new RedirectResponse((string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat.show', [
             'task' => $taskUid,
             'id' => $pageId,
         ]));
+    }
+
+    /**
+     * Switch the current backend user's active workspace to the workspace
+     * the given task belongs to. Persists the choice in user UC and redirects
+     * back to the chat view — must be opened as a top-frame navigation so the
+     * backend shell (incl. workspace toolbar) reloads.
+     */
+    public function switchWorkspaceAction(ServerRequestInterface $request): ResponseInterface
+    {
+        $pageId = $this->getPageId($request);
+        $taskUid = (int)($request->getQueryParams()['task'] ?? $request->getParsedBody()['task'] ?? 0);
+        $task = $taskUid > 0 ? $this->loadTaskForCurrentUser($taskUid) : null;
+        $targetWorkspace = (int)($task['workspace_id'] ?? 0);
+        $beUser = $GLOBALS['BE_USER'] ?? null;
+
+        if ($task !== null && $targetWorkspace > 0 && $beUser !== null && $beUser->checkWorkspace($targetWorkspace)) {
+            $beUser->setWorkspace($targetWorkspace);
+            $beUser->writeUC();
+        }
+
+        $redirectTarget = (string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat.show', [
+            'task' => $taskUid,
+            'id' => $pageId,
+        ]);
+        return new RedirectResponse($redirectTarget);
+    }
+
+    /**
+     * Resolve the currently active workspace of the logged-in backend user.
+     * Pure read — no side effects.
+     *
+     * @return array{id:int,title:string,isLive:bool}
+     */
+    private function getActiveWorkspaceInfo(): array
+    {
+        return $this->getWorkspaceInfoById((int)($GLOBALS['BE_USER']->workspace ?? 0));
+    }
+
+    /**
+     * @return array{id:int,title:string,isLive:bool}
+     */
+    private function getWorkspaceInfoById(int $workspaceId): array
+    {
+        if ($workspaceId <= 0) {
+            return [
+                'id' => 0,
+                'title' => $GLOBALS['LANG']->sL('LLL:EXT:agent/Resources/Private/Language/locallang.xlf:workspace.live') ?: 'Live',
+                'isLive' => true,
+            ];
+        }
+
+        $record = BackendUtility::getRecord('sys_workspace', $workspaceId, 'title');
+        $title = (string)($record['title'] ?? '');
+        if ($title === '') {
+            $title = '#' . $workspaceId;
+        }
+        return [
+            'id' => $workspaceId,
+            'title' => $title,
+            'isLive' => false,
+        ];
     }
 
     public function sendMessageAction(ServerRequestInterface $request): ResponseInterface

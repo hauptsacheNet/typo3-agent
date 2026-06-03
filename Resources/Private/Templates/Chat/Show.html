@@ -12,6 +12,10 @@
 
             <h1>{task.title}</h1>
 
+            <p class="text-muted">
+                <f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:workspace.label"/>:
+                {taskWorkspace.title}
+            </p>
 
             <f:if condition="{contextLabel}">
                 <p class="text-muted">
@@ -32,6 +36,11 @@
                 auto-start="{f:if(condition: isNewTask, then: '1', else: '0')}"
                 initial-prompt="{task.prompt}"
                 initial-messages="{messages -> f:format.json()}"
+                task-workspace-id="{taskWorkspace.id}"
+                task-workspace-title="{taskWorkspace.title}"
+                active-workspace-id="{activeWorkspace.id}"
+                active-workspace-title="{activeWorkspace.title}"
+                switch-workspace-uri="{switchWorkspaceUri}"
         ></hn-agent-chat>
 
     </div>

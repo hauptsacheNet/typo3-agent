@@ -62,8 +62,8 @@ class AgentService
             throw new \RuntimeException('Task #' . $taskUid . ' could not be claimed (already in progress by another process?).');
         }
 
-        // Set up backend user context from task's cruser_id
-        $this->setupBackendUserContext((int)($task['cruser_id'] ?? 0));
+        // Set up backend user context from task's cruser_id (and workspace, if persisted)
+        $this->setupBackendUserContext((int)($task['cruser_id'] ?? 0), (int)($task['workspace_id'] ?? 0));
 
         // Load or build messages
         $messages = $this->buildMessages($task);
@@ -89,8 +89,8 @@ class AgentService
             throw new \RuntimeException('Task with UID ' . $taskUid . ' not found.');
         }
 
-        // Set up backend user context from task's cruser_id
-        $this->setupBackendUserContext((int)($task['cruser_id'] ?? 0));
+        // Set up backend user context from task's cruser_id (and workspace, if persisted)
+        $this->setupBackendUserContext((int)($task['cruser_id'] ?? 0), (int)($task['workspace_id'] ?? 0));
 
         // Load or build existing messages, then append the new user message
         $messages = $this->buildMessages($task);
@@ -418,7 +418,7 @@ class AgentService
      *
      * Follows the pattern from McpEndpoint::setupBackendUserContext().
      */
-    private function setupBackendUserContext(int $userId): void
+    private function setupBackendUserContext(int $userId, int $persistedWorkspaceId = 0): void
     {
         // Ensure TCA is loaded (required for tools, may not be loaded in all contexts)
         if (empty($GLOBALS['TCA'])) {
@@ -452,9 +452,24 @@ class AgentService
                 $languageServiceFactory = GeneralUtility::makeInstance(LanguageServiceFactory::class);
                 $GLOBALS['LANG'] = $languageServiceFactory->createFromUserPreferences($beUser);
 
-                // Set up workspace context
+                // Set up workspace context: prefer the workspace persisted on the
+                // task (so a chat continues in the workspace where it was created).
+                // Fall back to optimal-workspace selection only when no workspace
+                // was persisted (legacy rows from before this migration).
                 $workspaceService = GeneralUtility::makeInstance(WorkspaceContextService::class);
-                $workspaceId = $workspaceService->switchToOptimalWorkspace($beUser);
+                if ($persistedWorkspaceId > 0) {
+                    if (!$beUser->checkWorkspace($persistedWorkspaceId)) {
+                        throw new \RuntimeException(sprintf(
+                            'Task workspace #%d is not accessible for user #%d.',
+                            $persistedWorkspaceId,
+                            $userId,
+                        ));
+                    }
+                    $workspaceService->setWorkspaceContext($beUser, $persistedWorkspaceId);
+                    $workspaceId = $persistedWorkspaceId;
+                } else {
+                    $workspaceId = $workspaceService->switchToOptimalWorkspace($beUser);
+                }
 
                 // Set up TYPO3 Context API
                 $context = GeneralUtility::makeInstance(Context::class);
