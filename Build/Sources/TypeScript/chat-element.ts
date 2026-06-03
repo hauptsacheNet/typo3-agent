@@ -94,20 +94,18 @@ export class ChatElement extends LitElement {
 
   override render() {
     return html`
-      <div class="chat-container d-flex flex-column message-fade" style="max-width:900px;">
-        <div class="chat-messages d-flex flex-column gap-3 overflow-auto mx-3 pb-3"
-             style="min-height:300px;max-height:60vh;">
+      <div class="chat-container message-fade">
+        <div class="chat-messages d-flex flex-column gap-3 overflow-auto mx-3 pb-3">
           ${this.messages.map(msg => this.renderMessage(msg))}
           ${this.renderActiveTools()}
           ${this.isStreaming ? this.renderStreamingBubble() : nothing}
           ${this.thinking && !this.isStreaming ? this.renderThinkingIndicator() : nothing}
         </div>
-  
+
         <form class="position-relative" @submit=${this.onSubmit}>
           <textarea
               name="message"
-              class="d-block w-100 rounded-4 border p-3 bg-white"
-              style="outline: none;field-sizing: content;resize: none;"
+              class="chat-input d-block w-100 rounded-4 border p-3 bg-white"
               rows="2"
               placeholder="Type a follow-up message\u2026"
               .value=${this.inputValue}
@@ -130,31 +128,6 @@ export class ChatElement extends LitElement {
               <div class="alert alert-danger">${this.errorMessage}</div>`
             : nothing}
       </div>
-
-      <style>
-        .message-fade {
-          position: relative;
-        }
-
-        .message-fade > div {
-          padding-top: 30px !important;
-        }
-
-        .message-fade::before {
-          content: ' ';
-          position: absolute;
-          z-index: 1;
-          display: block;
-          top: 0;
-          left: 0;
-          width: 100%;
-          height: 30px;
-          background: var(--bs-light);
-          /*noinspection CssInvalidPropertyValue,CssInvalidFunction*/
-          -webkit-mask-image: -webkit-gradient(linear, left top, left bottom, from(rgba(0, 0, 0, 1)), to(rgba(0, 0, 0, 0)));
-        }
-        
-      </style>
     `;
   }
 
@@ -165,7 +138,7 @@ export class ChatElement extends LitElement {
 
     if (role === 'assistant') {
       return html`
-        <div class="rounded-4 bg-white border p-3">
+        <div class="rounded-4 bg-white border p-3 me-3">
           <div class="chat-msg-role fw-bold small opacity-75 mb-1 text-uppercase">${roleLabel}</div>
           ${msg.content
             ? html`<div class="chat-msg-content">${unsafeHTML(this.renderMarkdown(msg.content))}</div>`
@@ -178,9 +151,9 @@ export class ChatElement extends LitElement {
 
     // user, system, unknown
     return html`
-      <div class="rounded-4 bg-success-subtle border p-3 align-self-end">
+      <div class="rounded-4 bg-success-subtle border p-3 ms-3 align-self-end">
         <div class="chat-msg-role fw-bold small opacity-75 mb-1 text-uppercase">${roleLabel}</div>
-        <pre class="m-0">${msg.content ?? ''}</pre>
+        <pre class="chat-msg-prewrap m-0">${msg.content ?? ''}</pre>
       </div>
     `;
   }

@@ -1,28 +1,39 @@
 <html xmlns:f="http://typo3.org/ns/TYPO3/CMS/Fluid/ViewHelpers"
       data-namespace-typo3-fluid="true">
-<f:layout name="Module" />
+<f:layout name="Module"/>
 
 <f:section name="Content">
-    <f:asset.module identifier="@hn/agent/chat-element.js" />
+    <f:asset.module identifier="@hn/agent/chat-element.js"/>
+    <f:asset.css identifier="hn-agent-chat" href="EXT:agent/Resources/Public/Css/agent-chat.css"/>
 
-    <h1>{task.title}</h1>
+    <div style="width: 100%; height: 100%; overflow: hidden; display: grid; grid-template-rows: auto  minmax(0, 1fr)">
 
-    <f:if condition="{contextLabel}">
-        <p class="text-muted">
-            <f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:context.label" arguments="{0: contextTableLabel}" />:
-            <f:if condition="{returnUrl}">
-                <f:then><a href="{returnUrl}">{contextLabel} (UID: {contextUid})</a></f:then>
-                <f:else>{contextLabel} (UID: {contextUid})</f:else>
+        <div>
+
+            <h1>{task.title}</h1>
+
+
+            <f:if condition="{contextLabel}">
+                <p class="text-muted">
+                    <f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:context.label"
+                                 arguments="{0: contextTableLabel}"/>
+                    :
+                    <f:if condition="{returnUrl}">
+                        <f:then><a href="{returnUrl}">{contextLabel} (UID: {contextUid})</a></f:then>
+                        <f:else>{contextLabel} (UID: {contextUid})</f:else>
+                    </f:if>
+                </p>
             </f:if>
-        </p>
-    </f:if>
 
-    <hn-agent-chat
-        send-uri="{sendUri}"
-        stream-uri="{streamUri}"
-        auto-start="{f:if(condition: isNewTask, then: '1', else: '0')}"
-        initial-prompt="{task.prompt}"
-        initial-messages="{messages -> f:format.json()}"
-    ></hn-agent-chat>
+        </div>
+        <hn-agent-chat
+                send-uri="{sendUri}"
+                stream-uri="{streamUri}"
+                auto-start="{f:if(condition: isNewTask, then: '1', else: '0')}"
+                initial-prompt="{task.prompt}"
+                initial-messages="{messages -> f:format.json()}"
+        ></hn-agent-chat>
+
+    </div>
 </f:section>
 </html>
