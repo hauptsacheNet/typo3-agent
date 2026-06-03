@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Hn\Agent\Controller;
 
+use Doctrine\DBAL\ParameterType;
 use Hn\Agent\Domain\AgentTaskRepository;
 use Hn\Agent\Http\SseStream;
 use Hn\Agent\Service\AgentService;
@@ -16,6 +17,8 @@ use TYPO3\CMS\Core\Http\JsonResponse;
 use TYPO3\CMS\Core\Http\RedirectResponse;
 use TYPO3\CMS\Core\Http\Response;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
+use TYPO3\CMS\Core\Database\ConnectionPool;
+use TYPO3\CMS\Core\Domain\Repository\PageRepository;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Imaging\IconFactory;
 use TYPO3\CMS\Core\Imaging\IconSize;
@@ -41,6 +44,8 @@ class ChatController
         private readonly IconFactory           $iconFactory,
         private readonly AgentTaskRepository   $repository,
         private readonly AgentService          $agentService,
+        private readonly PageRepository        $pageRepository,
+        private readonly ConnectionPool        $connectionPool,
     )
     {
     }
@@ -54,13 +59,113 @@ class ChatController
         $userId = (int)($GLOBALS['BE_USER']->user['uid'] ?? 0);
         $tasks = $this->repository->findTasksForUser($userId, $pageId);
 
+        $descendantPageIds = $this->collectDescendantPageIds($pageId);
+        $subpageTasks = $this->repository->findTasksForUserOnPages($userId, $descendantPageIds);
+        $subpageGroups = $this->buildSubpageGroups($subpageTasks, $descendantPageIds);
+
         $this->addReloadButton($view, $request);
+
+        $languageService = $GLOBALS['LANG'];
+        if ($pageId > 0) {
+            $pageTitle = BackendUtility::getRecord('pages', $pageId, 'title')['title'] ?? '';
+            $placeholder = sprintf($languageService->sL('LLL:EXT:agent/Resources/Private/Language/locallang.xlf:placeholder.page'), $pageTitle);
+        } else {
+            $placeholder = $languageService->sL('LLL:EXT:agent/Resources/Private/Language/locallang.xlf:placeholder.default');
+        }
 
         return $view->assignMultiple([
             'tasks' => $tasks,
+            'subpageGroups' => $subpageGroups,
             'pageId' => $pageId,
             'newUri' => (string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat.new', ['id' => $pageId]),
+            'placeholder' => $placeholder,
         ])->renderResponse('Chat/Index');
+    }
+
+    /**
+     * Returns all page UIDs below the given page, in tree order. When $pageId is 0
+     * the entire backend page tree is descended (all root pages and their subpages).
+     *
+     * @return int[]
+     */
+    private function collectDescendantPageIds(int $pageId): array
+    {
+        if ($pageId > 0) {
+            return $this->pageRepository->getDescendantPageIdsRecursive($pageId, 999);
+        }
+
+        $qb = $this->connectionPool->getQueryBuilderForTable('pages');
+        $rootPageIds = $qb
+            ->select('uid')
+            ->from('pages')
+            ->where($qb->expr()->eq('pid', $qb->createNamedParameter(0, ParameterType::INTEGER)))
+            ->orderBy('sorting', 'ASC')
+            ->executeQuery()
+            ->fetchFirstColumn();
+
+        $descendants = [];
+        foreach ($rootPageIds as $rootId) {
+            $rootId = (int)$rootId;
+            $descendants[] = $rootId;
+            foreach ($this->pageRepository->getDescendantPageIdsRecursive($rootId, 999) as $childId) {
+                $descendants[] = (int)$childId;
+            }
+        }
+        return $descendants;
+    }
+
+    /**
+     * Groups subpage tasks by pid, resolves the page title and a module URI for each group.
+     * Group order follows $orderedPageIds (tree order); pages without tasks are skipped.
+     *
+     * @param array<int, array<string, mixed>> $subpageTasks
+     * @param int[] $orderedPageIds
+     * @return array<int, array{pid: int, pageTitle: string, pageUri: ?string, tasks: array<int, array<string, mixed>>}>
+     */
+    private function buildSubpageGroups(array $subpageTasks, array $orderedPageIds): array
+    {
+        if ($subpageTasks === []) {
+            return [];
+        }
+
+        $tasksByPid = [];
+        foreach ($subpageTasks as $task) {
+            $tasksByPid[(int)$task['pid']][] = $task;
+        }
+
+        $groups = [];
+        foreach ($orderedPageIds as $pid) {
+            $pid = (int)$pid;
+            if (!isset($tasksByPid[$pid])) {
+                continue;
+            }
+            $pageRecord = BackendUtility::getRecord('pages', $pid);
+            if ($pageRecord !== null) {
+                $title = BackendUtility::getRecordTitle('pages', $pageRecord);
+                $uri = (string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat', ['id' => $pid]);
+            } else {
+                $title = 'Seite #' . $pid;
+                $uri = null;
+            }
+            $groups[] = [
+                'pid' => $pid,
+                'pageTitle' => $title,
+                'pageUri' => $uri,
+                'tasks' => $tasksByPid[$pid],
+            ];
+            unset($tasksByPid[$pid]);
+        }
+
+        foreach ($tasksByPid as $pid => $tasks) {
+            $groups[] = [
+                'pid' => $pid,
+                'pageTitle' => 'Seite #' . $pid,
+                'pageUri' => null,
+                'tasks' => $tasks,
+            ];
+        }
+
+        return $groups;
     }
 
     public function showAction(ServerRequestInterface $request): ResponseInterface
@@ -203,7 +308,7 @@ class ChatController
         $buttonBar = $view->getDocHeaderComponent()->getButtonBar();
         $backButton = $buttonBar->makeLinkButton()
             ->setHref((string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat', ['id' => $pageId]))
-            ->setTitle('Back to chat list')
+            ->setTitle($GLOBALS['LANG']->sL('LLL:EXT:agent/Resources/Private/Language/locallang.xlf:button.backToTasks'))
             ->setShowLabelText(true)
             ->setIcon($this->iconFactory->getIcon('actions-view-go-back', IconSize::SMALL));
         $buttonBar->addButton($backButton);

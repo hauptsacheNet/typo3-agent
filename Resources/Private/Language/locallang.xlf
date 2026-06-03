@@ -24,6 +24,12 @@
             <trans-unit id="index.empty" resname="index.empty">
                 <source>No tasks yet on this page. Start one above.</source>
             </trans-unit>
+            <trans-unit id="index.section.current" resname="index.section.current">
+                <source>Tasks on this page</source>
+            </trans-unit>
+            <trans-unit id="index.section.subpages" resname="index.section.subpages">
+                <source>Tasks on subpages</source>
+            </trans-unit>
             <trans-unit id="status.pending" resname="status.pending">
                 <source>Pending</source>
             </trans-unit>
@@ -50,6 +56,9 @@
             </trans-unit>
             <trans-unit id="button.backToOrigin" resname="button.backToOrigin">
                 <source>Back to origin</source>
+            </trans-unit>
+            <trans-unit id="button.backToTasks" resname="button.backToTasks">
+                <source>Back to tasks list</source>
             </trans-unit>
             <trans-unit id="context.label" resname="context.label">
                 <source>Task for %s</source>
