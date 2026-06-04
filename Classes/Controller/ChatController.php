@@ -22,6 +22,7 @@ use TYPO3\CMS\Core\Domain\Repository\PageRepository;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Imaging\IconFactory;
 use TYPO3\CMS\Core\Imaging\IconSize;
+use TYPO3\CMS\Core\Page\PageRenderer;
 
 /**
  * Backend module controller for chatting with the AI agent.
@@ -45,6 +46,7 @@ class ChatController
         private readonly IconFactory           $iconFactory,
         private readonly AgentTaskRepository   $repository,
         private readonly AgentService          $agentService,
+        protected readonly PageRenderer $pageRenderer,
         private readonly PageRepository        $pageRepository,
         private readonly ConnectionPool        $connectionPool,
     )
@@ -170,6 +172,20 @@ class ChatController
             return new RedirectResponse((string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat', ['id' => $pageId]));
         }
 
+        $this->pageRenderer->addInlineSetting('FormEngine', 'moduleUrl', (string)$this->uriBuilder->buildUriFromRoute('record_edit'));
+        $this->pageRenderer->addInlineSetting('RecordHistory', 'moduleUrl', (string)$this->uriBuilder->buildUriFromRoute('record_history'));
+        $this->pageRenderer->addInlineSetting('Workspaces', 'id', $pageId);
+        $this->pageRenderer->addInlineSetting('WebLayout', 'moduleUrl', (string)$this->uriBuilder->buildUriFromRoute('web_layout'));
+
+        $this->pageRenderer->addInlineLanguageLabelFile('EXT:core/Resources/Private/Language/locallang_core.xlf');
+        $this->pageRenderer->addInlineLanguageLabelFile('EXT:workspaces/Resources/Private/Language/locallang.xlf');
+
+        // backend.js wird durch workspace-changes.ts per import geladen.
+        // Ein separater loadJavaScriptModule-Aufruf würde eine Race Condition
+        // erzeugen: backend.js könnte seinen Auto-Fetch vor dem Monkey-Patch
+        // in workspace-changes.ts ausführen.
+        $this->pageRenderer->loadJavaScriptModule('@typo3/backend/multi-record-selection.js');
+
         $view = $this->moduleTemplateFactory->create($request);
         $view->setTitle($GLOBALS['LANG']->sL('LLL:EXT:agent/Resources/Private/Language/locallang.xlf:index.heading'), $task['title']);
 
@@ -190,10 +206,12 @@ class ChatController
 
         $messages = $this->agentService->decodeMessages($task['messages'] ?? null) ?? [];
         $isNewTask = $messages === [] && !empty($task['prompt']);
+        $changes = $this->repository->getChanges($taskUid);
 
         return $view->assignMultiple([
             'task' => $task,
             'messages' => $messages,
+            'changes' => $changes,
             'isNewTask' => $isNewTask,
             'contextLabel' => $contextLabel,
             'contextTableLabel' => $contextTableLabel,

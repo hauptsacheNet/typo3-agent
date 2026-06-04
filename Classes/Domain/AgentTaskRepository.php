@@ -191,7 +191,7 @@ class AgentTaskRepository
     /**
      * Record a workspace change associated with a task.
      */
-    public function addChange(int $taskUid, string $tablename, int $recordUid, int $workspaceRecordUid): void
+    public function addChange(int $taskUid, string $tablename, int $recordUid, int $workspaceRecordUid, int $pageId, int $workspacePageId): void
     {
         $this->connectionPool
             ->getConnectionForTable(self::CHANGE_TABLE)
@@ -200,6 +200,8 @@ class AgentTaskRepository
                 'tablename' => $tablename,
                 'record_uid' => $recordUid,
                 'workspace_record_uid' => $workspaceRecordUid,
+                'page_id' => $pageId,
+                'workspace_page_id' => $workspacePageId,
             ]);
     }
 

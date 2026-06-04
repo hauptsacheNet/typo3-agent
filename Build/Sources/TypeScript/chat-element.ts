@@ -25,6 +25,15 @@ interface ToolProgress {
   toolName: string;
 }
 
+interface TrackedChange {
+  tablename: string;
+  record_uid: number;
+  workspace_record_uid: number;
+  page_id: number;
+  workspace_page_id: number;
+  task_uid?: number;
+}
+
 interface SseParsed {
   event: string;
   data: Record<string, unknown>;
@@ -67,8 +76,24 @@ export class ChatElement extends LitElement {
   })
   initialMessages: ChatMessage[] = [];
 
+  @property({
+    attribute: 'initial-changes',
+    converter: {
+      fromAttribute(value: string | null): TrackedChange[] {
+        if (!value) return [];
+        try {
+          return JSON.parse(value) as TrackedChange[];
+        } catch {
+          return [];
+        }
+      },
+    },
+  })
+  initialChanges: TrackedChange[] = [];
+
   // -- Internal state --------------------------------------------------------
 
+  @state() private changes: TrackedChange[] = [];
   @state() private messages: ChatMessage[] = [];
   @state() private inputValue = '';
   @state() private loading = false;
@@ -84,6 +109,8 @@ export class ChatElement extends LitElement {
 
   override firstUpdated(): void {
     this.messages = this.mergeToolResults(this.initialMessages);
+    this.changes = [...this.initialChanges];
+
     this.scrollToBottom();
 
     if ((this.autoStart === '1' || this.autoStart === 'true') && this.streamUri && !this.isWorkspaceMismatch()) {
@@ -500,11 +527,19 @@ export class ChatElement extends LitElement {
         break;
       }
 
+      case 'change_tracked': {
+        const change = data as unknown as TrackedChange;
+        this.changes = [...this.changes, change];
+        document.dispatchEvent(new CustomEvent('agent:record-changed'));
+        break;
+      }
+
       case 'done':
         this.thinking = false;
         this.isStreaming = false;
         // Move completed tools out of activeTools — they are already rendered inline
         this.activeTools = new Map();
+        document.dispatchEvent(new CustomEvent('agent:record-changed'));
         break;
 
       case 'error':

@@ -27,6 +27,8 @@ let ChatElement = class extends LitElement {
     this.activeWorkspaceTitle = "";
     this.switchWorkspaceUri = "";
     this.initialMessages = [];
+    this.initialChanges = [];
+    this.changes = [];
     this.messages = [];
     this.inputValue = "";
     this.loading = false;
@@ -43,6 +45,7 @@ let ChatElement = class extends LitElement {
   // -- Lifecycle -------------------------------------------------------------
   firstUpdated() {
     this.messages = this.mergeToolResults(this.initialMessages);
+    this.changes = [...this.initialChanges];
     this.scrollToBottom();
     if ((this.autoStart === "1" || this.autoStart === "true") && this.streamUri && !this.isWorkspaceMismatch()) {
       this.doAutoStart();
@@ -378,10 +381,17 @@ let ChatElement = class extends LitElement {
         this.activeTools = next;
         break;
       }
+      case "change_tracked": {
+        const change = data;
+        this.changes = [...this.changes, change];
+        document.dispatchEvent(new CustomEvent("agent:record-changed"));
+        break;
+      }
       case "done":
         this.thinking = false;
         this.isStreaming = false;
         this.activeTools = /* @__PURE__ */ new Map();
+        document.dispatchEvent(new CustomEvent("agent:record-changed"));
         break;
       case "error":
         this.thinking = false;
@@ -471,6 +481,24 @@ __decorateClass([
     }
   })
 ], ChatElement.prototype, "initialMessages", 2);
+__decorateClass([
+  property({
+    attribute: "initial-changes",
+    converter: {
+      fromAttribute(value) {
+        if (!value) return [];
+        try {
+          return JSON.parse(value);
+        } catch {
+          return [];
+        }
+      }
+    }
+  })
+], ChatElement.prototype, "initialChanges", 2);
+__decorateClass([
+  state()
+], ChatElement.prototype, "changes", 2);
 __decorateClass([
   state()
 ], ChatElement.prototype, "messages", 2);
