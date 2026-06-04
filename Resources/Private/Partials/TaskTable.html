@@ -1,56 +1,79 @@
 <html xmlns:f="http://typo3.org/ns/TYPO3/CMS/Fluid/ViewHelpers"
       data-namespace-typo3-fluid="true">
 <div class="recordlist">
-    <f:if condition="{title}">
-        <div class="recordlist-heading">
-            <div class="recordlist-heading-row">
-                <div class="recordlist-heading-title">
-                    <f:if condition="{pageUri}">
-                        <f:then><a href="{pageUri}">{title}</a></f:then>
-                        <f:else>{title}</f:else>
-                    </f:if>
-                    (<span>{tasks -> f:count()}</span>)
-                </div>
+    <div class="recordlist-heading">
+        <div class="recordlist-heading-row">
+            <div class="recordlist-heading-title">
+                <f:translate key="{headingLabel}"/> (<span>{tasks -> f:count()}</span>)
+            </div>
+            <div class="recordlist-heading-actions">
+                <button type="button"
+                        class="btn btn-default btn-sm t3js-toggle-recordlist"
+                        aria-expanded="{f:if(condition: collapsed, then: 'false', else: 'true')}"
+                        data-table="{identifier}"
+                        data-recordlist-action="toggle"
+                        data-bs-toggle="collapse"
+                        data-bs-target="#recordlist-{identifier}">
+                    <typo3-backend-icon
+                        identifier="{f:if(condition: collapsed, then: 'actions-view-list-expand', else: 'actions-view-list-collapse')}"
+                        size="small"></typo3-backend-icon>
+                </button>
             </div>
         </div>
-    </f:if>
-    <div class="table-fit {f:if(condition: title, else: 'border-top-0')}">
-        <table class="table table-striped table-hover">
-            <colgroup>
-                <col>
-                <col style="width: 130px">
-                <col style="width: 150px">
-                <col style="width: 90px">
-            </colgroup>
-            <thead>
-                <tr>
-                    <th>Title</th>
-                    <th>Status</th>
-                    <th>Updated</th>
-                    <th></th>
-                </tr>
-            </thead>
-            <tbody>
-                <f:for each="{tasks}" as="task">
+    </div>
+    <div class="collapse{f:if(condition: collapsed, else: ' show')}"
+         data-state="{f:if(condition: collapsed, then: 'collapsed', else: 'expanded')}"
+         id="recordlist-{identifier}">
+        <div class="table-fit">
+            <table class="table table-striped table-hover">
+                <colgroup>
+                    <col>
+                    <f:if condition="{showPage}"><col style="width: 200px"></f:if>
+                    <col style="width: 130px">
+                    <col style="width: 150px">
+                    <col style="width: 90px">
+                </colgroup>
+                <thead>
                     <tr>
-                        <td>{task.title}</td>
-                        <td>
-                            <f:switch expression="{task.status}">
-                                <f:case value="0"><span class="badge badge-warning"><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:status.pending" /></span></f:case>
-                                <f:case value="1"><span class="badge badge-info"><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:status.inProgress" /></span></f:case>
-                                <f:case value="2"><span class="badge badge-success"><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:status.ended" /></span></f:case>
-                                <f:case value="3"><span class="badge badge-danger"><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:status.failed" /></span></f:case>
-                            </f:switch>
-                        </td>
-                        <td><f:format.date format="Y-m-d H:i">@{task.tstamp}</f:format.date></td>
-                        <td>
-                            <a href="{f:be.uri(route:'ai_agent_chat.show', parameters:'{task:task.uid, id:pageId}')}"
-                               class="btn btn-sm btn-default">Open</a>
-                        </td>
+                        <th>Title</th>
+                        <f:if condition="{showPage}">
+                            <th><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:index.column.page"/></th>
+                        </f:if>
+                        <th>Status</th>
+                        <th>Updated</th>
+                        <th></th>
                     </tr>
-                </f:for>
-            </tbody>
-        </table>
+                </thead>
+                <tbody>
+                    <f:for each="{tasks}" as="task">
+                        <tr>
+                            <td>{task.title}</td>
+                            <f:if condition="{showPage}">
+                                <td>
+                                    <f:if condition="{task.pageUri}">
+                                        <f:then><a href="{task.pageUri}">{task.pageTitle}</a></f:then>
+                                        <f:else>{task.pageTitle}</f:else>
+                                    </f:if>
+                                </td>
+                            </f:if>
+                            <td>
+                                <f:switch expression="{task.status}">
+                                    <f:case value="0"><span class="badge badge-warning"><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:status.pending" /></span></f:case>
+                                    <f:case value="1"><span class="badge badge-info"><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:status.inProgress" /></span></f:case>
+                                    <f:case value="2"><span class="badge badge-success"><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:status.ended" /></span></f:case>
+                                    <f:case value="3"><span class="badge badge-danger"><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:status.failed" /></span></f:case>
+                                </f:switch>
+                            </td>
+                            <td><f:format.date format="Y-m-d H:i">@{task.tstamp}</f:format.date></td>
+                            <td>
+                                <a href="{f:be.uri(route:'ai_agent_chat.show', parameters:'{task:task.uid, id:pageId}')}"
+                                   class="btn btn-sm btn-default">Open</a>
+                            </td>
+                        </tr>
+                    </f:for>
+                </tbody>
+            </table>
+        </div>
     </div>
 </div>
 </html>

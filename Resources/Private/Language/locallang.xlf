@@ -30,6 +30,9 @@
             <trans-unit id="index.section.subpages" resname="index.section.subpages">
                 <source>Tasks on subpages</source>
             </trans-unit>
+            <trans-unit id="index.column.page" resname="index.column.page">
+                <source>Page</source>
+            </trans-unit>
             <trans-unit id="status.pending" resname="status.pending">
                 <source>Pending</source>
             </trans-unit>

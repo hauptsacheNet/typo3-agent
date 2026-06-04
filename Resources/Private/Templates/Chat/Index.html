@@ -5,6 +5,7 @@
 <f:section name="Content">
 
     <f:asset.module identifier="@hn/agent/new-task-element.js"/>
+    <f:asset.module identifier="@typo3/backend/recordlist.js"/>
     <hn-agent-new-task action-uri="{newUri}"
                        table="pages"
                        uid="{pageId}"
@@ -19,10 +20,13 @@
 
     <f:if condition="{tasks}">
         <f:then>
-            <h2>
-                <f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:index.section.current"/>
-            </h2>
-            <f:render partial="TaskTable" arguments="{tasks: tasks, pageId: pageId}"/>
+            <f:render partial="TaskTable" arguments="{
+                tasks: tasks,
+                pageId: pageId,
+                identifier: 'agent-tasks-current',
+                headingLabel: 'LLL:EXT:agent/Resources/Private/Language/locallang.xlf:index.section.current',
+                collapsed: collapsed.current
+            }"/>
         </f:then>
         <f:else>
             <p class="text-muted">
@@ -31,14 +35,15 @@
         </f:else>
     </f:if>
 
-    <f:if condition="{subpageGroups}">
-        <h2>
-            <f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:index.section.subpages"/>
-        </h2>
-        <f:for each="{subpageGroups}" as="group">
-            <f:render partial="TaskTable"
-                      arguments="{tasks: group.tasks, pageId: group.pid, title: group.pageTitle, pageUri: group.pageUri}"/>
-        </f:for>
+    <f:if condition="{subpageTasks}">
+        <f:render partial="TaskTable" arguments="{
+            tasks: subpageTasks,
+            pageId: pageId,
+            showPage: 1,
+            identifier: 'agent-tasks-subpages',
+            headingLabel: 'LLL:EXT:agent/Resources/Private/Language/locallang.xlf:index.section.subpages',
+            collapsed: collapsed.subpages
+        }"/>
     </f:if>
 </f:section>
 </html>

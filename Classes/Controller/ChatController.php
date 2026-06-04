@@ -61,8 +61,9 @@ class ChatController
         $tasks = $this->repository->findTasksForUser($userId, $pageId);
 
         $descendantPageIds = $this->collectDescendantPageIds($pageId);
-        $subpageTasks = $this->repository->findTasksForUserOnPages($userId, $descendantPageIds);
-        $subpageGroups = $this->buildSubpageGroups($subpageTasks, $descendantPageIds);
+        $subpageTasks = $this->enrichTasksWithPage(
+            $this->repository->findTasksForUserOnPages($userId, $descendantPageIds)
+        );
 
         $this->addReloadButton($view, $request);
 
@@ -74,13 +75,20 @@ class ChatController
             $placeholder = $languageService->sL('LLL:EXT:agent/Resources/Private/Language/locallang.xlf:placeholder.default');
         }
 
+        $collapsedTables = (array)($GLOBALS['BE_USER']->uc['moduleData']['web_list']['collapsedTables'] ?? []);
+        $collapsed = [
+            'current' => (bool)($collapsedTables['agent-tasks-current'] ?? false),
+            'subpages' => (bool)($collapsedTables['agent-tasks-subpages'] ?? false),
+        ];
+
         return $view->assignMultiple([
             'tasks' => $tasks,
-            'subpageGroups' => $subpageGroups,
+            'subpageTasks' => $subpageTasks,
             'pageId' => $pageId,
             'newUri' => (string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat.new', ['id' => $pageId]),
             'placeholder' => $placeholder,
             'workspace' => $this->getActiveWorkspaceInfo(),
+            'collapsed' => $collapsed,
         ])->renderResponse('Chat/Index');
     }
 
@@ -117,57 +125,36 @@ class ChatController
     }
 
     /**
-     * Groups subpage tasks by pid, resolves the page title and a module URI for each group.
-     * Group order follows $orderedPageIds (tree order); pages without tasks are skipped.
+     * Enrich each task with its page title and a module URI for the page,
+     * caching per pid so multiple tasks on the same page hit BackendUtility only once.
      *
-     * @param array<int, array<string, mixed>> $subpageTasks
-     * @param int[] $orderedPageIds
-     * @return array<int, array{pid: int, pageTitle: string, pageUri: ?string, tasks: array<int, array<string, mixed>>}>
+     * @param array<int, array<string, mixed>> $tasks
+     * @return array<int, array<string, mixed>>
      */
-    private function buildSubpageGroups(array $subpageTasks, array $orderedPageIds): array
+    private function enrichTasksWithPage(array $tasks): array
     {
-        if ($subpageTasks === []) {
-            return [];
-        }
-
-        $tasksByPid = [];
-        foreach ($subpageTasks as $task) {
-            $tasksByPid[(int)$task['pid']][] = $task;
-        }
-
-        $groups = [];
-        foreach ($orderedPageIds as $pid) {
-            $pid = (int)$pid;
-            if (!isset($tasksByPid[$pid])) {
-                continue;
+        $pageCache = [];
+        foreach ($tasks as &$task) {
+            $pid = (int)$task['pid'];
+            if (!isset($pageCache[$pid])) {
+                $pageRecord = BackendUtility::getRecord('pages', $pid);
+                if ($pageRecord !== null) {
+                    $pageCache[$pid] = [
+                        'title' => BackendUtility::getRecordTitle('pages', $pageRecord),
+                        'uri' => (string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat', ['id' => $pid]),
+                    ];
+                } else {
+                    $pageCache[$pid] = [
+                        'title' => 'Seite #' . $pid,
+                        'uri' => null,
+                    ];
+                }
             }
-            $pageRecord = BackendUtility::getRecord('pages', $pid);
-            if ($pageRecord !== null) {
-                $title = BackendUtility::getRecordTitle('pages', $pageRecord);
-                $uri = (string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat', ['id' => $pid]);
-            } else {
-                $title = 'Seite #' . $pid;
-                $uri = null;
-            }
-            $groups[] = [
-                'pid' => $pid,
-                'pageTitle' => $title,
-                'pageUri' => $uri,
-                'tasks' => $tasksByPid[$pid],
-            ];
-            unset($tasksByPid[$pid]);
+            $task['pageTitle'] = $pageCache[$pid]['title'];
+            $task['pageUri'] = $pageCache[$pid]['uri'];
         }
-
-        foreach ($tasksByPid as $pid => $tasks) {
-            $groups[] = [
-                'pid' => $pid,
-                'pageTitle' => 'Seite #' . $pid,
-                'pageUri' => null,
-                'tasks' => $tasks,
-            ];
-        }
-
-        return $groups;
+        unset($task);
+        return $tasks;
     }
 
     public function showAction(ServerRequestInterface $request): ResponseInterface
