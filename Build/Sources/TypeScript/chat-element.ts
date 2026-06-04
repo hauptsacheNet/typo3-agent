@@ -3,6 +3,9 @@ import {customElement, property, query, state} from 'lit/decorators.js';
 import {unsafeHTML} from 'lit/directives/unsafe-html.js';
 import {marked} from 'marked';
 import DOMPurify from 'dompurify';
+import '@typo3/backend/drag-uploader.js';
+import Modal from '@typo3/backend/modal.js';
+import {MessageUtility} from '@typo3/backend/utility/message-utility.js';
 
 marked.setOptions({breaks: true, gfm: true});
 
@@ -30,6 +33,13 @@ interface SseParsed {
   data: Record<string, unknown>;
 }
 
+interface Attachment {
+  uid?: number;
+  identifier?: string;
+  name: string;
+  iconHtml?: string;
+}
+
 // ---- Component -------------------------------------------------------------
 
 @customElement('hn-agent-chat')
@@ -51,6 +61,8 @@ export class ChatElement extends LitElement {
   @property({attribute: 'active-workspace-id', type: Number}) activeWorkspaceId = 0;
   @property({attribute: 'active-workspace-title'}) activeWorkspaceTitle = '';
   @property({attribute: 'switch-workspace-uri'}) switchWorkspaceUri = '';
+  @property({attribute: 'default-upload-folder'}) defaultUploadFolder = '';
+  @property({attribute: 'file-browser-uri'}) fileBrowserUri = '';
 
   @property({
     attribute: 'initial-messages',
@@ -77,8 +89,39 @@ export class ChatElement extends LitElement {
   @state() private streamingBuffer = '';
   @state() private isStreaming = false;
   @state() private activeTools: Map<string, ToolProgress> = new Map();
+  @state() private attachments: Attachment[] = [];
 
   @query('textarea') private inputEl!: HTMLTextAreaElement;
+  // DragUploader dispatches `uploadSuccess` on its `data-dropzone-trigger`
+  // element (not the wrapper, and not bubbling) — so we have to listen on
+  // the trigger button itself.
+  @query('.chat-upload-trigger') private uploadTriggerEl?: HTMLElement;
+
+  private elementBrowserListener = (e: MessageEvent): void => {
+    if (!MessageUtility.verifyOrigin(e.origin)) return;
+    const data = e.data as {actionName?: string; fieldName?: string; value?: string; label?: string};
+    if (data.actionName !== 'typo3:elementBrowser:elementAdded') return;
+    if (data.fieldName !== 'hn-agent-chat') return;
+    const raw = (data.value ?? '').toString();
+    if (!raw) return;
+    // File-mode element browser sends the sys_file UID as a plain numeric
+    // string in `value`. A combined identifier ("1:/path/file.png") would
+    // contain a colon — pass that through as `identifier` instead.
+    const numericUid = /^\d+$/.test(raw) ? parseInt(raw, 10) : 0;
+    if (numericUid > 0) {
+      this.addAttachment({uid: numericUid, name: data.label || `sys_file:${numericUid}`});
+    } else {
+      this.addAttachment({identifier: raw, name: data.label || raw});
+    }
+  };
+
+  private uploadSuccessListener = (e: Event): void => {
+    const detail = (e as CustomEvent).detail as unknown as [unknown, {upload?: Array<{uid: number; name: string; id: string; icon?: string}>}];
+    const payload = Array.isArray(detail) ? detail[1] : undefined;
+    const file = payload?.upload?.[0];
+    if (!file) return;
+    this.addAttachment({uid: file.uid, identifier: file.id, name: file.name, iconHtml: file.icon});
+  };
 
   // -- Lifecycle -------------------------------------------------------------
 
@@ -86,9 +129,18 @@ export class ChatElement extends LitElement {
     this.messages = this.mergeToolResults(this.initialMessages);
     this.scrollToBottom();
 
+    // DragUploader auto-inits via MutationObserver on `.t3js-drag-uploader`.
+    this.uploadTriggerEl?.addEventListener('uploadSuccess', this.uploadSuccessListener);
+
     if ((this.autoStart === '1' || this.autoStart === 'true') && this.streamUri && !this.isWorkspaceMismatch()) {
       this.doAutoStart();
     }
+  }
+
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this.uploadTriggerEl?.removeEventListener('uploadSuccess', this.uploadSuccessListener);
+    window.removeEventListener('message', this.elementBrowserListener);
   }
 
   private isWorkspaceMismatch(): boolean {
@@ -105,6 +157,9 @@ export class ChatElement extends LitElement {
   override render() {
     const mismatch = this.isWorkspaceMismatch();
     const inputDisabled = this.loading || mismatch;
+    const canSubmit = !inputDisabled && (this.inputValue.trim() !== '' || this.attachments.length > 0);
+    const uploadEnabled = !!this.defaultUploadFolder;
+    const pickEnabled = !!this.fileBrowserUri;
     return html`
       <div class="chat-container message-fade">
         <div class="chat-messages d-flex flex-column gap-3 overflow-auto mx-3 pb-3">
@@ -114,9 +169,19 @@ export class ChatElement extends LitElement {
           ${this.thinking && !this.isStreaming ? this.renderThinkingIndicator() : nothing}
         </div>
 
-        <div>
+        <div class="t3js-drag-uploader chat-upload-zone"
+             data-target-folder=${this.defaultUploadFolder}
+             data-max-file-size="0"
+             data-dropzone-target=".chat-upload-anchor"
+             data-dropzone-trigger=".chat-upload-trigger"
+             data-default-action="rename"
+             data-file-irre-object="hn-agent-chat">
+
+          <div class="chat-upload-anchor"></div>
 
           ${mismatch ? this.renderWorkspaceMismatch() : nothing}
+
+          ${this.renderAttachmentsBar(uploadEnabled, pickEnabled, inputDisabled)}
 
           <form class="position-relative" @submit=${this.onSubmit}>
           <textarea
@@ -128,10 +193,9 @@ export class ChatElement extends LitElement {
               ?disabled=${inputDisabled}
               @input=${this.onInput}
               @keydown=${this.onKeydown}
-              required
           ></textarea>
             <div class="position-absolute bottom-0 end-0 p-2">
-              <button type="submit" class="btn" ?disabled=${inputDisabled || !this.inputValue.trim()}>
+              <button type="submit" class="btn" ?disabled=${!canSubmit}>
                 <typo3-backend-icon
                     identifier="actions-arrow-down-start-alt"
                     size="small"/>
@@ -145,6 +209,41 @@ export class ChatElement extends LitElement {
         </div>
 
       </div>
+    `;
+  }
+
+  private renderAttachmentsBar(uploadEnabled: boolean, pickEnabled: boolean, inputDisabled: boolean): TemplateResult {
+    return html`
+      <div class="chat-attachments d-flex flex-wrap align-items-center gap-2 mb-2">
+        <button type="button"
+                class="chat-upload-trigger btn btn-sm btn-default"
+                ?disabled=${inputDisabled || !uploadEnabled}
+                title=${uploadEnabled ? 'Datei hochladen' : 'Kein Upload-Ordner verf\u00fcgbar'}>
+          <typo3-backend-icon identifier="actions-upload" size="small"/>
+          Hochladen
+        </button>
+        <button type="button"
+                class="btn btn-sm btn-default"
+                ?disabled=${inputDisabled || !pickEnabled}
+                @click=${this.onPickClick}>
+          <typo3-backend-icon identifier="actions-folder" size="small"/>
+          Ausw\u00e4hlen
+        </button>
+        ${this.attachments.map((a, i) => this.renderAttachmentChip(a, i))}
+      </div>
+    `;
+  }
+
+  private renderAttachmentChip(att: Attachment, index: number): TemplateResult {
+    return html`
+      <span class="badge bg-secondary d-inline-flex align-items-center gap-1">
+        ${att.iconHtml ? unsafeHTML(att.iconHtml) : html`<typo3-backend-icon identifier="mimetypes-other-other" size="small"/>`}
+        <span>${att.name}</span>
+        <button type="button"
+                class="btn btn-sm p-0 ms-1 text-white border-0"
+                title="Entfernen"
+                @click=${() => this.removeAttachment(index)}>\u00d7</button>
+      </span>
     `;
   }
 
@@ -284,18 +383,59 @@ export class ChatElement extends LitElement {
     e.preventDefault();
     if (this.isWorkspaceMismatch()) return;
     const message = this.inputValue.trim();
-    if (!message) return;
+    const attachments = this.attachments;
+    if (!message && attachments.length === 0) return;
 
     this.errorMessage = '';
-    this.messages = [...this.messages, {role: 'user', content: message}];
+    const optimisticContent = this.composeOptimisticUserMessage(message, attachments);
+    this.messages = [...this.messages, {role: 'user', content: optimisticContent}];
     this.inputValue = '';
+    this.attachments = [];
     this.loading = true;
 
     if (this.streamUri) {
-      this.sendStreaming(message).then(() => this.finishSend());
+      this.sendStreaming(message, attachments).then(() => this.finishSend());
     } else {
-      this.sendBlocking(message).then(() => this.finishSend());
+      this.sendBlocking(message, attachments).then(() => this.finishSend());
     }
+  }
+
+  private composeOptimisticUserMessage(message: string, attachments: Attachment[]): string {
+    if (attachments.length === 0) return message;
+    const lines = attachments.map(a => {
+      const ref = a.uid ? `sys_file:${a.uid}` : (a.identifier || a.name);
+      return `- ${ref} — ${a.name}`;
+    });
+    const prefix = message ? message.replace(/\s+$/, '') + '\n\n' : '';
+    return prefix + '---\nAngehängte Dateien:\n' + lines.join('\n');
+  }
+
+  private addAttachment(att: Attachment): void {
+    const isDup = this.attachments.some(existing =>
+      (att.uid && existing.uid === att.uid) ||
+      (att.identifier && existing.identifier === att.identifier),
+    );
+    if (isDup) return;
+    this.attachments = [...this.attachments, att];
+  }
+
+  private removeAttachment(index: number): void {
+    this.attachments = this.attachments.filter((_, i) => i !== index);
+  }
+
+  private onPickClick(): void {
+    if (!this.fileBrowserUri) return;
+    // Listener is attached fresh each open and removed on modal close to avoid
+    // duplicate handling between sessions.
+    window.addEventListener('message', this.elementBrowserListener);
+    const modal = Modal.advanced({
+      type: Modal.types.iframe,
+      content: this.fileBrowserUri,
+      size: Modal.sizes.large,
+    });
+    modal.addEventListener('typo3-modal-hide', () => {
+      window.removeEventListener('message', this.elementBrowserListener);
+    });
   }
 
   private onInput(e: Event): void {
@@ -314,6 +454,16 @@ export class ChatElement extends LitElement {
     this.inputEl?.focus();
   }
 
+  private appendAttachments(formData: FormData, attachments: Attachment[]): void {
+    if (attachments.length === 0) return;
+    const payload = attachments.map(a => ({
+      uid: a.uid,
+      identifier: a.identifier,
+      name: a.name,
+    }));
+    formData.append('attachments', JSON.stringify(payload));
+  }
+
   // -- Auto-start ------------------------------------------------------------
 
   private async doAutoStart(): Promise<void> {
@@ -327,10 +477,11 @@ export class ChatElement extends LitElement {
 
   // -- Network: blocking -----------------------------------------------------
 
-  private async sendBlocking(message: string): Promise<void> {
+  private async sendBlocking(message: string, attachments: Attachment[] = []): Promise<void> {
     try {
       const formData = new FormData();
       formData.append('message', message);
+      this.appendAttachments(formData, attachments);
 
       const response = await fetch(this.sendUri, {
         method: 'POST',
@@ -357,11 +508,12 @@ export class ChatElement extends LitElement {
 
   // -- Network: streaming (SSE) ----------------------------------------------
 
-  private async sendStreaming(message: string): Promise<void> {
+  private async sendStreaming(message: string, attachments: Attachment[] = []): Promise<void> {
     try {
       this.thinking = true;
       const formData = new FormData();
       formData.append('message', message);
+      this.appendAttachments(formData, attachments);
 
       const response = await fetch(this.streamUri, {
         method: 'POST',
@@ -505,6 +657,12 @@ export class ChatElement extends LitElement {
         this.isStreaming = false;
         // Move completed tools out of activeTools — they are already rendered inline
         this.activeTools = new Map();
+        // Replace optimistic messages with the persisted server state so the
+        // user sees the canonical form (e.g. resolved attachment block) instead
+        // of the locally-composed preview.
+        if (Array.isArray((data as {messages?: unknown}).messages)) {
+          this.messages = this.mergeToolResults((data as {messages: ChatMessage[]}).messages);
+        }
         break;
 
       case 'error':

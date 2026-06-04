@@ -19,6 +19,9 @@ use TYPO3\CMS\Core\Http\Response;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Domain\Repository\PageRepository;
+use TYPO3\CMS\Core\Page\PageRenderer;
+use TYPO3\CMS\Core\Resource\DefaultUploadFolderResolver;
+use TYPO3\CMS\Core\Resource\Folder;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Imaging\IconFactory;
 use TYPO3\CMS\Core\Imaging\IconSize;
@@ -47,6 +50,8 @@ class ChatController
         private readonly AgentService          $agentService,
         private readonly PageRepository        $pageRepository,
         private readonly ConnectionPool        $connectionPool,
+        private readonly DefaultUploadFolderResolver $defaultUploadFolderResolver,
+        private readonly PageRenderer          $pageRenderer,
     )
     {
     }
@@ -191,6 +196,21 @@ class ChatController
         $messages = $this->agentService->decodeMessages($task['messages'] ?? null) ?? [];
         $isNewTask = $messages === [] && !empty($task['prompt']);
 
+        $beUser = $GLOBALS['BE_USER'];
+        $uploadFolder = $beUser instanceof \TYPO3\CMS\Core\Authentication\BackendUserAuthentication
+            ? $this->defaultUploadFolderResolver->resolve($beUser, $pageId, $contextTable !== '' ? $contextTable : null)
+            : false;
+        $defaultUploadFolder = $uploadFolder instanceof Folder ? $uploadFolder->getCombinedIdentifier() : '';
+
+        // DragUploader reads TYPO3.lang["file_upload.*"] from inline labels; these are
+        // not loaded by the module shell, so inject them here (same pattern as filelist).
+        $this->pageRenderer->addInlineLanguageLabelFile('EXT:core/Resources/Private/Language/locallang_core.xlf', 'file_upload');
+
+        $fileBrowserUri = (string)$this->uriBuilder->buildUriFromRoute('wizard_element_browser', [
+            'mode' => 'file',
+            'bparams' => 'hn-agent-chat|||*|',
+        ]);
+
         return $view->assignMultiple([
             'task' => $task,
             'messages' => $messages,
@@ -201,6 +221,8 @@ class ChatController
             'returnUrl' => $returnUrl,
             'taskWorkspace' => $this->getWorkspaceInfoById((int)($task['workspace_id'] ?? 0)),
             'activeWorkspace' => $this->getActiveWorkspaceInfo(),
+            'defaultUploadFolder' => $defaultUploadFolder,
+            'fileBrowserUri' => $fileBrowserUri,
             'sendUri' => (string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat.sendMessage', [
                 'task' => $taskUid,
                 'id' => $pageId,
@@ -310,9 +332,10 @@ class ChatController
         $body = (array)$request->getParsedBody();
         $taskUid = (int)($body['task'] ?? $request->getQueryParams()['task'] ?? 0);
         $message = trim((string)($body['message'] ?? ''));
+        $attachments = $this->parseAttachments($body['attachments'] ?? null);
 
         $task = $taskUid > 0 ? $this->loadTaskForCurrentUser($taskUid) : null;
-        if ($task === null || $message === '') {
+        if ($task === null || ($message === '' && $attachments === [])) {
             if ($this->isAjax($request)) {
                 return new JsonResponse(['error' => 'Invalid task or empty message'], 400);
             }
@@ -321,7 +344,7 @@ class ChatController
 
         $error = null;
         try {
-            $messages = $this->agentService->continueChat($taskUid, $message);
+            $messages = $this->agentService->continueChat($taskUid, $message, null, $attachments);
         } catch (\Throwable $e) {
             $error = $e->getMessage();
             $reloaded = $this->loadTaskForCurrentUser($taskUid);
@@ -387,6 +410,7 @@ class ChatController
         $body = (array)$request->getParsedBody();
         $taskUid = (int)($body['task'] ?? $request->getQueryParams()['task'] ?? 0);
         $message = trim((string)($body['message'] ?? ''));
+        $attachments = $this->parseAttachments($body['attachments'] ?? null);
 
         $task = $taskUid > 0 ? $this->loadTaskForCurrentUser($taskUid) : null;
         if ($task === null) {
@@ -400,9 +424,9 @@ class ChatController
         }
 
         $existingMessages = $this->agentService->decodeMessages($task['messages'] ?? null);
-        $isInitialProcessing = $existingMessages === null && $message === '';
+        $isInitialProcessing = $existingMessages === null && $message === '' && $attachments === [];
 
-        if (!$isInitialProcessing && $message === '') {
+        if (!$isInitialProcessing && $message === '' && $attachments === []) {
             return $this->buildSseResponse(static function (callable $send): void {
                 $send('error', [
                     'error' => 'Empty message',
@@ -425,14 +449,55 @@ class ChatController
             });
         }
 
-        return $this->buildSseResponse(static function (callable $send) use ($agentService, $taskUid, $message): void {
+        return $this->buildSseResponse(static function (callable $send) use ($agentService, $taskUid, $message, $attachments): void {
             try {
-                $messages = $agentService->continueChat($taskUid, $message, $send);
+                $messages = $agentService->continueChat($taskUid, $message, $send, $attachments);
                 $send('done', ['status' => 2, 'messages' => $messages]);
             } catch (\Throwable $e) {
                 $send('error', ['error' => $e->getMessage(), 'status' => 3]);
             }
         });
+    }
+
+    /**
+     * Decode the attachments payload from the request body. The client sends
+     * a JSON-encoded array (FormData can't carry nested structures cleanly),
+     * each item shaped `{uid?: int, identifier?: string, name?: string}`.
+     *
+     * @return array<int, array{uid?: int, identifier?: string, name?: string}>
+     */
+    private function parseAttachments(mixed $raw): array
+    {
+        if (is_array($raw)) {
+            $decoded = $raw;
+        } elseif (is_string($raw) && $raw !== '') {
+            $decoded = json_decode($raw, true);
+        } else {
+            return [];
+        }
+        if (!is_array($decoded)) {
+            return [];
+        }
+        $out = [];
+        foreach ($decoded as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            $entry = [];
+            if (isset($item['uid']) && (int)$item['uid'] > 0) {
+                $entry['uid'] = (int)$item['uid'];
+            }
+            if (isset($item['identifier']) && is_string($item['identifier']) && $item['identifier'] !== '') {
+                $entry['identifier'] = $item['identifier'];
+            }
+            if (isset($item['name']) && is_string($item['name'])) {
+                $entry['name'] = $item['name'];
+            }
+            if ($entry !== []) {
+                $out[] = $entry;
+            }
+        }
+        return $out;
     }
 
     private function buildSseResponse(\Closure $emitter): ResponseInterface

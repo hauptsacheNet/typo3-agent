@@ -8,6 +8,8 @@ use Hn\Agent\Domain\AgentTaskRepository;
 use Hn\Agent\Domain\TaskStatus;
 use Hn\McpServer\MCP\ToolRegistry;
 use Hn\McpServer\Service\WorkspaceContextService;
+use Psr\Log\LoggerAwareInterface;
+use Psr\Log\LoggerAwareTrait;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
 use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
 use TYPO3\CMS\Core\Configuration\Tca\TcaFactory;
@@ -16,11 +18,15 @@ use TYPO3\CMS\Core\Context\UserAspect;
 use TYPO3\CMS\Core\Context\WorkspaceAspect;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
+use TYPO3\CMS\Core\Resource\File;
+use TYPO3\CMS\Core\Resource\ResourceFactory;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
-class AgentService
+class AgentService implements LoggerAwareInterface
 {
+    use LoggerAwareTrait;
+
     public function __construct(
         private readonly LlmService $llmService,
         private readonly ToolConverterService $toolConverterService,
@@ -28,6 +34,7 @@ class AgentService
         private readonly ExtensionConfiguration $extensionConfiguration,
         private readonly ConnectionPool $connectionPool,
         private readonly AgentTaskRepository $repository,
+        private readonly ResourceFactory $resourceFactory,
     ) {}
 
     /**
@@ -80,9 +87,11 @@ class AgentService
      * @param int $taskUid
      * @param string $userMessage The new user message to append
      * @param callable(string, array): void|null $progress Optional progress callback, see processTask().
+     * @param array<int, array{uid?: int|string, identifier?: string, name?: string}> $attachments
+     *        Raw attachment refs from the client; FAL UIDs are preferred, combined identifiers are used as fallback.
      * @return array The full updated messages array
      */
-    public function continueChat(int $taskUid, string $userMessage, ?callable $progress = null): array
+    public function continueChat(int $taskUid, string $userMessage, ?callable $progress = null, array $attachments = []): array
     {
         $task = $this->repository->findByUid($taskUid);
         if ($task === false) {
@@ -92,9 +101,17 @@ class AgentService
         // Set up backend user context from task's cruser_id (and workspace, if persisted)
         $this->setupBackendUserContext((int)($task['cruser_id'] ?? 0), (int)($task['workspace_id'] ?? 0));
 
+        // Resolve attachments to a textual block (sys_file:uid — identifier (mime)) so the LLM
+        // sees the file references inline. Done after BE_USER setup so FAL permission checks
+        // run against the task's user, not the request context.
+        $attachmentBlock = $this->resolveAttachments($attachments);
+        $finalUserMessage = $attachmentBlock !== ''
+            ? rtrim($userMessage) . "\n\n---\nAngehängte Dateien:\n" . $attachmentBlock
+            : $userMessage;
+
         // Load or build existing messages, then append the new user message
         $messages = $this->buildMessages($task);
-        $messages[] = ['role' => 'user', 'content' => $userMessage];
+        $messages[] = ['role' => 'user', 'content' => $finalUserMessage];
 
         // Persist the user message + reset status to pending so claim succeeds
         $this->repository->saveState($taskUid, $messages, TaskStatus::Pending);
@@ -536,5 +553,72 @@ class AgentService
         }
 
         $this->repository->addChange($taskUid, $table, $uid, $workspaceRecordUid);
+    }
+
+    /**
+     * Resolve raw attachment refs to FAL `File` objects and format them as a
+     * markdown-ish list. Refs may carry `uid` (preferred) or `identifier`
+     * (combined storage:path). Unresolvable entries fall back to a `(Datei
+     * nicht auflösbar)`-line so the user/LLM still see that something was
+     * attached, instead of the block disappearing silently.
+     *
+     * @param array<int, array{uid?: int|string, identifier?: string, name?: string}> $raw
+     */
+    private function resolveAttachments(array $raw): string
+    {
+        $lines = [];
+        foreach ($raw as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+            $file = $this->resolveAttachmentFile($entry);
+            if ($file instanceof File) {
+                $lines[] = sprintf(
+                    '- sys_file:%d — %s (%s)',
+                    $file->getUid(),
+                    $file->getCombinedIdentifier(),
+                    $file->getMimeType() ?: 'application/octet-stream',
+                );
+                continue;
+            }
+            $label = trim((string)($entry['name'] ?? ''));
+            if ($label === '') {
+                $label = trim((string)($entry['identifier'] ?? ''));
+            }
+            if ($label === '' && isset($entry['uid'])) {
+                $label = 'sys_file:' . (int)$entry['uid'];
+            }
+            $lines[] = '- ' . ($label !== '' ? $label : 'Unbenannte Datei') . ' (Datei nicht auflösbar)';
+        }
+        return implode("\n", $lines);
+    }
+
+    /**
+     * @param array{uid?: int|string, identifier?: string} $entry
+     */
+    private function resolveAttachmentFile(array $entry): ?File
+    {
+        $uid = (int)($entry['uid'] ?? 0);
+        $identifier = trim((string)($entry['identifier'] ?? ''));
+        try {
+            if ($uid > 0) {
+                return $this->resourceFactory->getFileObject($uid);
+            }
+            if ($identifier !== '') {
+                $file = $this->resourceFactory->getFileObjectFromCombinedIdentifier($identifier);
+                return $file instanceof File ? $file : null;
+            }
+        } catch (\Throwable $e) {
+            $this->logger?->warning('Attachment could not be resolved', [
+                'uid' => $uid,
+                'identifier' => $identifier,
+                'exception' => $e->getMessage(),
+            ]);
+            return null;
+        }
+        $this->logger?->warning('Attachment entry has neither uid nor identifier', [
+            'entry' => $entry,
+        ]);
+        return null;
     }
 }

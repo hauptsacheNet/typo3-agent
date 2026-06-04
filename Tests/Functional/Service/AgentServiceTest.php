@@ -123,6 +123,7 @@ class AgentServiceTest extends FunctionalTestCase
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
+            GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class),
         );
     }
 
@@ -228,6 +229,7 @@ class AgentServiceTest extends FunctionalTestCase
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
+            GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class),
         );
 
         try {
