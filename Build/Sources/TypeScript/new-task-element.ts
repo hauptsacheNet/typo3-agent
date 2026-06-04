@@ -14,15 +14,23 @@ export class NewTaskElement extends LitElement {
   @property({type: Number}) uid = 0;
   @property() placeholder = '';
   @property({attribute: 'return-url'}) returnUrl = '';
+  @property({attribute: 'workspace-id', type: Number}) workspaceId = 0;
+  @property({attribute: 'workspace-title'}) workspaceTitle = '';
 
   @state() private message = '';
+
+  private get isLive(): boolean {
+    // workspaceId === 0 means Live workspace (or attribute not set at all).
+    return this.workspaceId <= 0;
+  }
 
   private onInput(e: Event): void {
     this.message = (e.target as HTMLTextAreaElement).value;
   }
 
   private onKeydown(e: KeyboardEvent): void {
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && this.message.trim()) {
+    if (this.isLive) return;
+    if (e.key === 'Enter' && !e.shiftKey && this.message.trim()) {
       e.preventDefault();
       this.renderRoot.querySelector('form')?.submit();
     }
@@ -31,6 +39,10 @@ export class NewTaskElement extends LitElement {
   override render() {
     if (!this.actionUri) {
       return nothing;
+    }
+
+    if (this.isLive) {
+      return this.renderLiveCallout();
     }
 
     return html`
@@ -57,7 +69,7 @@ export class NewTaskElement extends LitElement {
                     class="btn"
                     type="submit"
                     ?disabled=${!this.message.trim()}
-                    title=${TYPO3?.lang?.['button.submit.title'] ?? 'Start a new AI agent task (Ctrl+Enter)'}
+                    title=${TYPO3?.lang?.['button.submit.title'] ?? 'Start a new AI agent task (Enter)'}
                 >
                   <typo3-backend-icon
                       identifier="actions-arrow-down-start-alt"
@@ -67,6 +79,16 @@ export class NewTaskElement extends LitElement {
             </div>
           </div>
         </form>
+      </div>
+    `;
+  }
+
+  private renderLiveCallout() {
+    const text = TYPO3?.lang?.['workspace.callout.selectWorkspace']
+      ?? 'Please switch to a workspace before starting a task.';
+    return html`
+      <div class="alert alert-warning" style="margin-bottom: calc(var(--typo3-spacing) * 2);">
+        ${text}
       </div>
     `;
   }

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Hn\Agent\Controller;
 
+use Doctrine\DBAL\ParameterType;
 use Hn\Agent\Domain\AgentTaskRepository;
 use Hn\Agent\Http\SseStream;
 use Hn\Agent\Service\AgentService;
@@ -16,6 +17,8 @@ use TYPO3\CMS\Core\Http\JsonResponse;
 use TYPO3\CMS\Core\Http\RedirectResponse;
 use TYPO3\CMS\Core\Http\Response;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
+use TYPO3\CMS\Core\Database\ConnectionPool;
+use TYPO3\CMS\Core\Domain\Repository\PageRepository;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Imaging\IconFactory;
 use TYPO3\CMS\Core\Imaging\IconSize;
@@ -32,6 +35,7 @@ use TYPO3\CMS\Core\Page\PageRenderer;
  *  - ai_agent_chat.show         → showAction   (single chat view)
  *  - ai_agent_chat.new          → newAction    (POST: create chat)
  *  - ai_agent_chat.sendMessage  → sendMessageAction (POST: follow-up)
+ *  - ai_agent_chat.switchWorkspace → switchWorkspaceAction (POST: switch BE workspace)
  */
 #[AsController]
 class ChatController
@@ -43,6 +47,8 @@ class ChatController
         private readonly AgentTaskRepository   $repository,
         private readonly AgentService          $agentService,
         protected readonly PageRenderer $pageRenderer,
+        private readonly PageRepository        $pageRepository,
+        private readonly ConnectionPool        $connectionPool,
     )
     {
     }
@@ -56,13 +62,114 @@ class ChatController
         $userId = (int)($GLOBALS['BE_USER']->user['uid'] ?? 0);
         $tasks = $this->repository->findTasksForUser($userId, $pageId);
 
+        $descendantPageIds = $this->collectDescendantPageIds($pageId);
+        $subpageTasks = $this->repository->findTasksForUserOnPages($userId, $descendantPageIds);
+        $subpageGroups = $this->buildSubpageGroups($subpageTasks, $descendantPageIds);
+
         $this->addReloadButton($view, $request);
+
+        $languageService = $GLOBALS['LANG'];
+        if ($pageId > 0) {
+            $pageTitle = BackendUtility::getRecord('pages', $pageId, 'title')['title'] ?? '';
+            $placeholder = sprintf($languageService->sL('LLL:EXT:agent/Resources/Private/Language/locallang.xlf:placeholder.page'), $pageTitle);
+        } else {
+            $placeholder = $languageService->sL('LLL:EXT:agent/Resources/Private/Language/locallang.xlf:placeholder.default');
+        }
 
         return $view->assignMultiple([
             'tasks' => $tasks,
+            'subpageGroups' => $subpageGroups,
             'pageId' => $pageId,
             'newUri' => (string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat.new', ['id' => $pageId]),
+            'placeholder' => $placeholder,
+            'workspace' => $this->getActiveWorkspaceInfo(),
         ])->renderResponse('Chat/Index');
+    }
+
+    /**
+     * Returns all page UIDs below the given page, in tree order. When $pageId is 0
+     * the entire backend page tree is descended (all root pages and their subpages).
+     *
+     * @return int[]
+     */
+    private function collectDescendantPageIds(int $pageId): array
+    {
+        if ($pageId > 0) {
+            return $this->pageRepository->getDescendantPageIdsRecursive($pageId, 999);
+        }
+
+        $qb = $this->connectionPool->getQueryBuilderForTable('pages');
+        $rootPageIds = $qb
+            ->select('uid')
+            ->from('pages')
+            ->where($qb->expr()->eq('pid', $qb->createNamedParameter(0, ParameterType::INTEGER)))
+            ->orderBy('sorting', 'ASC')
+            ->executeQuery()
+            ->fetchFirstColumn();
+
+        $descendants = [];
+        foreach ($rootPageIds as $rootId) {
+            $rootId = (int)$rootId;
+            $descendants[] = $rootId;
+            foreach ($this->pageRepository->getDescendantPageIdsRecursive($rootId, 999) as $childId) {
+                $descendants[] = (int)$childId;
+            }
+        }
+        return $descendants;
+    }
+
+    /**
+     * Groups subpage tasks by pid, resolves the page title and a module URI for each group.
+     * Group order follows $orderedPageIds (tree order); pages without tasks are skipped.
+     *
+     * @param array<int, array<string, mixed>> $subpageTasks
+     * @param int[] $orderedPageIds
+     * @return array<int, array{pid: int, pageTitle: string, pageUri: ?string, tasks: array<int, array<string, mixed>>}>
+     */
+    private function buildSubpageGroups(array $subpageTasks, array $orderedPageIds): array
+    {
+        if ($subpageTasks === []) {
+            return [];
+        }
+
+        $tasksByPid = [];
+        foreach ($subpageTasks as $task) {
+            $tasksByPid[(int)$task['pid']][] = $task;
+        }
+
+        $groups = [];
+        foreach ($orderedPageIds as $pid) {
+            $pid = (int)$pid;
+            if (!isset($tasksByPid[$pid])) {
+                continue;
+            }
+            $pageRecord = BackendUtility::getRecord('pages', $pid);
+            if ($pageRecord !== null) {
+                $title = BackendUtility::getRecordTitle('pages', $pageRecord);
+                $uri = (string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat', ['id' => $pid]);
+            } else {
+                $title = 'Seite #' . $pid;
+                $uri = null;
+            }
+            $groups[] = [
+                'pid' => $pid,
+                'pageTitle' => $title,
+                'pageUri' => $uri,
+                'tasks' => $tasksByPid[$pid],
+            ];
+            unset($tasksByPid[$pid]);
+        }
+
+        foreach ($tasksByPid as $pid => $tasks) {
+            $groups[] = [
+                'pid' => $pid,
+                'pageTitle' => 'Seite #' . $pid,
+                'pageUri' => null,
+                'tasks' => $tasks,
+            ];
+        }
+
+        return $groups;
     }
 
     public function showAction(ServerRequestInterface $request): ResponseInterface
@@ -123,11 +230,17 @@ class ChatController
             'contextTableLabel' => $contextTableLabel,
             'contextUid' => $contextUid,
             'returnUrl' => $returnUrl,
+            'taskWorkspace' => $this->getWorkspaceInfoById((int)($task['workspace_id'] ?? 0)),
+            'activeWorkspace' => $this->getActiveWorkspaceInfo(),
             'sendUri' => (string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat.sendMessage', [
                 'task' => $taskUid,
                 'id' => $pageId,
             ]),
             'streamUri' => (string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat.streamMessage', [
+                'task' => $taskUid,
+                'id' => $pageId,
+            ]),
+            'switchWorkspaceUri' => (string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat.switchWorkspace', [
                 'task' => $taskUid,
                 'id' => $pageId,
             ]),
@@ -143,16 +256,84 @@ class ChatController
             return new RedirectResponse((string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat', ['id' => $pageId]));
         }
 
+        $workspaceId = (int)($GLOBALS['BE_USER']->workspace ?? 0);
+        if ($workspaceId === 0) {
+            // Live workspace blocked server-side too — UI normally prevents reaching this branch.
+            return new RedirectResponse((string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat', ['id' => $pageId]));
+        }
+
         $contextTable = (string)($body['table'] ?? '');
         $contextUid = (int)($body['uid'] ?? 0);
         $returnUrl = GeneralUtility::sanitizeLocalUrl((string)($body['return_url'] ?? ''));
 
         $userId = (int)($GLOBALS['BE_USER']->user['uid'] ?? 0);
-        $taskUid = $this->repository->insert($pageId, $userId, mb_substr($message, 0, 80), $message, $contextTable, $contextUid, $returnUrl);
+        $taskUid = $this->repository->insert($pageId, $userId, mb_substr($message, 0, 80), $message, $contextTable, $contextUid, $returnUrl, $workspaceId);
         return new RedirectResponse((string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat.show', [
             'task' => $taskUid,
             'id' => $pageId,
         ]));
+    }
+
+    /**
+     * Switch the current backend user's active workspace to the workspace
+     * the given task belongs to. Persists the choice in user UC and redirects
+     * back to the chat view — must be opened as a top-frame navigation so the
+     * backend shell (incl. workspace toolbar) reloads.
+     */
+    public function switchWorkspaceAction(ServerRequestInterface $request): ResponseInterface
+    {
+        $pageId = $this->getPageId($request);
+        $taskUid = (int)($request->getQueryParams()['task'] ?? $request->getParsedBody()['task'] ?? 0);
+        $task = $taskUid > 0 ? $this->loadTaskForCurrentUser($taskUid) : null;
+        $targetWorkspace = (int)($task['workspace_id'] ?? 0);
+        $beUser = $GLOBALS['BE_USER'] ?? null;
+
+        if ($task !== null && $targetWorkspace > 0 && $beUser !== null && $beUser->checkWorkspace($targetWorkspace)) {
+            $beUser->setWorkspace($targetWorkspace);
+            $beUser->writeUC();
+        }
+
+        $redirectTarget = (string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat.show', [
+            'task' => $taskUid,
+            'id' => $pageId,
+        ]);
+        return new RedirectResponse($redirectTarget);
+    }
+
+    /**
+     * Resolve the currently active workspace of the logged-in backend user.
+     * Pure read — no side effects.
+     *
+     * @return array{id:int,title:string,isLive:bool}
+     */
+    private function getActiveWorkspaceInfo(): array
+    {
+        return $this->getWorkspaceInfoById((int)($GLOBALS['BE_USER']->workspace ?? 0));
+    }
+
+    /**
+     * @return array{id:int,title:string,isLive:bool}
+     */
+    private function getWorkspaceInfoById(int $workspaceId): array
+    {
+        if ($workspaceId <= 0) {
+            return [
+                'id' => 0,
+                'title' => $GLOBALS['LANG']->sL('LLL:EXT:agent/Resources/Private/Language/locallang.xlf:workspace.live') ?: 'Live',
+                'isLive' => true,
+            ];
+        }
+
+        $record = BackendUtility::getRecord('sys_workspace', $workspaceId, 'title');
+        $title = (string)($record['title'] ?? '');
+        if ($title === '') {
+            $title = '#' . $workspaceId;
+        }
+        return [
+            'id' => $workspaceId,
+            'title' => $title,
+            'isLive' => false,
+        ];
     }
 
     public function sendMessageAction(ServerRequestInterface $request): ResponseInterface
@@ -221,7 +402,7 @@ class ChatController
         $buttonBar = $view->getDocHeaderComponent()->getButtonBar();
         $backButton = $buttonBar->makeLinkButton()
             ->setHref((string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat', ['id' => $pageId]))
-            ->setTitle('Back to chat list')
+            ->setTitle($GLOBALS['LANG']->sL('LLL:EXT:agent/Resources/Private/Language/locallang.xlf:button.backToTasks'))
             ->setShowLabelText(true)
             ->setIcon($this->iconFactory->getIcon('actions-view-go-back', IconSize::SMALL));
         $buttonBar->addButton($backButton);

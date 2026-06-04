@@ -52,25 +52,50 @@ class AgentTaskRepository
     }
 
     /**
-     * Load task list for a backend user, ordered by last update.
-     * When $pid > 0, only tasks on that page are returned.
+     * Load task list for a backend user, restricted to a single page (pid is matched exactly,
+     * including pid=0 which means "stored at the page tree root").
      *
-     * @return array<int, array{uid: int, title: string, status: int, tstamp: int, crdate: int}>
+     * @return array<int, array{uid: int, pid: int, title: string, status: int, tstamp: int, crdate: int}>
      */
-    public function findTasksForUser(int $userId, int $pid = 0, int $limit = 100): array
+    public function findTasksForUser(int $userId, int $pid, int $limit = 100): array
     {
         $qb = $this->connectionPool->getQueryBuilderForTable(self::TABLE);
-        $qb->select('uid', 'title', 'status', 'tstamp', 'crdate')
+        return $qb
+            ->select('uid', 'pid', 'title', 'status', 'tstamp', 'crdate')
             ->from(self::TABLE)
-            ->where($qb->expr()->eq('cruser_id', $qb->createNamedParameter($userId, ParameterType::INTEGER)))
+            ->where(
+                $qb->expr()->eq('cruser_id', $qb->createNamedParameter($userId, ParameterType::INTEGER)),
+                $qb->expr()->eq('pid', $qb->createNamedParameter($pid, ParameterType::INTEGER)),
+            )
             ->orderBy('tstamp', 'DESC')
-            ->setMaxResults($limit);
+            ->setMaxResults($limit)
+            ->executeQuery()
+            ->fetchAllAssociative();
+    }
 
-        if ($pid > 0) {
-            $qb->andWhere($qb->expr()->eq('pid', $qb->createNamedParameter($pid, ParameterType::INTEGER)));
+    /**
+     * Load tasks across a set of page UIDs, ordered by last update.
+     * Used to render the "tasks on subpages" section.
+     *
+     * @return array<int, array{uid: int, pid: int, title: string, status: int, tstamp: int, crdate: int}>
+     */
+    public function findTasksForUserOnPages(int $userId, array $pageUids, int $limit = 500): array
+    {
+        if ($pageUids === []) {
+            return [];
         }
-
-        return $qb->executeQuery()->fetchAllAssociative();
+        $qb = $this->connectionPool->getQueryBuilderForTable(self::TABLE);
+        return $qb
+            ->select('uid', 'pid', 'title', 'status', 'tstamp', 'crdate')
+            ->from(self::TABLE)
+            ->where(
+                $qb->expr()->eq('cruser_id', $qb->createNamedParameter($userId, ParameterType::INTEGER)),
+                $qb->expr()->in('pid', $qb->createNamedParameter($pageUids, \Doctrine\DBAL\ArrayParameterType::INTEGER)),
+            )
+            ->orderBy('tstamp', 'DESC')
+            ->setMaxResults($limit)
+            ->executeQuery()
+            ->fetchAllAssociative();
     }
 
     /**
@@ -113,7 +138,7 @@ class AgentTaskRepository
     /**
      * Insert a new task and return its UID.
      */
-    public function insert(int $pid, int $cruserId, string $title, string $prompt, string $contextTable = '', int $contextUid = 0, string $returnUrl = ''): int
+    public function insert(int $pid, int $cruserId, string $title, string $prompt, string $contextTable = '', int $contextUid = 0, string $returnUrl = '', int $workspaceId = 0): int
     {
         $now = time();
         $connection = $this->connectionPool->getConnectionForTable(self::TABLE);
@@ -130,6 +155,7 @@ class AgentTaskRepository
             'context_table' => $contextTable,
             'context_uid' => $contextUid,
             'return_url' => $returnUrl,
+            'workspace_id' => $workspaceId,
         ]);
         return (int)$connection->lastInsertId();
     }

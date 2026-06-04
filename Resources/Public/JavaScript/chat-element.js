@@ -21,9 +21,12 @@ let ChatElement = class extends LitElement {
     this.streamUri = "";
     this.autoStart = "";
     this.initialPrompt = "";
+    this.taskWorkspaceId = 0;
+    this.taskWorkspaceTitle = "";
+    this.activeWorkspaceId = 0;
+    this.activeWorkspaceTitle = "";
+    this.switchWorkspaceUri = "";
     this.initialMessages = [];
-    this.initialChanges = [];
-    this.changes = [];
     this.messages = [];
     this.inputValue = "";
     this.loading = false;
@@ -40,78 +43,87 @@ let ChatElement = class extends LitElement {
   // -- Lifecycle -------------------------------------------------------------
   firstUpdated() {
     this.messages = this.mergeToolResults(this.initialMessages);
-    this.changes = [...this.initialChanges];
     this.scrollToBottom();
-    if ((this.autoStart === "1" || this.autoStart === "true") && this.streamUri) {
+    if ((this.autoStart === "1" || this.autoStart === "true") && this.streamUri && !this.isWorkspaceMismatch()) {
       this.doAutoStart();
     }
+  }
+  isWorkspaceMismatch() {
+    if (!this.taskWorkspaceId) return false;
+    return this.taskWorkspaceId !== this.activeWorkspaceId;
   }
   updated() {
     this.scrollToBottom();
   }
   // -- Render ----------------------------------------------------------------
   render() {
+    const mismatch = this.isWorkspaceMismatch();
+    const inputDisabled = this.loading || mismatch;
     return html`
-      <div class="chat-container d-flex flex-column message-fade" style="max-width:900px;">
-        <div class="chat-messages d-flex flex-column gap-3 overflow-auto mx-3 pb-3"
-             style="min-height:300px;max-height:60vh;">
+      <div class="chat-container message-fade">
+        <div class="chat-messages d-flex flex-column gap-3 overflow-auto mx-3 pb-3">
           ${this.messages.map((msg) => this.renderMessage(msg))}
           ${this.renderActiveTools()}
           ${this.isStreaming ? this.renderStreamingBubble() : nothing}
           ${this.thinking && !this.isStreaming ? this.renderThinkingIndicator() : nothing}
         </div>
-  
-        <form class="position-relative" @submit=${this.onSubmit}>
+
+        <div>
+
+          ${mismatch ? this.renderWorkspaceMismatch() : nothing}
+
+          <form class="position-relative" @submit=${this.onSubmit}>
           <textarea
               name="message"
-              class="d-block w-100 rounded-4 border p-3 bg-white"
-              style="outline: none;field-sizing: content;resize: none;"
+              class="chat-input d-block w-100 rounded-4 border p-3 bg-white"
               rows="2"
               placeholder="Type a follow-up message\u2026"
               .value=${this.inputValue}
-              ?disabled=${this.loading}
+              ?disabled=${inputDisabled}
               @input=${this.onInput}
               @keydown=${this.onKeydown}
               required
           ></textarea>
-          <div class="position-absolute bottom-0 end-0 p-2">
-            <button type="submit" class="btn" ?disabled=${this.loading}>
-              <typo3-backend-icon
-                  identifier="actions-arrow-down-start-alt"
-                  size="small"/>
-            </button>
-          </div>
-        </form>
-        
-        ${this.errorMessage ? html`
-              <div class="alert alert-danger">${this.errorMessage}</div>` : nothing}
+            <div class="position-absolute bottom-0 end-0 p-2">
+              <button type="submit" class="btn" ?disabled=${inputDisabled || !this.inputValue.trim()}>
+                <typo3-backend-icon
+                    identifier="actions-arrow-down-start-alt"
+                    size="small"/>
+              </button>
+            </div>
+          </form>
+          ${this.errorMessage ? html`
+                <div class="alert alert-danger">${this.errorMessage}</div>` : nothing}
+        </div>
+
       </div>
-
-      <style>
-        .message-fade {
-          position: relative;
-        }
-
-        .message-fade > div {
-          padding-top: 30px !important;
-        }
-
-        .message-fade::before {
-          content: ' ';
-          position: absolute;
-          z-index: 1;
-          display: block;
-          top: 0;
-          left: 0;
-          width: 100%;
-          height: 30px;
-          background: var(--bs-light);
-          /*noinspection CssInvalidPropertyValue,CssInvalidFunction*/
-          -webkit-mask-image: -webkit-gradient(linear, left top, left bottom, from(rgba(0, 0, 0, 1)), to(rgba(0, 0, 0, 0)));
-        }
-        
-      </style>
     `;
+  }
+  renderWorkspaceMismatch() {
+    const mismatchTemplate = TYPO3?.lang?.["workspace.chat.mismatch"] ?? 'This task belongs to workspace "%s", but you are currently in "%s". Switch to "%s" to continue the conversation.';
+    const buttonTemplate = TYPO3?.lang?.["workspace.chat.switchButton"] ?? 'Switch to workspace "%s"';
+    const taskTitle = this.taskWorkspaceTitle || `#${this.taskWorkspaceId}`;
+    const activeTitle = this.activeWorkspaceTitle || (this.activeWorkspaceId > 0 ? `#${this.activeWorkspaceId}` : "Live");
+    const message = mismatchTemplate.replace("%s", taskTitle).replace("%s", activeTitle).replace("%s", taskTitle);
+    const buttonLabel = buttonTemplate.replace("%s", taskTitle);
+    return html`
+      <div class="alert alert-warning d-flex align-items-center justify-content-between mx-3 mb-2 gap-3">
+        <div>${message}</div>
+        <a href=${this.switchWorkspaceUri}
+           target="_top"
+           class="btn btn-warning ${this.switchWorkspaceUri ? "" : "disabled"}"
+           @click=${this.onSwitchClick}>
+          ${buttonLabel}
+        </a>
+      </div>
+    `;
+  }
+  onSwitchClick(e) {
+    if (!this.switchWorkspaceUri) return;
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+    e.preventDefault();
+    const topWindow = window.top ?? window;
+    topWindow.location.href = this.switchWorkspaceUri;
   }
   renderMessage(msg) {
     const role = msg.role || "unknown";
@@ -119,7 +131,7 @@ let ChatElement = class extends LitElement {
     const roleLabel = role === "user" ? "you" : role;
     if (role === "assistant") {
       return html`
-        <div class="rounded-4 bg-white border p-3">
+        <div class="rounded-4 bg-white border p-3 me-3">
           <div class="chat-msg-role fw-bold small opacity-75 mb-1 text-uppercase">${roleLabel}</div>
           ${msg.content ? html`<div class="chat-msg-content">${unsafeHTML(this.renderMarkdown(msg.content))}</div>` : nothing}
           ${msg.tool_calls?.map((tc) => this.renderToolCall(tc)) ?? nothing}
@@ -127,9 +139,9 @@ let ChatElement = class extends LitElement {
       `;
     }
     return html`
-      <div class="rounded-4 bg-success-subtle border p-3 align-self-end">
+      <div class="rounded-4 bg-success-subtle border p-3 ms-3 align-self-end">
         <div class="chat-msg-role fw-bold small opacity-75 mb-1 text-uppercase">${roleLabel}</div>
-        <pre class="m-0">${msg.content ?? ""}</pre>
+        <pre class="chat-msg-prewrap m-0">${msg.content ?? ""}</pre>
       </div>
     `;
   }
@@ -189,6 +201,7 @@ let ChatElement = class extends LitElement {
   // -- Event handlers --------------------------------------------------------
   onSubmit(e) {
     e.preventDefault();
+    if (this.isWorkspaceMismatch()) return;
     const message = this.inputValue.trim();
     if (!message) return;
     this.errorMessage = "";
@@ -365,17 +378,10 @@ let ChatElement = class extends LitElement {
         this.activeTools = next;
         break;
       }
-      case "change_tracked": {
-        const change = data;
-        this.changes = [...this.changes, change];
-        document.dispatchEvent(new CustomEvent("agent:record-changed"));
-        break;
-      }
       case "done":
         this.thinking = false;
         this.isStreaming = false;
         this.activeTools = /* @__PURE__ */ new Map();
-        document.dispatchEvent(new CustomEvent("agent:record-changed"));
         break;
       case "error":
         this.thinking = false;
@@ -436,6 +442,21 @@ __decorateClass([
   property({ attribute: "initial-prompt" })
 ], ChatElement.prototype, "initialPrompt", 2);
 __decorateClass([
+  property({ attribute: "task-workspace-id", type: Number })
+], ChatElement.prototype, "taskWorkspaceId", 2);
+__decorateClass([
+  property({ attribute: "task-workspace-title" })
+], ChatElement.prototype, "taskWorkspaceTitle", 2);
+__decorateClass([
+  property({ attribute: "active-workspace-id", type: Number })
+], ChatElement.prototype, "activeWorkspaceId", 2);
+__decorateClass([
+  property({ attribute: "active-workspace-title" })
+], ChatElement.prototype, "activeWorkspaceTitle", 2);
+__decorateClass([
+  property({ attribute: "switch-workspace-uri" })
+], ChatElement.prototype, "switchWorkspaceUri", 2);
+__decorateClass([
   property({
     attribute: "initial-messages",
     converter: {
@@ -450,24 +471,6 @@ __decorateClass([
     }
   })
 ], ChatElement.prototype, "initialMessages", 2);
-__decorateClass([
-  property({
-    attribute: "initial-changes",
-    converter: {
-      fromAttribute(value) {
-        if (!value) return [];
-        try {
-          return JSON.parse(value);
-        } catch {
-          return [];
-        }
-      }
-    }
-  })
-], ChatElement.prototype, "initialChanges", 2);
-__decorateClass([
-  state()
-], ChatElement.prototype, "changes", 2);
 __decorateClass([
   state()
 ], ChatElement.prototype, "messages", 2);

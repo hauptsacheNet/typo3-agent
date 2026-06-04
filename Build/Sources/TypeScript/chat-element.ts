@@ -55,6 +55,11 @@ export class ChatElement extends LitElement {
   @property({attribute: 'stream-uri'}) streamUri = '';
   @property({attribute: 'auto-start'}) autoStart = '';
   @property({attribute: 'initial-prompt'}) initialPrompt = '';
+  @property({attribute: 'task-workspace-id', type: Number}) taskWorkspaceId = 0;
+  @property({attribute: 'task-workspace-title'}) taskWorkspaceTitle = '';
+  @property({attribute: 'active-workspace-id', type: Number}) activeWorkspaceId = 0;
+  @property({attribute: 'active-workspace-title'}) activeWorkspaceTitle = '';
+  @property({attribute: 'switch-workspace-uri'}) switchWorkspaceUri = '';
 
   @property({
     attribute: 'initial-messages',
@@ -108,9 +113,14 @@ export class ChatElement extends LitElement {
 
     this.scrollToBottom();
 
-    if ((this.autoStart === '1' || this.autoStart === 'true') && this.streamUri) {
+    if ((this.autoStart === '1' || this.autoStart === 'true') && this.streamUri && !this.isWorkspaceMismatch()) {
       this.doAutoStart();
     }
+  }
+
+  private isWorkspaceMismatch(): boolean {
+    if (!this.taskWorkspaceId) return false;
+    return this.taskWorkspaceId !== this.activeWorkspaceId;
   }
 
   override updated(): void {
@@ -120,69 +130,90 @@ export class ChatElement extends LitElement {
   // -- Render ----------------------------------------------------------------
 
   override render() {
+    const mismatch = this.isWorkspaceMismatch();
+    const inputDisabled = this.loading || mismatch;
     return html`
-      <div class="chat-container d-flex flex-column message-fade" style="max-width:900px;">
-        <div class="chat-messages d-flex flex-column gap-3 overflow-auto mx-3 pb-3"
-             style="min-height:300px;max-height:60vh;">
+      <div class="chat-container message-fade">
+        <div class="chat-messages d-flex flex-column gap-3 overflow-auto mx-3 pb-3">
           ${this.messages.map(msg => this.renderMessage(msg))}
           ${this.renderActiveTools()}
           ${this.isStreaming ? this.renderStreamingBubble() : nothing}
           ${this.thinking && !this.isStreaming ? this.renderThinkingIndicator() : nothing}
         </div>
-  
-        <form class="position-relative" @submit=${this.onSubmit}>
+
+        <div>
+
+          ${mismatch ? this.renderWorkspaceMismatch() : nothing}
+
+          <form class="position-relative" @submit=${this.onSubmit}>
           <textarea
               name="message"
-              class="d-block w-100 rounded-4 border p-3 bg-white"
-              style="outline: none;field-sizing: content;resize: none;"
+              class="chat-input d-block w-100 rounded-4 border p-3 bg-white"
               rows="2"
               placeholder="Type a follow-up message\u2026"
               .value=${this.inputValue}
-              ?disabled=${this.loading}
+              ?disabled=${inputDisabled}
               @input=${this.onInput}
               @keydown=${this.onKeydown}
               required
           ></textarea>
-          <div class="position-absolute bottom-0 end-0 p-2">
-            <button type="submit" class="btn" ?disabled=${this.loading}>
-              <typo3-backend-icon
-                  identifier="actions-arrow-down-start-alt"
-                  size="small"/>
-            </button>
-          </div>
-        </form>
-        
-        ${this.errorMessage
-            ? html`
-              <div class="alert alert-danger">${this.errorMessage}</div>`
-            : nothing}
+            <div class="position-absolute bottom-0 end-0 p-2">
+              <button type="submit" class="btn" ?disabled=${inputDisabled || !this.inputValue.trim()}>
+                <typo3-backend-icon
+                    identifier="actions-arrow-down-start-alt"
+                    size="small"/>
+              </button>
+            </div>
+          </form>
+          ${this.errorMessage
+              ? html`
+                <div class="alert alert-danger">${this.errorMessage}</div>`
+              : nothing}
+        </div>
+
       </div>
-
-      <style>
-        .message-fade {
-          position: relative;
-        }
-
-        .message-fade > div {
-          padding-top: 30px !important;
-        }
-
-        .message-fade::before {
-          content: ' ';
-          position: absolute;
-          z-index: 1;
-          display: block;
-          top: 0;
-          left: 0;
-          width: 100%;
-          height: 30px;
-          background: var(--bs-light);
-          /*noinspection CssInvalidPropertyValue,CssInvalidFunction*/
-          -webkit-mask-image: -webkit-gradient(linear, left top, left bottom, from(rgba(0, 0, 0, 1)), to(rgba(0, 0, 0, 0)));
-        }
-        
-      </style>
     `;
+  }
+
+  private renderWorkspaceMismatch(): TemplateResult {
+    const mismatchTemplate = TYPO3?.lang?.['workspace.chat.mismatch']
+      ?? 'This task belongs to workspace "%s", but you are currently in "%s". Switch to "%s" to continue the conversation.';
+    const buttonTemplate = TYPO3?.lang?.['workspace.chat.switchButton'] ?? 'Switch to workspace "%s"';
+
+    const taskTitle = this.taskWorkspaceTitle || `#${this.taskWorkspaceId}`;
+    const activeTitle = this.activeWorkspaceTitle
+      || (this.activeWorkspaceId > 0 ? `#${this.activeWorkspaceId}` : 'Live');
+
+    const message = mismatchTemplate
+      .replace('%s', taskTitle)
+      .replace('%s', activeTitle)
+      .replace('%s', taskTitle);
+    const buttonLabel = buttonTemplate.replace('%s', taskTitle);
+
+    // Navigate the top-level backend window so the workspace selector in the
+    // toolbar reloads. target="_top" is set on the anchor for ctrl-click /
+    // accessibility, but the explicit click handler is what actually fires —
+    // the BE module iframe otherwise eats the navigation.
+    return html`
+      <div class="alert alert-warning d-flex align-items-center justify-content-between mx-3 mb-2 gap-3">
+        <div>${message}</div>
+        <a href=${this.switchWorkspaceUri}
+           target="_top"
+           class="btn btn-warning ${this.switchWorkspaceUri ? '' : 'disabled'}"
+           @click=${this.onSwitchClick}>
+          ${buttonLabel}
+        </a>
+      </div>
+    `;
+  }
+
+  private onSwitchClick(e: MouseEvent): void {
+    if (!this.switchWorkspaceUri) return;
+    // Allow native handling for modifier clicks (open in new tab etc.).
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+    e.preventDefault();
+    const topWindow = window.top ?? window;
+    topWindow.location.href = this.switchWorkspaceUri;
   }
 
   private renderMessage(msg: ChatMessage): TemplateResult | typeof nothing {
@@ -192,7 +223,7 @@ export class ChatElement extends LitElement {
 
     if (role === 'assistant') {
       return html`
-        <div class="rounded-4 bg-white border p-3">
+        <div class="rounded-4 bg-white border p-3 me-3">
           <div class="chat-msg-role fw-bold small opacity-75 mb-1 text-uppercase">${roleLabel}</div>
           ${msg.content
             ? html`<div class="chat-msg-content">${unsafeHTML(this.renderMarkdown(msg.content))}</div>`
@@ -205,9 +236,9 @@ export class ChatElement extends LitElement {
 
     // user, system, unknown
     return html`
-      <div class="rounded-4 bg-success-subtle border p-3 align-self-end">
+      <div class="rounded-4 bg-success-subtle border p-3 ms-3 align-self-end">
         <div class="chat-msg-role fw-bold small opacity-75 mb-1 text-uppercase">${roleLabel}</div>
-        <pre class="m-0">${msg.content ?? ''}</pre>
+        <pre class="chat-msg-prewrap m-0">${msg.content ?? ''}</pre>
       </div>
     `;
   }
@@ -278,6 +309,7 @@ export class ChatElement extends LitElement {
 
   private onSubmit(e: Event): void {
     e.preventDefault();
+    if (this.isWorkspaceMismatch()) return;
     const message = this.inputValue.trim();
     if (!message) return;
 

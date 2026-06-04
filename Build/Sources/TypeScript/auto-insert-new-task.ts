@@ -5,6 +5,8 @@ interface AgentSettings {
   table?: string;
   uid?: string;
   placeholder?: string;
+  workspaceId?: string;
+  workspaceTitle?: string;
 }
 
 // Self-insertion for FormEngine context:
@@ -29,6 +31,8 @@ function autoInsert(): void {
   el.setAttribute('uid', settings.uid ?? '0');
   el.setAttribute('placeholder', settings.placeholder ?? '');
   el.setAttribute('return-url', window.location.href);
+  el.setAttribute('workspace-id', settings.workspaceId ?? '0');
+  el.setAttribute('workspace-title', settings.workspaceTitle ?? '');
 
   const target = document.querySelector('.t3js-module-body');
   if (target) {

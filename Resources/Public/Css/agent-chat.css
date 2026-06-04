@@ -1,0 +1,40 @@
+hn-agent-chat .chat-container {
+    display: grid;
+    grid-template-rows: auto 1fr;
+    height: 100%;
+    overflow: hidden;
+}
+
+hn-agent-chat .message-fade {
+    position: relative;
+}
+
+hn-agent-chat .message-fade > div {
+    padding-top: 30px;
+}
+
+hn-agent-chat .message-fade::before {
+    content: ' ';
+    position: absolute;
+    z-index: 1;
+    display: block;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 30px;
+    background: var(--bs-light);
+    -webkit-mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 1), rgba(0, 0, 0, 0));
+    mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 1), rgba(0, 0, 0, 0));
+}
+
+hn-agent-chat .chat-input {
+    outline: none;
+    /*noinspection CssUnknownProperty*/
+    field-sizing: content;
+    resize: none;
+}
+
+hn-agent-chat .chat-msg-prewrap {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}

@@ -24,6 +24,12 @@
             <trans-unit id="index.empty" resname="index.empty">
                 <source>No tasks yet on this page. Start one above.</source>
             </trans-unit>
+            <trans-unit id="index.section.current" resname="index.section.current">
+                <source>Tasks on this page</source>
+            </trans-unit>
+            <trans-unit id="index.section.subpages" resname="index.section.subpages">
+                <source>Tasks on subpages</source>
+            </trans-unit>
             <trans-unit id="status.pending" resname="status.pending">
                 <source>Pending</source>
             </trans-unit>
@@ -46,13 +52,37 @@
                 <source>Describe the task you'd like the AI agent to perform, e.g. fix typos, revise the title…</source>
             </trans-unit>
             <trans-unit id="button.submit.title" resname="button.submit.title">
-                <source>Start a new AI agent task (Ctrl+Enter)</source>
+                <source>Start a new AI agent task (Enter)</source>
             </trans-unit>
             <trans-unit id="button.backToOrigin" resname="button.backToOrigin">
                 <source>Back to origin</source>
             </trans-unit>
+            <trans-unit id="button.backToTasks" resname="button.backToTasks">
+                <source>Back to tasks list</source>
+            </trans-unit>
             <trans-unit id="context.label" resname="context.label">
                 <source>Task for %s</source>
+            </trans-unit>
+            <trans-unit id="workspace.label" resname="workspace.label">
+                <source>Workspace</source>
+            </trans-unit>
+            <trans-unit id="workspace.live" resname="workspace.live">
+                <source>Live</source>
+            </trans-unit>
+            <trans-unit id="workspace.callout.selectWorkspace" resname="workspace.callout.selectWorkspace">
+                <source>Please switch to a workspace via the workspace selector in the top toolbar before starting a task. In the Live workspace changes go public immediately, so the agent does not write there.</source>
+            </trans-unit>
+            <trans-unit id="workspace.writingTo" resname="workspace.writingTo">
+                <source>Writing in workspace: %s</source>
+            </trans-unit>
+            <trans-unit id="workspace.chat.mismatch" resname="workspace.chat.mismatch">
+                <source>This task belongs to workspace "%s", but you are currently in "%s". Switch to "%s" to continue the conversation.</source>
+            </trans-unit>
+            <trans-unit id="workspace.chat.switchButton" resname="workspace.chat.switchButton">
+                <source>Switch to workspace "%s"</source>
+            </trans-unit>
+            <trans-unit id="workspace.chat.switching" resname="workspace.chat.switching">
+                <source>Switching workspace…</source>
             </trans-unit>
         </body>
     </file>
