@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Hn\Agent\Service;
 
+use Doctrine\DBAL\ParameterType;
 use Hn\Agent\Domain\AgentTaskRepository;
 use Hn\Agent\Domain\TaskStatus;
 use Hn\McpServer\MCP\ToolRegistry;
@@ -214,7 +215,10 @@ class AgentService implements LoggerAwareInterface
                     );
 
                     // Track workspace changes from write operations
-                    $this->trackChange($taskUid, $toolResult);
+                    $change = $this->trackChange($taskUid, $toolResult);
+                    if ($change !== null && $progress !== null) {
+                        $progress('change_tracked', $change);
+                    }
 
                     // Append tool result message
                     $messages[] = [
@@ -522,11 +526,11 @@ class AgentService implements LoggerAwareInterface
      * Parses the JSON result of a WriteTableTool call and stores the
      * relationship between the task and the workspace version record.
      */
-    private function trackChange(int $taskUid, string $toolResult): void
+    private function trackChange(int $taskUid, string $toolResult): ?array
     {
         $data = json_decode($toolResult, true);
         if (!is_array($data) || !isset($data['action'], $data['table'], $data['uid'])) {
-            return;
+            return null;
         }
 
         $table = (string)$data['table'];
@@ -536,7 +540,7 @@ class AgentService implements LoggerAwareInterface
 
         if ($workspaceId === 0) {
             // No workspace — changes went directly to live, nothing to track
-            return;
+            return null;
         }
 
         if ($action === 'create' || $action === 'translate') {
@@ -547,12 +551,64 @@ class AgentService implements LoggerAwareInterface
             // For update/delete, look up the workspace version of the live record
             $wsVersion = BackendUtility::getWorkspaceVersionOfRecord($workspaceId, $table, $uid, 'uid');
             if ($wsVersion === false) {
-                return;
+                return null;
             }
             $workspaceRecordUid = (int)$wsVersion['uid'];
         }
 
-        $this->repository->addChange($taskUid, $table, $uid, $workspaceRecordUid);
+        [$pageId, $workspacePageId] = $this->resolvePageIds($table, $uid, $workspaceRecordUid, $action);
+
+        $this->repository->addChange($taskUid, $table, $uid, $workspaceRecordUid, $pageId, $workspacePageId);
+
+        return [
+            'tablename' => $table,
+            'page_id' => $pageId,
+            'record_uid' => $uid,
+            'workspace_record_uid' => $workspaceRecordUid,
+            'workspace_page_id' => $workspacePageId,
+            'task_uid' => $taskUid,
+        ];
+    }
+
+    /**
+     * Resolve the page IDs for a tracked change.
+     *
+     * @return array{int, int} [pageId, workspacePageId]
+     */
+    private function resolvePageIds(string $table, int $recordUid, int $workspaceRecordUid, string $action): array
+    {
+        if ($table === 'pages') {
+            return [$recordUid, $workspaceRecordUid];
+        }
+
+        if ($action === 'create' || $action === 'translate') {
+            $pid = $this->getRecordPid($table, $recordUid);
+            return [$pid, $pid];
+        }
+
+        $pageId = $this->getRecordPid($table, $recordUid);
+        $workspacePageId = ($workspaceRecordUid !== $recordUid)
+            ? $this->getRecordPid($table, $workspaceRecordUid)
+            : $pageId;
+
+        return [$pageId, $workspacePageId];
+    }
+
+    /**
+     * Get the pid of a record by direct database lookup (bypasses workspace overlays).
+     */
+    private function getRecordPid(string $table, int $uid): int
+    {
+        $queryBuilder = $this->connectionPool->getQueryBuilderForTable($table);
+        $queryBuilder->getRestrictions()->removeAll();
+        $row = $queryBuilder
+            ->select('pid')
+            ->from($table)
+            ->where($queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($uid, ParameterType::INTEGER)))
+            ->executeQuery()
+            ->fetchAssociative();
+
+        return $row !== false ? (int)$row['pid'] : 0;
     }
 
     /**
