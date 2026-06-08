@@ -82,3 +82,9 @@ hn-agent-chat .chat-attachment-icon {
     justify-content: center;
     background: var(--bs-tertiary-bg, rgba(0, 0, 0, 0.05));
 }
+
+hn-agent-chat .chat-attachment-warn {
+    display: inline-flex;
+    align-items: center;
+    line-height: 1;
+}

@@ -50,6 +50,10 @@ interface Attachment {
   mime_type?: string;
   iconHtml?: string;
   unresolvable?: boolean;
+  // Pre-flight result (populated async after add; undefined while loading).
+  embedAsContent?: boolean;
+  reason?: string;
+  size?: number;
 }
 
 // ---- Component -------------------------------------------------------------
@@ -75,6 +79,7 @@ export class ChatElement extends LitElement {
   @property({attribute: 'switch-workspace-uri'}) switchWorkspaceUri = '';
   @property({attribute: 'default-upload-folder'}) defaultUploadFolder = '';
   @property({attribute: 'file-browser-uri'}) fileBrowserUri = '';
+  @property({attribute: 'preflight-uri'}) preflightUri = '';
 
   @property({
     attribute: 'initial-messages',
@@ -281,15 +286,25 @@ export class ChatElement extends LitElement {
       const fallback = img.nextElementSibling as HTMLElement | null;
       if (fallback) fallback.style.display = '';
     };
+    const willNotEmbed = att.embedAsContent === false;
+    const warnTitle = willNotEmbed
+      ? `Wird nicht als Inhalt an den Assistenten gegeben \u2014 nur Metadaten${att.reason ? ` (${att.reason})` : ''}`
+      : (att.unresolvable ? 'Datei nicht aufl\u00f6sbar' : '');
     return html`
       <span class="chat-attachment-chip d-inline-flex align-items-center gap-2 border rounded bg-body p-1 ${onRemove ? 'pe-2' : 'px-2'}"
-            title=${att.unresolvable ? 'Datei nicht aufl\u00f6sbar' : ''}>
+            title=${warnTitle}>
         ${thumbUrl
           ? html`
               <img src=${thumbUrl} alt="" class="chat-attachment-thumb rounded" @error=${onThumbError}/>
               <span class="chat-attachment-icon rounded" style="display:none">${this.renderFallbackIcon(att)}</span>`
           : html`<span class="chat-attachment-icon rounded">${this.renderFallbackIcon(att)}</span>`}
         <span class="chat-attachment-name ${att.unresolvable ? 'text-decoration-line-through opacity-75' : ''}">${att.name}</span>
+        ${willNotEmbed
+          ? html`<span class="chat-attachment-warn badge bg-warning-subtle text-warning-emphasis border border-warning-subtle"
+                       title=${warnTitle}>
+              <typo3-backend-icon identifier="actions-exclamation" size="small"/>
+            </span>`
+          : nothing}
         ${onRemove
           ? html`<button type="button"
                   class="btn btn-sm p-0 border-0 text-muted"
@@ -482,6 +497,38 @@ export class ChatElement extends LitElement {
 
   private addAttachment(att: Attachment): void {
     this.attachments = [...this.attachments, att];
+    if (this.preflightUri && (att.uid !== undefined || att.identifier)) {
+      void this.preflightAttachment(att);
+    }
+  }
+
+  private async preflightAttachment(att: Attachment): Promise<void> {
+    try {
+      const url = new URL(this.preflightUri, window.location.origin);
+      if (att.uid !== undefined) url.searchParams.set('uid', String(att.uid));
+      if (att.identifier) url.searchParams.set('identifier', att.identifier);
+      const response = await fetch(url.toString(), {headers: {'Accept': 'application/json'}});
+      if (!response.ok) return;
+      const info = await response.json() as {
+        uid?: number; identifier?: string; name?: string;
+        mime?: string; size?: number;
+        embedAsContent: boolean; reason?: string | null;
+      };
+      this.attachments = this.attachments.map(a => {
+        const sameUid = info.uid !== undefined && a.uid === info.uid;
+        const sameIdent = !!info.identifier && a.identifier === info.identifier;
+        if (!sameUid && !sameIdent) return a;
+        return {
+          ...a,
+          mime_type: info.mime || a.mime_type,
+          size: typeof info.size === 'number' ? info.size : a.size,
+          embedAsContent: info.embedAsContent,
+          reason: info.reason ?? undefined,
+        };
+      });
+    } catch {
+      // silent — chip just stays without status indicator
+    }
   }
 
   private removeAttachment(index: number): void {

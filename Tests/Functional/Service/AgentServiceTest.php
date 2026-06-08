@@ -12,6 +12,8 @@ use Hn\McpServer\MCP\ToolRegistry;
 use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
+use TYPO3\CMS\Core\Resource\File;
+use TYPO3\CMS\Core\Resource\ResourceFactory;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
 
@@ -336,6 +338,236 @@ class AgentServiceTest extends FunctionalTestCase
         self::assertStringContainsString('Angehängte Dateien:', $llmUserMsg['content']);
         self::assertStringContainsString('phantom.pdf', $llmUserMsg['content']);
         self::assertStringContainsString('nicht auflösbar', $llmUserMsg['content']);
+    }
+
+    /**
+     * @param-out array $capturedMessages
+     */
+    private function buildAgentServiceCapturing(array &$capturedMessages, ResourceFactory $resourceFactory): AgentService
+    {
+        $llmMock = $this->createMock(LlmService::class);
+        $llmMock->method('chatCompletionStream')->willReturnCallback(
+            function (array $messages) use (&$capturedMessages): array {
+                $capturedMessages[] = $messages;
+                return ['role' => 'assistant', 'content' => 'OK.'];
+            }
+        );
+
+        return new AgentService(
+            $llmMock,
+            GeneralUtility::makeInstance(ToolConverterService::class),
+            GeneralUtility::makeInstance(ToolRegistry::class),
+            GeneralUtility::makeInstance(ExtensionConfiguration::class),
+            $this->connectionPool,
+            new AgentTaskRepository($this->connectionPool),
+            $resourceFactory,
+        );
+    }
+
+    /**
+     * Build a File mock with the FAL methods serializeForLlm() touches.
+     * `getContents` defaults to throwing if the caller didn't expect to read
+     * the file (used to assert oversize / unsupported MIME short-circuits).
+     */
+    private function buildFileMock(int $uid, string $mime, int $size, string $name, string $identifier, ?string $content = null): File
+    {
+        $file = $this->getMockBuilder(File::class)->disableOriginalConstructor()->getMock();
+        $file->method('getUid')->willReturn($uid);
+        $file->method('getMimeType')->willReturn($mime);
+        $file->method('getSize')->willReturn($size);
+        $file->method('getName')->willReturn($name);
+        $file->method('getCombinedIdentifier')->willReturn($identifier);
+        if ($content === null) {
+            $file->expects(self::never())->method('getContents');
+        } else {
+            $file->method('getContents')->willReturn($content);
+        }
+        return $file;
+    }
+
+    private function buildResourceFactoryReturning(int $uid, File $file): ResourceFactory
+    {
+        $factory = $this->getMockBuilder(ResourceFactory::class)->disableOriginalConstructor()->getMock();
+        $factory->method('getFileObject')->with($uid)->willReturn($file);
+        return $factory;
+    }
+
+    /**
+     * Locate the user message in the LLM-payload that carries our test text.
+     * Returns null on mismatch so assertions stay readable in the calling test.
+     */
+    private function findLlmUserMessage(array $llmMessages, string $textNeedle): ?array
+    {
+        foreach ($llmMessages as $m) {
+            if (($m['role'] ?? '') !== 'user') {
+                continue;
+            }
+            $content = $m['content'] ?? null;
+            if (is_string($content) && str_contains($content, $textNeedle)) {
+                return $m;
+            }
+            if (is_array($content)) {
+                foreach ($content as $block) {
+                    if (is_array($block) && ($block['type'] ?? '') === 'text' && str_contains((string)($block['text'] ?? ''), $textNeedle)) {
+                        return $m;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    public function testImageAttachmentBecomesImageUrlBlock(): void
+    {
+        // Smallest valid PNG payload (1x1 transparent) — only the byte content
+        // matters for round-tripping through base64; the mock owns size/MIME.
+        $pngBytes = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkAAIAAAoAAv/lxKUAAAAASUVORK5CYII=');
+        $file = $this->buildFileMock(101, 'image/png', strlen($pngBytes), 'pixel.png', '1:/uploads/pixel.png', $pngBytes);
+        $resourceFactory = $this->buildResourceFactoryReturning(101, $file);
+
+        $capturedMessages = [];
+        $agentService = $this->buildAgentServiceCapturing($capturedMessages, $resourceFactory);
+
+        $taskUid = $this->createTask('Image test', 'Initial');
+        $agentService->continueChat($taskUid, 'Was siehst du?', null, [['uid' => 101]]);
+
+        self::assertNotEmpty($capturedMessages);
+        $userMsg = $this->findLlmUserMessage($capturedMessages[0], 'Was siehst du?');
+        self::assertNotNull($userMsg, 'User message reached LlmService');
+
+        self::assertIsArray($userMsg['content'], 'Content is a block array when media is embedded');
+        self::assertCount(2, $userMsg['content'], 'Exactly one text + one media block');
+        self::assertSame('text', $userMsg['content'][0]['type']);
+        self::assertStringContainsString('Was siehst du?', $userMsg['content'][0]['text']);
+        self::assertStringContainsString('sys_file:101', $userMsg['content'][0]['text']);
+
+        self::assertSame('image_url', $userMsg['content'][1]['type']);
+        self::assertStringStartsWith('data:image/png;base64,', $userMsg['content'][1]['image_url']['url']);
+        self::assertStringContainsString(base64_encode($pngBytes), $userMsg['content'][1]['image_url']['url']);
+    }
+
+    public function testPdfAttachmentBecomesFileBlock(): void
+    {
+        $pdfBytes = "%PDF-1.4\n% minimal\n";
+        $file = $this->buildFileMock(202, 'application/pdf', strlen($pdfBytes), 'doc.pdf', '1:/uploads/doc.pdf', $pdfBytes);
+        $resourceFactory = $this->buildResourceFactoryReturning(202, $file);
+
+        $capturedMessages = [];
+        $agentService = $this->buildAgentServiceCapturing($capturedMessages, $resourceFactory);
+
+        $taskUid = $this->createTask('PDF test', 'Initial');
+        $agentService->continueChat($taskUid, 'Fass zusammen.', null, [['uid' => 202]]);
+
+        $userMsg = $this->findLlmUserMessage($capturedMessages[0], 'Fass zusammen.');
+        self::assertNotNull($userMsg);
+        self::assertIsArray($userMsg['content']);
+        self::assertSame('file', $userMsg['content'][1]['type']);
+        self::assertSame('doc.pdf', $userMsg['content'][1]['file']['filename']);
+        self::assertStringStartsWith('data:application/pdf;base64,', $userMsg['content'][1]['file']['file_data']);
+        self::assertStringContainsString(base64_encode($pdfBytes), $userMsg['content'][1]['file']['file_data']);
+    }
+
+    public function testOversizedImageFallsBackToMarkerOnly(): void
+    {
+        // 6 MiB > 5 MiB image cap. content=null asserts getContents() is never invoked.
+        $file = $this->buildFileMock(303, 'image/png', 6 * 1024 * 1024, 'huge.png', '1:/uploads/huge.png', null);
+        $resourceFactory = $this->buildResourceFactoryReturning(303, $file);
+
+        $capturedMessages = [];
+        $agentService = $this->buildAgentServiceCapturing($capturedMessages, $resourceFactory);
+
+        $taskUid = $this->createTask('Oversize test', 'Initial');
+        $agentService->continueChat($taskUid, 'Trotzdem?', null, [['uid' => 303]]);
+
+        $userMsg = $this->findLlmUserMessage($capturedMessages[0], 'Trotzdem?');
+        self::assertNotNull($userMsg);
+        self::assertIsString($userMsg['content'], 'Content stays a plain string when no media is embedded');
+        self::assertStringContainsString('sys_file:303', $userMsg['content']);
+        self::assertStringContainsString('zu groß', $userMsg['content']);
+        self::assertStringContainsString('nur Metadaten', $userMsg['content']);
+    }
+
+    public function testUnsupportedMimeFallsBackToMarkerOnly(): void
+    {
+        // text/plain isn't on our allowlist — even though small, must stay marker-only.
+        $file = $this->buildFileMock(404, 'text/plain', 100, 'notes.txt', '1:/uploads/notes.txt', null);
+        $resourceFactory = $this->buildResourceFactoryReturning(404, $file);
+
+        $capturedMessages = [];
+        $agentService = $this->buildAgentServiceCapturing($capturedMessages, $resourceFactory);
+
+        $taskUid = $this->createTask('Unsupported mime test', 'Initial');
+        $agentService->continueChat($taskUid, 'Schau mal.', null, [['uid' => 404]]);
+
+        $userMsg = $this->findLlmUserMessage($capturedMessages[0], 'Schau mal.');
+        self::assertNotNull($userMsg);
+        self::assertIsString($userMsg['content']);
+        self::assertStringContainsString('sys_file:404', $userMsg['content']);
+        self::assertStringContainsString('text/plain', $userMsg['content']);
+        self::assertStringContainsString('nur Metadaten', $userMsg['content']);
+        self::assertStringNotContainsString('zu groß', $userMsg['content']);
+    }
+
+    public function testPreviewAttachmentReportsImageEmbeddable(): void
+    {
+        $file = $this->buildFileMock(101, 'image/png', 2048, 'pixel.png', '1:/uploads/pixel.png', null);
+        $resourceFactory = $this->buildResourceFactoryReturning(101, $file);
+
+        $capturedMessages = [];
+        $agentService = $this->buildAgentServiceCapturing($capturedMessages, $resourceFactory);
+
+        $preview = $agentService->previewAttachment(['uid' => 101]);
+
+        self::assertSame(101, $preview['uid']);
+        self::assertSame('image/png', $preview['mime']);
+        self::assertSame(2048, $preview['size']);
+        self::assertTrue($preview['embedAsContent']);
+        self::assertNull($preview['reason']);
+    }
+
+    public function testPreviewAttachmentReportsOversizeReason(): void
+    {
+        $file = $this->buildFileMock(303, 'image/png', 6 * 1024 * 1024, 'huge.png', '1:/uploads/huge.png', null);
+        $resourceFactory = $this->buildResourceFactoryReturning(303, $file);
+
+        $capturedMessages = [];
+        $agentService = $this->buildAgentServiceCapturing($capturedMessages, $resourceFactory);
+
+        $preview = $agentService->previewAttachment(['uid' => 303]);
+
+        self::assertFalse($preview['embedAsContent']);
+        self::assertNotNull($preview['reason']);
+        self::assertStringContainsString('zu groß', $preview['reason']);
+        self::assertStringContainsString('MiB', $preview['reason']);
+    }
+
+    public function testPreviewAttachmentReportsUnsupportedMime(): void
+    {
+        $file = $this->buildFileMock(404, 'text/plain', 100, 'notes.txt', '1:/uploads/notes.txt', null);
+        $resourceFactory = $this->buildResourceFactoryReturning(404, $file);
+
+        $capturedMessages = [];
+        $agentService = $this->buildAgentServiceCapturing($capturedMessages, $resourceFactory);
+
+        $preview = $agentService->previewAttachment(['uid' => 404]);
+
+        self::assertFalse($preview['embedAsContent']);
+        self::assertSame('Format nicht unterstützt', $preview['reason']);
+    }
+
+    public function testPreviewAttachmentReportsUnresolvable(): void
+    {
+        $capturedMessages = [];
+        // real ResourceFactory — uid 999999 will not resolve, falls into catch
+        $agentService = $this->buildAgentServiceCapturing(
+            $capturedMessages,
+            GeneralUtility::makeInstance(ResourceFactory::class),
+        );
+
+        $preview = $agentService->previewAttachment(['uid' => 999999]);
+
+        self::assertFalse($preview['embedAsContent']);
+        self::assertSame('Datei nicht auflösbar', $preview['reason']);
     }
 
     public function testCallbackReceivesProgressUpdates(): void

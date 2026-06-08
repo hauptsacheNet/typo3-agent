@@ -251,7 +251,31 @@ class ChatController
                 'task' => $taskUid,
                 'id' => $pageId,
             ]),
+            'preflightUri' => (string)$this->uriBuilder->buildUriFromRoute('ajax_ai_agent_attachment_preflight'),
         ])->renderResponse('Chat/Show');
+    }
+
+    /**
+     * Pre-flight check for one attachment from the chat composer: tells the
+     * UI whether the file will be embedded as actual content for the LLM,
+     * and if not, why. Cheap (FAL metadata only, no getContents()).
+     */
+    public function attachmentPreflightAction(ServerRequestInterface $request): ResponseInterface
+    {
+        $params = $request->getQueryParams();
+        $uid = (int)($params['uid'] ?? 0);
+        $identifier = trim((string)($params['identifier'] ?? ''));
+        if ($uid <= 0 && $identifier === '') {
+            return new JsonResponse(['error' => 'uid or identifier required'], 400);
+        }
+        $ref = [];
+        if ($uid > 0) {
+            $ref['uid'] = $uid;
+        }
+        if ($identifier !== '') {
+            $ref['identifier'] = $identifier;
+        }
+        return new JsonResponse($this->agentService->previewAttachment($ref));
     }
 
     public function newAction(ServerRequestInterface $request): ResponseInterface

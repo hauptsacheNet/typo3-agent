@@ -31,6 +31,7 @@ let ChatElement = class extends LitElement {
     this.switchWorkspaceUri = "";
     this.defaultUploadFolder = "";
     this.fileBrowserUri = "";
+    this.preflightUri = "";
     this.initialMessages = [];
     this.initialChanges = [];
     this.changes = [];
@@ -183,13 +184,19 @@ let ChatElement = class extends LitElement {
       const fallback = img.nextElementSibling;
       if (fallback) fallback.style.display = "";
     };
+    const willNotEmbed = att.embedAsContent === false;
+    const warnTitle = willNotEmbed ? `Wird nicht als Inhalt an den Assistenten gegeben \u2014 nur Metadaten${att.reason ? ` (${att.reason})` : ""}` : att.unresolvable ? "Datei nicht aufl\xF6sbar" : "";
     return html`
       <span class="chat-attachment-chip d-inline-flex align-items-center gap-2 border rounded bg-body p-1 ${onRemove ? "pe-2" : "px-2"}"
-            title=${att.unresolvable ? "Datei nicht aufl\xF6sbar" : ""}>
+            title=${warnTitle}>
         ${thumbUrl ? html`
               <img src=${thumbUrl} alt="" class="chat-attachment-thumb rounded" @error=${onThumbError}/>
               <span class="chat-attachment-icon rounded" style="display:none">${this.renderFallbackIcon(att)}</span>` : html`<span class="chat-attachment-icon rounded">${this.renderFallbackIcon(att)}</span>`}
         <span class="chat-attachment-name ${att.unresolvable ? "text-decoration-line-through opacity-75" : ""}">${att.name}</span>
+        ${willNotEmbed ? html`<span class="chat-attachment-warn badge bg-warning-subtle text-warning-emphasis border border-warning-subtle"
+                       title=${warnTitle}>
+              <typo3-backend-icon identifier="actions-exclamation" size="small"/>
+            </span>` : nothing}
         ${onRemove ? html`<button type="button"
                   class="btn btn-sm p-0 border-0 text-muted"
                   title="Entfernen"
@@ -337,6 +344,32 @@ let ChatElement = class extends LitElement {
   }
   addAttachment(att) {
     this.attachments = [...this.attachments, att];
+    if (this.preflightUri && (att.uid !== void 0 || att.identifier)) {
+      void this.preflightAttachment(att);
+    }
+  }
+  async preflightAttachment(att) {
+    try {
+      const url = new URL(this.preflightUri, window.location.origin);
+      if (att.uid !== void 0) url.searchParams.set("uid", String(att.uid));
+      if (att.identifier) url.searchParams.set("identifier", att.identifier);
+      const response = await fetch(url.toString(), { headers: { "Accept": "application/json" } });
+      if (!response.ok) return;
+      const info = await response.json();
+      this.attachments = this.attachments.map((a) => {
+        const sameUid = info.uid !== void 0 && a.uid === info.uid;
+        const sameIdent = !!info.identifier && a.identifier === info.identifier;
+        if (!sameUid && !sameIdent) return a;
+        return {
+          ...a,
+          mime_type: info.mime || a.mime_type,
+          size: typeof info.size === "number" ? info.size : a.size,
+          embedAsContent: info.embedAsContent,
+          reason: info.reason ?? void 0
+        };
+      });
+    } catch {
+    }
   }
   removeAttachment(index) {
     this.attachments = this.attachments.filter((_, i) => i !== index);
@@ -622,6 +655,9 @@ __decorateClass([
 __decorateClass([
   property({ attribute: "file-browser-uri" })
 ], ChatElement.prototype, "fileBrowserUri", 2);
+__decorateClass([
+  property({ attribute: "preflight-uri" })
+], ChatElement.prototype, "preflightUri", 2);
 __decorateClass([
   property({
     attribute: "initial-messages",

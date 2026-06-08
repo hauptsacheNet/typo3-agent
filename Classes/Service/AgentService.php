@@ -28,6 +28,11 @@ class AgentService implements LoggerAwareInterface
 {
     use LoggerAwareTrait;
 
+    private const SUPPORTED_IMAGE_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+    private const SUPPORTED_DOCUMENT_MIME_TYPES = ['application/pdf'];
+    private const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+    private const MAX_DOCUMENT_BYTES = 30 * 1024 * 1024;
+
     public function __construct(
         private readonly LlmService $llmService,
         private readonly ToolConverterService $toolConverterService,
@@ -664,11 +669,21 @@ class AgentService implements LoggerAwareInterface
     }
 
     /**
-     * Project the persisted message array into the form the LLM client expects:
-     * attachments are folded into the user message's `content` as a markdown
-     * block, and the structured `attachments` field is dropped (the LLM client
-     * does not understand it). This is the single place where the markdown
-     * format is defined.
+     * Project the persisted message array into the form the LLM client expects.
+     *
+     * For user messages without attachments: passthrough (with the empty
+     * `attachments` key dropped). For messages with attachments:
+     *  - A marker text block is always produced (lists each attachment as
+     *    `sys_file:UID — path (mime)` so the LLM can refer to them in
+     *    subsequent tool calls).
+     *  - Supported images become OpenAI-compatible `image_url` blocks (base64
+     *    data URI).
+     *  - Supported documents (PDF) become `file` blocks (base64 data URI).
+     *  - Unresolvable / oversize / unsupported attachments stay marker-only
+     *    with an explanatory note in the marker line.
+     *  - If at least one media block is produced, `content` becomes an
+     *    OpenAI/OpenRouter content-block array. If only the marker is left,
+     *    `content` stays a plain string (cheaper, identical semantics).
      *
      * @param array<int, array<string, mixed>> $messages
      * @return array<int, array<string, mixed>>
@@ -684,37 +699,190 @@ class AgentService implements LoggerAwareInterface
                 $out[] = $message;
                 continue;
             }
-            $lines = [];
+
+            $markerLines = [];
+            $mediaBlocks = [];
             foreach ($message['attachments'] as $ref) {
                 if (!is_array($ref)) {
                     continue;
                 }
-                if (!empty($ref['unresolvable'])) {
-                    $label = (string)($ref['name'] ?? 'Unbenannte Datei');
-                    $lines[] = '- ' . $label . ' (Datei nicht auflösbar)';
-                    continue;
+                [$block, $note] = $this->buildContentBlockForAttachment($ref);
+                $markerLines[] = $this->buildAttachmentMarker($ref, $note);
+                if ($block !== null) {
+                    $mediaBlocks[] = $block;
                 }
-                $uid = (int)($ref['uid'] ?? 0);
-                $identifier = (string)($ref['identifier'] ?? '');
-                $mime = (string)($ref['mime_type'] ?? 'application/octet-stream');
-                $lines[] = sprintf(
-                    '- sys_file:%d — %s (%s)',
-                    $uid,
-                    $identifier,
-                    $mime !== '' ? $mime : 'application/octet-stream',
+            }
+
+            $userText = (string)($message['content'] ?? '');
+            $markerBlock = "---\nAngehängte Dateien:\n" . implode("\n", $markerLines);
+            $combinedText = $userText !== '' ? rtrim($userText) . "\n\n" . $markerBlock : $markerBlock;
+
+            if ($mediaBlocks === []) {
+                $message['content'] = $combinedText;
+            } else {
+                $message['content'] = array_merge(
+                    [['type' => 'text', 'text' => $combinedText]],
+                    $mediaBlocks,
                 );
             }
-            $content = (string)($message['content'] ?? '');
-            if ($lines !== []) {
-                $content = rtrim($content);
-                $content = ($content !== '' ? $content . "\n\n" : '')
-                    . "---\nAngehängte Dateien:\n" . implode("\n", $lines);
-            }
-            $message['content'] = $content;
             unset($message['attachments']);
             $out[] = $message;
         }
         return $out;
+    }
+
+    /**
+     * Classify an attachment for LLM-embedding eligibility, *without* reading
+     * the file contents. Single source of truth for the embed decision —
+     * used by both buildContentBlockForAttachment() (actual embed) and
+     * previewAttachment() (UI pre-flight). Reads only FAL metadata.
+     *
+     * @param array<string, mixed> $ref
+     * @return array{kind: 'image'|'document'|'unsupported'|'oversize'|'unresolvable', mime: string, size: int, file: ?File, reason: ?string}
+     */
+    private function classifyAttachment(array $ref): array
+    {
+        if (!empty($ref['unresolvable'])) {
+            return ['kind' => 'unresolvable', 'mime' => '', 'size' => 0, 'file' => null, 'reason' => 'Datei nicht auflösbar'];
+        }
+
+        $file = $this->resolveAttachmentFile($ref);
+        if (!$file instanceof File) {
+            return ['kind' => 'unresolvable', 'mime' => '', 'size' => 0, 'file' => null, 'reason' => 'Datei nicht auflösbar'];
+        }
+
+        $mime = strtolower((string)$file->getMimeType());
+        $size = (int)$file->getSize();
+        $isImage = in_array($mime, self::SUPPORTED_IMAGE_MIME_TYPES, true);
+        $isDocument = in_array($mime, self::SUPPORTED_DOCUMENT_MIME_TYPES, true);
+
+        if (!$isImage && !$isDocument) {
+            return ['kind' => 'unsupported', 'mime' => $mime, 'size' => $size, 'file' => $file, 'reason' => 'Format nicht unterstützt'];
+        }
+
+        $limit = $isImage ? self::MAX_IMAGE_BYTES : self::MAX_DOCUMENT_BYTES;
+        if ($size > $limit) {
+            return [
+                'kind' => 'oversize',
+                'mime' => $mime,
+                'size' => $size,
+                'file' => $file,
+                'reason' => sprintf('zu groß (%s > %s)', $this->formatBytes($size), $this->formatBytes($limit)),
+            ];
+        }
+
+        return ['kind' => $isImage ? 'image' : 'document', 'mime' => $mime, 'size' => $size, 'file' => $file, 'reason' => null];
+    }
+
+    /**
+     * UI pre-flight for one attachment. Cheap (metadata-only, no getContents()
+     * call) so the chat frontend can call it eagerly after each add.
+     *
+     * Runs under the *request* BE_USER's permissions, not the task's — which
+     * is what we want: the user only sees pre-flight info for files they can
+     * actually access.
+     *
+     * @param array<string, mixed> $ref
+     * @return array{uid: int, identifier: string, name: string, mime: string, size: int, embedAsContent: bool, reason: ?string}
+     */
+    public function previewAttachment(array $ref): array
+    {
+        $info = $this->classifyAttachment($ref);
+        $file = $info['file'];
+        return [
+            'uid' => $file?->getUid() ?? (int)($ref['uid'] ?? 0),
+            'identifier' => $file?->getCombinedIdentifier() ?? (string)($ref['identifier'] ?? ''),
+            'name' => $file?->getName() ?? (string)($ref['name'] ?? ''),
+            'mime' => $info['mime'],
+            'size' => $info['size'],
+            'embedAsContent' => in_array($info['kind'], ['image', 'document'], true),
+            'reason' => $info['reason'],
+        ];
+    }
+
+    /**
+     * Try to build an OpenRouter-compatible content block (image_url or file)
+     * for one attachment. Returns `[$block, $note]` — both may be null:
+     *  - $block === null means we don't ship the file as content; the marker
+     *    line will carry the explanation via $note.
+     *  - $note === null means the file was embedded successfully (no extra
+     *    note needed in the marker).
+     *
+     * @param array<string, mixed> $ref
+     * @return array{0: ?array<string, mixed>, 1: ?string}
+     */
+    private function buildContentBlockForAttachment(array $ref): array
+    {
+        $info = $this->classifyAttachment($ref);
+        $file = $info['file'];
+
+        if ($info['kind'] === 'unresolvable') {
+            return [null, 'Datei nicht auflösbar'];
+        }
+        if ($info['kind'] === 'unsupported') {
+            return [null, 'nur Metadaten'];
+        }
+        if ($info['kind'] === 'oversize') {
+            $this->logger?->warning('Attachment exceeds size limit, falling back to metadata only', [
+                'uid' => $file?->getUid(),
+                'mime' => $info['mime'],
+                'size' => $info['size'],
+            ]);
+            return [null, sprintf('%s — zu groß, nur Metadaten', $this->formatBytes($info['size']))];
+        }
+
+        $base64 = base64_encode($file->getContents());
+        $dataUri = 'data:' . $info['mime'] . ';base64,' . $base64;
+
+        if ($info['kind'] === 'image') {
+            return [
+                ['type' => 'image_url', 'image_url' => ['url' => $dataUri]],
+                null,
+            ];
+        }
+
+        return [
+            ['type' => 'file', 'file' => ['filename' => $file->getName(), 'file_data' => $dataUri]],
+            null,
+        ];
+    }
+
+    /**
+     * Build a single marker line for the text portion of a user message.
+     *
+     * @param array<string, mixed> $ref
+     */
+    private function buildAttachmentMarker(array $ref, ?string $note): string
+    {
+        if (!empty($ref['unresolvable'])) {
+            $label = trim((string)($ref['name'] ?? ''));
+            return '- ' . ($label !== '' ? $label : 'Unbenannte Datei') . ' (Datei nicht auflösbar)';
+        }
+
+        $uid = (int)($ref['uid'] ?? 0);
+        $identifier = (string)($ref['identifier'] ?? '');
+        $mime = (string)($ref['mime_type'] ?? 'application/octet-stream');
+        if ($mime === '') {
+            $mime = 'application/octet-stream';
+        }
+        $parens = $note !== null && $note !== '' ? $mime . ', ' . $note : $mime;
+        $head = $uid > 0 ? 'sys_file:' . $uid : ($identifier !== '' ? $identifier : (string)($ref['name'] ?? 'Unbenannte Datei'));
+        $path = $identifier !== '' ? ' — ' . $identifier : '';
+        if ($uid <= 0) {
+            $path = '';
+        }
+        return '- ' . $head . $path . ' (' . $parens . ')';
+    }
+
+    private function formatBytes(int $bytes): string
+    {
+        if ($bytes >= 1024 * 1024) {
+            return sprintf('%.1f MiB', $bytes / (1024 * 1024));
+        }
+        if ($bytes >= 1024) {
+            return sprintf('%.1f KiB', $bytes / 1024);
+        }
+        return $bytes . ' B';
     }
 
     /**
