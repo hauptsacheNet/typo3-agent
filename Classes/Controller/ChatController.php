@@ -251,28 +251,7 @@ class ChatController
                 'task' => $taskUid,
                 'id' => $pageId,
             ]),
-            'fileInfoUri' => (string)$this->uriBuilder->buildUriFromRoute('ajax_ai_agent_file_info'),
         ])->renderResponse('Chat/Show');
-    }
-
-    public function fileInfoAction(ServerRequestInterface $request): ResponseInterface
-    {
-        $uid = (int)($request->getQueryParams()['uid'] ?? 0);
-        if ($uid <= 0) {
-            return new JsonResponse(['error' => 'invalid uid'], 400);
-        }
-        try {
-            $file = GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class)->getFileObject($uid);
-        } catch (\Throwable) {
-            return new JsonResponse(['error' => 'not found'], 404);
-        }
-        $iconHtml = $this->iconFactory->getIconForResource($file, IconSize::SMALL)->render();
-        return new JsonResponse([
-            'uid' => $file->getUid(),
-            'identifier' => $file->getCombinedIdentifier(),
-            'name' => $file->getName(),
-            'iconHtml' => $iconHtml,
-        ]);
     }
 
     public function newAction(ServerRequestInterface $request): ResponseInterface
@@ -497,21 +476,18 @@ class ChatController
     }
 
     /**
-     * Decode the attachments payload from the request body. The client sends
-     * a JSON-encoded array (FormData can't carry nested structures cleanly),
-     * each item shaped `{uid?: int, identifier?: string, name?: string}`.
+     * Decode the attachments payload from the request body. The client always
+     * sends a JSON-encoded array via FormData; each item shaped
+     * `{uid?: int, identifier?: string, name?: string}`.
      *
      * @return array<int, array{uid?: int, identifier?: string, name?: string}>
      */
     private function parseAttachments(mixed $raw): array
     {
-        if (is_array($raw)) {
-            $decoded = $raw;
-        } elseif (is_string($raw) && $raw !== '') {
-            $decoded = json_decode($raw, true);
-        } else {
+        if (!is_string($raw) || $raw === '') {
             return [];
         }
+        $decoded = json_decode($raw, true);
         if (!is_array($decoded)) {
             return [];
         }

@@ -102,17 +102,19 @@ class AgentService implements LoggerAwareInterface
         // Set up backend user context from task's cruser_id (and workspace, if persisted)
         $this->setupBackendUserContext((int)($task['cruser_id'] ?? 0), (int)($task['workspace_id'] ?? 0));
 
-        // Resolve attachments to a textual block (sys_file:uid — identifier (mime)) so the LLM
-        // sees the file references inline. Done after BE_USER setup so FAL permission checks
-        // run against the task's user, not the request context.
-        $attachmentBlock = $this->resolveAttachments($attachments);
-        $finalUserMessage = $attachmentBlock !== ''
-            ? rtrim($userMessage) . "\n\n---\nAngehängte Dateien:\n" . $attachmentBlock
-            : $userMessage;
+        // Resolve attachments to structured refs (uid/identifier/name/mime_type). FAL permission
+        // checks run against the task's user, not the request context — so this is done after the
+        // BE_USER setup above. The refs are persisted alongside the user message; the markdown
+        // block for the LLM is only built transiently in serializeForLlm() at call-site.
+        $attachmentRefs = $this->resolveAttachmentRefs($attachments);
 
         // Load or build existing messages, then append the new user message
         $messages = $this->buildMessages($task);
-        $messages[] = ['role' => 'user', 'content' => $finalUserMessage];
+        $userMessageRecord = ['role' => 'user', 'content' => $userMessage];
+        if ($attachmentRefs !== []) {
+            $userMessageRecord['attachments'] = $attachmentRefs;
+        }
+        $messages[] = $userMessageRecord;
 
         // Persist the user message + reset status to pending so claim succeeds
         $this->repository->saveState($taskUid, $messages, TaskStatus::Pending);
@@ -170,8 +172,15 @@ class AgentService implements LoggerAwareInterface
                     };
 
                 // Call LLM (streaming — invokes $onDelta per chunk, returns
-                // aggregated message with same shape as chatCompletion())
-                $assistantMessage = $this->llmService->chatCompletionStream($messages, $tools, $onDelta);
+                // aggregated message with same shape as chatCompletion()).
+                // serializeForLlm() merges structured attachment refs into
+                // content as a markdown block at the call site; the persisted
+                // messages keep `attachments` as a structured field.
+                $assistantMessage = $this->llmService->chatCompletionStream(
+                    $this->serializeForLlm($messages),
+                    $tools,
+                    $onDelta,
+                );
 
                 // Append assistant message
                 $messages[] = $assistantMessage;
@@ -612,29 +621,31 @@ class AgentService implements LoggerAwareInterface
     }
 
     /**
-     * Resolve raw attachment refs to FAL `File` objects and format them as a
-     * markdown-ish list. Refs may carry `uid` (preferred) or `identifier`
-     * (combined storage:path). Unresolvable entries fall back to a `(Datei
-     * nicht auflösbar)`-line so the user/LLM still see that something was
-     * attached, instead of the block disappearing silently.
+     * Resolve raw attachment refs from the request to structured AttachmentRef
+     * arrays. Refs may carry `uid` (preferred) or `identifier` (combined
+     * storage:path). Each returned entry has at least `name`; resolvable ones
+     * also carry `uid`, `identifier`, `mime_type`. Unresolvable refs come
+     * through with `unresolvable => true` so the UI can still render a chip
+     * and the LLM still sees that something was attached.
      *
      * @param array<int, array{uid?: int|string, identifier?: string, name?: string}> $raw
+     * @return array<int, array{uid?: int, identifier?: string, name: string, mime_type?: string, unresolvable?: bool}>
      */
-    private function resolveAttachments(array $raw): string
+    private function resolveAttachmentRefs(array $raw): array
     {
-        $lines = [];
+        $refs = [];
         foreach ($raw as $entry) {
             if (!is_array($entry)) {
                 continue;
             }
             $file = $this->resolveAttachmentFile($entry);
             if ($file instanceof File) {
-                $lines[] = sprintf(
-                    '- sys_file:%d — %s (%s)',
-                    $file->getUid(),
-                    $file->getCombinedIdentifier(),
-                    $file->getMimeType() ?: 'application/octet-stream',
-                );
+                $refs[] = [
+                    'uid' => $file->getUid(),
+                    'identifier' => $file->getCombinedIdentifier(),
+                    'name' => $file->getName(),
+                    'mime_type' => $file->getMimeType() ?: 'application/octet-stream',
+                ];
                 continue;
             }
             $label = trim((string)($entry['name'] ?? ''));
@@ -644,9 +655,66 @@ class AgentService implements LoggerAwareInterface
             if ($label === '' && isset($entry['uid'])) {
                 $label = 'sys_file:' . (int)$entry['uid'];
             }
-            $lines[] = '- ' . ($label !== '' ? $label : 'Unbenannte Datei') . ' (Datei nicht auflösbar)';
+            $refs[] = [
+                'name' => $label !== '' ? $label : 'Unbenannte Datei',
+                'unresolvable' => true,
+            ];
         }
-        return implode("\n", $lines);
+        return $refs;
+    }
+
+    /**
+     * Project the persisted message array into the form the LLM client expects:
+     * attachments are folded into the user message's `content` as a markdown
+     * block, and the structured `attachments` field is dropped (the LLM client
+     * does not understand it). This is the single place where the markdown
+     * format is defined.
+     *
+     * @param array<int, array<string, mixed>> $messages
+     * @return array<int, array<string, mixed>>
+     */
+    private function serializeForLlm(array $messages): array
+    {
+        $out = [];
+        foreach ($messages as $message) {
+            if (!is_array($message) || empty($message['attachments']) || !is_array($message['attachments'])) {
+                if (is_array($message) && array_key_exists('attachments', $message)) {
+                    unset($message['attachments']);
+                }
+                $out[] = $message;
+                continue;
+            }
+            $lines = [];
+            foreach ($message['attachments'] as $ref) {
+                if (!is_array($ref)) {
+                    continue;
+                }
+                if (!empty($ref['unresolvable'])) {
+                    $label = (string)($ref['name'] ?? 'Unbenannte Datei');
+                    $lines[] = '- ' . $label . ' (Datei nicht auflösbar)';
+                    continue;
+                }
+                $uid = (int)($ref['uid'] ?? 0);
+                $identifier = (string)($ref['identifier'] ?? '');
+                $mime = (string)($ref['mime_type'] ?? 'application/octet-stream');
+                $lines[] = sprintf(
+                    '- sys_file:%d — %s (%s)',
+                    $uid,
+                    $identifier,
+                    $mime !== '' ? $mime : 'application/octet-stream',
+                );
+            }
+            $content = (string)($message['content'] ?? '');
+            if ($lines !== []) {
+                $content = rtrim($content);
+                $content = ($content !== '' ? $content . "\n\n" : '')
+                    . "---\nAngehängte Dateien:\n" . implode("\n", $lines);
+            }
+            $message['content'] = $content;
+            unset($message['attachments']);
+            $out[] = $message;
+        }
+        return $out;
     }
 
     /**

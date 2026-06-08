@@ -267,6 +267,77 @@ class AgentServiceTest extends FunctionalTestCase
         self::assertStringContainsString('page context', strtolower($systemContent));
     }
 
+    public function testContinueChatPersistsAttachmentsStructuredAndSerializesForLlm(): void
+    {
+        $taskUid = $this->createTask('Attachment test', 'Initial prompt');
+
+        // Capture what is handed to LlmService so we can prove the markdown
+        // block exists in the LLM payload — but NOT in the persisted state.
+        $capturedMessages = [];
+        $llmMock = $this->createMock(LlmService::class);
+        $llmMock->method('chatCompletionStream')->willReturnCallback(
+            function (array $messages) use (&$capturedMessages): array {
+                $capturedMessages[] = $messages;
+                return ['role' => 'assistant', 'content' => 'OK.'];
+            }
+        );
+
+        $agentService = new AgentService(
+            $llmMock,
+            GeneralUtility::makeInstance(ToolConverterService::class),
+            GeneralUtility::makeInstance(ToolRegistry::class),
+            GeneralUtility::makeInstance(ExtensionConfiguration::class),
+            $this->connectionPool,
+            new AgentTaskRepository($this->connectionPool),
+            GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class),
+        );
+
+        // Pass an unresolvable attachment (no such sys_file UID) — keeps the
+        // test independent from FAL fixtures while still exercising the full
+        // resolveAttachmentRefs → serializeForLlm pipeline.
+        $attachments = [
+            ['uid' => 999999, 'name' => 'phantom.pdf'],
+        ];
+        $agentService->continueChat($taskUid, 'Look at this', null, $attachments);
+
+        // --- Persisted state: attachments structured, no markdown block in content
+        $task = $this->getTask($taskUid);
+        $messages = $this->decodeMessages($task['messages']);
+
+        $userMsg = null;
+        foreach ($messages as $m) {
+            if (($m['role'] ?? '') === 'user' && ($m['content'] ?? '') === 'Look at this') {
+                $userMsg = $m;
+                break;
+            }
+        }
+        self::assertNotNull($userMsg, 'User message with plain content was persisted');
+        self::assertSame('Look at this', $userMsg['content']);
+        self::assertArrayHasKey('attachments', $userMsg);
+        self::assertCount(1, $userMsg['attachments']);
+        self::assertSame('phantom.pdf', $userMsg['attachments'][0]['name']);
+        self::assertTrue($userMsg['attachments'][0]['unresolvable'] ?? false);
+        self::assertStringNotContainsString('Angehängte Dateien', $userMsg['content']);
+
+        // --- LLM view: markdown block in content, no structured attachments field
+        self::assertNotEmpty($capturedMessages, 'LlmService was called at least once');
+        $llmMessages = $capturedMessages[0];
+
+        $llmUserMsg = null;
+        foreach ($llmMessages as $m) {
+            $content = (string)($m['content'] ?? '');
+            if (($m['role'] ?? '') === 'user' && str_contains($content, 'Look at this')) {
+                $llmUserMsg = $m;
+                break;
+            }
+        }
+        self::assertNotNull($llmUserMsg, 'User message reached LlmService');
+        self::assertArrayNotHasKey('attachments', $llmUserMsg, 'LLM payload has no structured attachments field');
+        self::assertStringContainsString('Angehängte Dateien:', $llmUserMsg['content']);
+        self::assertStringContainsString('phantom.pdf', $llmUserMsg['content']);
+        self::assertStringContainsString('nicht auflösbar', $llmUserMsg['content']);
+    }
+
     public function testCallbackReceivesProgressUpdates(): void
     {
         $taskUid = $this->createTask('Event test', 'Hello');

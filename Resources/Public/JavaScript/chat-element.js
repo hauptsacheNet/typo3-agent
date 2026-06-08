@@ -31,7 +31,6 @@ let ChatElement = class extends LitElement {
     this.switchWorkspaceUri = "";
     this.defaultUploadFolder = "";
     this.fileBrowserUri = "";
-    this.fileInfoUri = "";
     this.initialMessages = [];
     this.initialChanges = [];
     this.changes = [];
@@ -65,48 +64,12 @@ let ChatElement = class extends LitElement {
       if (!file) return;
       this.addAttachment({ uid: file.uid, identifier: file.id, name: file.name, iconHtml: file.icon });
     };
-    // DragUploader sends this postMessage in IRRE mode for BOTH the normal
-    // upload path and the "use existing" override path — the only reliable
-    // success signal for existing-file selections, since no uploadSuccess
-    // DOM event fires there.
-    this.irreInsertListener = (e) => {
-      if (!MessageUtility.verifyOrigin(e.origin)) return;
-      const data = e.data;
-      if (data.actionName !== "typo3:foreignRelation:insert") return;
-      if (data.objectGroup !== "hn-agent-chat") return;
-      if (data.table !== "sys_file" || !data.uid) return;
-      const uid = data.uid;
-      this.addAttachment({ uid, name: `sys_file:${uid}` });
-      void this.fetchFileInfo(uid);
-    };
   }
   // No Shadow DOM — use TYPO3 backend Bootstrap CSS
   createRenderRoot() {
     return this;
   }
-  async fetchFileInfo(uid) {
-    if (!this.fileInfoUri) return;
-    try {
-      const url = new URL(this.fileInfoUri, window.location.origin);
-      url.searchParams.set("uid", String(uid));
-      const response = await fetch(url.toString(), { headers: { "Accept": "application/json" } });
-      if (!response.ok) return;
-      const info = await response.json();
-      if (!info.uid) return;
-      this.addAttachment({
-        uid: info.uid,
-        identifier: info.identifier,
-        name: info.name ?? `sys_file:${info.uid}`,
-        iconHtml: info.iconHtml
-      });
-    } catch {
-    }
-  }
   // -- Lifecycle -------------------------------------------------------------
-  connectedCallback() {
-    super.connectedCallback();
-    window.addEventListener("message", this.irreInsertListener);
-  }
   firstUpdated() {
     this.messages = this.mergeToolResults(this.initialMessages);
     this.changes = [...this.initialChanges];
@@ -120,7 +83,6 @@ let ChatElement = class extends LitElement {
     super.disconnectedCallback();
     this.uploadTriggerEl?.removeEventListener("uploadSuccess", this.uploadSuccessListener);
     window.removeEventListener("message", this.elementBrowserListener);
-    window.removeEventListener("message", this.irreInsertListener);
   }
   isWorkspaceMismatch() {
     if (!this.taskWorkspaceId) return false;
@@ -151,8 +113,7 @@ let ChatElement = class extends LitElement {
             data-max-file-size="0"
             data-dropzone-target=".chat-upload-anchor"
             data-dropzone-trigger=".chat-upload-trigger"
-            data-default-action="rename"
-            data-file-irre-object="hn-agent-chat">
+            data-default-action="rename">
 
           
 
@@ -171,7 +132,7 @@ let ChatElement = class extends LitElement {
                 @keydown=${this.onKeydown}
             ></textarea>
             ${this.attachments.length > 0 ? html`<div class="chat-attachments d-flex flex-wrap gap-2">
-                  ${this.attachments.map((a, i) => this.renderAttachmentChip(a, i))}
+                  ${this.attachments.map((a, i) => this.renderAttachmentChip(a, () => this.removeAttachment(i)))}
                 </div>` : nothing}
             <div class="chat-upload-anchor" style="display:none"></div>
             <div class="w-100 d-flex flex-row">
@@ -214,7 +175,7 @@ let ChatElement = class extends LitElement {
       </div>
     `;
   }
-  renderAttachmentChip(att, index) {
+  renderAttachmentChip(att, onRemove) {
     const thumbUrl = this.buildThumbnailUrl(att);
     const onThumbError = (e) => {
       const img = e.target;
@@ -223,15 +184,16 @@ let ChatElement = class extends LitElement {
       if (fallback) fallback.style.display = "";
     };
     return html`
-      <span class="chat-attachment-chip d-inline-flex align-items-center gap-2 border rounded bg-body p-1 pe-2">
+      <span class="chat-attachment-chip d-inline-flex align-items-center gap-2 border rounded bg-body p-1 ${onRemove ? "pe-2" : "px-2"}"
+            title=${att.unresolvable ? "Datei nicht aufl\xF6sbar" : ""}>
         ${thumbUrl ? html`
               <img src=${thumbUrl} alt="" class="chat-attachment-thumb rounded" @error=${onThumbError}/>
               <span class="chat-attachment-icon rounded" style="display:none">${this.renderFallbackIcon(att)}</span>` : html`<span class="chat-attachment-icon rounded">${this.renderFallbackIcon(att)}</span>`}
-        <span class="chat-attachment-name">${att.name}</span>
-        <button type="button"
-                class="btn btn-sm p-0 border-0 text-muted"
-                title="Entfernen"
-                @click=${() => this.removeAttachment(index)}>\u00d7</button>
+        <span class="chat-attachment-name ${att.unresolvable ? "text-decoration-line-through opacity-75" : ""}">${att.name}</span>
+        ${onRemove ? html`<button type="button"
+                  class="btn btn-sm p-0 border-0 text-muted"
+                  title="Entfernen"
+                  @click=${onRemove}>\u00d7</button>` : nothing}
       </span>
     `;
   }
@@ -289,10 +251,14 @@ let ChatElement = class extends LitElement {
         </div>
       `;
     }
+    const attachments = msg.attachments ?? [];
     return html`
       <div class="rounded-4 bg-success-subtle border p-3 ms-3 align-self-end">
         <div class="chat-msg-role fw-bold small opacity-75 mb-1 text-uppercase">${roleLabel}</div>
-        <pre class="chat-msg-prewrap m-0">${msg.content ?? ""}</pre>
+        ${msg.content ? html`<pre class="chat-msg-prewrap m-0">${msg.content}</pre>` : nothing}
+        ${attachments.length > 0 ? html`<div class="chat-attachments d-flex flex-wrap gap-2 ${msg.content ? "mt-2" : ""}">
+              ${attachments.map((a) => this.renderAttachmentChip(a))}
+            </div>` : nothing}
       </div>
     `;
   }
@@ -357,8 +323,9 @@ let ChatElement = class extends LitElement {
     const attachments = this.attachments;
     if (!message && attachments.length === 0) return;
     this.errorMessage = "";
-    const optimisticContent = this.composeOptimisticUserMessage(message, attachments);
-    this.messages = [...this.messages, { role: "user", content: optimisticContent }];
+    const optimistic = { role: "user", content: message };
+    if (attachments.length > 0) optimistic.attachments = attachments;
+    this.messages = [...this.messages, optimistic];
     this.inputValue = "";
     this.attachments = [];
     this.loading = true;
@@ -368,34 +335,8 @@ let ChatElement = class extends LitElement {
       this.sendBlocking(message, attachments).then(() => this.finishSend());
     }
   }
-  composeOptimisticUserMessage(message, attachments) {
-    if (attachments.length === 0) return message;
-    const lines = attachments.map((a) => {
-      const ref = a.uid ? `sys_file:${a.uid}` : a.identifier || a.name;
-      return `- ${ref} \u2014 ${a.name}`;
-    });
-    const prefix = message ? message.replace(/\s+$/, "") + "\n\n" : "";
-    return prefix + "---\nAngeh\xE4ngte Dateien:\n" + lines.join("\n");
-  }
   addAttachment(att) {
-    const existingIndex = this.attachments.findIndex(
-      (existing) => att.uid !== void 0 && existing.uid === att.uid || att.identifier !== void 0 && existing.identifier === att.identifier
-    );
-    if (existingIndex >= 0) {
-      const existing = this.attachments[existingIndex];
-      const merged = {
-        uid: existing.uid ?? att.uid,
-        identifier: existing.identifier ?? att.identifier,
-        name: this.isStubName(existing.name) && !this.isStubName(att.name) ? att.name : existing.name,
-        iconHtml: existing.iconHtml ?? att.iconHtml
-      };
-      this.attachments = this.attachments.map((a, i) => i === existingIndex ? merged : a);
-      return;
-    }
     this.attachments = [...this.attachments, att];
-  }
-  isStubName(name) {
-    return /^sys_file:\d+$/.test(name);
   }
   removeAttachment(index) {
     this.attachments = this.attachments.filter((_, i) => i !== index);
@@ -681,9 +622,6 @@ __decorateClass([
 __decorateClass([
   property({ attribute: "file-browser-uri" })
 ], ChatElement.prototype, "fileBrowserUri", 2);
-__decorateClass([
-  property({ attribute: "file-info-uri" })
-], ChatElement.prototype, "fileInfoUri", 2);
 __decorateClass([
   property({
     attribute: "initial-messages",

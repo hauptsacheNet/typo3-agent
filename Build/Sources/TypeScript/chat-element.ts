@@ -14,6 +14,7 @@ marked.setOptions({breaks: true, gfm: true});
 interface ChatMessage {
   role: 'user' | 'assistant' | 'system' | 'tool';
   content?: string;
+  attachments?: Attachment[];
   tool_calls?: ToolCall[];
   tool_call_id?: string;
 }
@@ -46,7 +47,9 @@ interface Attachment {
   uid?: number;
   identifier?: string;
   name: string;
+  mime_type?: string;
   iconHtml?: string;
+  unresolvable?: boolean;
 }
 
 // ---- Component -------------------------------------------------------------
@@ -72,7 +75,6 @@ export class ChatElement extends LitElement {
   @property({attribute: 'switch-workspace-uri'}) switchWorkspaceUri = '';
   @property({attribute: 'default-upload-folder'}) defaultUploadFolder = '';
   @property({attribute: 'file-browser-uri'}) fileBrowserUri = '';
-  @property({attribute: 'file-info-uri'}) fileInfoUri = '';
 
   @property({
     attribute: 'initial-messages',
@@ -149,47 +151,7 @@ export class ChatElement extends LitElement {
     this.addAttachment({uid: file.uid, identifier: file.id, name: file.name, iconHtml: file.icon});
   };
 
-  // DragUploader sends this postMessage in IRRE mode for BOTH the normal
-  // upload path and the "use existing" override path — the only reliable
-  // success signal for existing-file selections, since no uploadSuccess
-  // DOM event fires there.
-  private irreInsertListener = (e: MessageEvent): void => {
-    if (!MessageUtility.verifyOrigin(e.origin)) return;
-    const data = e.data as {actionName?: string; objectGroup?: string; table?: string; uid?: number};
-    if (data.actionName !== 'typo3:foreignRelation:insert') return;
-    if (data.objectGroup !== 'hn-agent-chat') return;
-    if (data.table !== 'sys_file' || !data.uid) return;
-    const uid = data.uid;
-    this.addAttachment({uid, name: `sys_file:${uid}`});
-    void this.fetchFileInfo(uid);
-  };
-
-  private async fetchFileInfo(uid: number): Promise<void> {
-    if (!this.fileInfoUri) return;
-    try {
-      const url = new URL(this.fileInfoUri, window.location.origin);
-      url.searchParams.set('uid', String(uid));
-      const response = await fetch(url.toString(), {headers: {'Accept': 'application/json'}});
-      if (!response.ok) return;
-      const info = await response.json() as {uid: number; identifier?: string; name?: string; iconHtml?: string};
-      if (!info.uid) return;
-      this.addAttachment({
-        uid: info.uid,
-        identifier: info.identifier,
-        name: info.name ?? `sys_file:${info.uid}`,
-        iconHtml: info.iconHtml,
-      });
-    } catch {
-      // swallow — stub chip remains visible
-    }
-  }
-
   // -- Lifecycle -------------------------------------------------------------
-
-  override connectedCallback(): void {
-    super.connectedCallback();
-    window.addEventListener('message', this.irreInsertListener);
-  }
 
   override firstUpdated(): void {
     this.messages = this.mergeToolResults(this.initialMessages);
@@ -209,7 +171,6 @@ export class ChatElement extends LitElement {
     super.disconnectedCallback();
     this.uploadTriggerEl?.removeEventListener('uploadSuccess', this.uploadSuccessListener);
     window.removeEventListener('message', this.elementBrowserListener);
-    window.removeEventListener('message', this.irreInsertListener);
   }
 
   private isWorkspaceMismatch(): boolean {
@@ -244,8 +205,7 @@ export class ChatElement extends LitElement {
             data-max-file-size="0"
             data-dropzone-target=".chat-upload-anchor"
             data-dropzone-trigger=".chat-upload-trigger"
-            data-default-action="rename"
-            data-file-irre-object="hn-agent-chat">
+            data-default-action="rename">
 
           
 
@@ -265,7 +225,7 @@ export class ChatElement extends LitElement {
             ></textarea>
             ${this.attachments.length > 0
               ? html`<div class="chat-attachments d-flex flex-wrap gap-2">
-                  ${this.attachments.map((a, i) => this.renderAttachmentChip(a, i))}
+                  ${this.attachments.map((a, i) => this.renderAttachmentChip(a, () => this.removeAttachment(i)))}
                 </div>`
               : nothing}
             <div class="chat-upload-anchor" style="display:none"></div>
@@ -313,7 +273,7 @@ export class ChatElement extends LitElement {
     `;
   }
 
-  private renderAttachmentChip(att: Attachment, index: number): TemplateResult {
+  private renderAttachmentChip(att: Attachment, onRemove?: () => void): TemplateResult {
     const thumbUrl = this.buildThumbnailUrl(att);
     const onThumbError = (e: Event): void => {
       const img = e.target as HTMLImageElement;
@@ -322,17 +282,20 @@ export class ChatElement extends LitElement {
       if (fallback) fallback.style.display = '';
     };
     return html`
-      <span class="chat-attachment-chip d-inline-flex align-items-center gap-2 border rounded bg-body p-1 pe-2">
+      <span class="chat-attachment-chip d-inline-flex align-items-center gap-2 border rounded bg-body p-1 ${onRemove ? 'pe-2' : 'px-2'}"
+            title=${att.unresolvable ? 'Datei nicht aufl\u00f6sbar' : ''}>
         ${thumbUrl
           ? html`
               <img src=${thumbUrl} alt="" class="chat-attachment-thumb rounded" @error=${onThumbError}/>
               <span class="chat-attachment-icon rounded" style="display:none">${this.renderFallbackIcon(att)}</span>`
           : html`<span class="chat-attachment-icon rounded">${this.renderFallbackIcon(att)}</span>`}
-        <span class="chat-attachment-name">${att.name}</span>
-        <button type="button"
-                class="btn btn-sm p-0 border-0 text-muted"
-                title="Entfernen"
-                @click=${() => this.removeAttachment(index)}>\u00d7</button>
+        <span class="chat-attachment-name ${att.unresolvable ? 'text-decoration-line-through opacity-75' : ''}">${att.name}</span>
+        ${onRemove
+          ? html`<button type="button"
+                  class="btn btn-sm p-0 border-0 text-muted"
+                  title="Entfernen"
+                  @click=${onRemove}>\u00d7</button>`
+          : nothing}
       </span>
     `;
   }
@@ -415,10 +378,18 @@ export class ChatElement extends LitElement {
 
 
     // user, system, unknown
+    const attachments = msg.attachments ?? [];
     return html`
       <div class="rounded-4 bg-success-subtle border p-3 ms-3 align-self-end">
         <div class="chat-msg-role fw-bold small opacity-75 mb-1 text-uppercase">${roleLabel}</div>
-        <pre class="chat-msg-prewrap m-0">${msg.content ?? ''}</pre>
+        ${msg.content
+          ? html`<pre class="chat-msg-prewrap m-0">${msg.content}</pre>`
+          : nothing}
+        ${attachments.length > 0
+          ? html`<div class="chat-attachments d-flex flex-wrap gap-2 ${msg.content ? 'mt-2' : ''}">
+              ${attachments.map(a => this.renderAttachmentChip(a))}
+            </div>`
+          : nothing}
       </div>
     `;
   }
@@ -495,8 +466,9 @@ export class ChatElement extends LitElement {
     if (!message && attachments.length === 0) return;
 
     this.errorMessage = '';
-    const optimisticContent = this.composeOptimisticUserMessage(message, attachments);
-    this.messages = [...this.messages, {role: 'user', content: optimisticContent}];
+    const optimistic: ChatMessage = {role: 'user', content: message};
+    if (attachments.length > 0) optimistic.attachments = attachments;
+    this.messages = [...this.messages, optimistic];
     this.inputValue = '';
     this.attachments = [];
     this.loading = true;
@@ -508,37 +480,8 @@ export class ChatElement extends LitElement {
     }
   }
 
-  private composeOptimisticUserMessage(message: string, attachments: Attachment[]): string {
-    if (attachments.length === 0) return message;
-    const lines = attachments.map(a => {
-      const ref = a.uid ? `sys_file:${a.uid}` : (a.identifier || a.name);
-      return `- ${ref} — ${a.name}`;
-    });
-    const prefix = message ? message.replace(/\s+$/, '') + '\n\n' : '';
-    return prefix + '---\nAngehängte Dateien:\n' + lines.join('\n');
-  }
-
   private addAttachment(att: Attachment): void {
-    const existingIndex = this.attachments.findIndex(existing =>
-      (att.uid !== undefined && existing.uid === att.uid) ||
-      (att.identifier !== undefined && existing.identifier === att.identifier),
-    );
-    if (existingIndex >= 0) {
-      const existing = this.attachments[existingIndex];
-      const merged: Attachment = {
-        uid: existing.uid ?? att.uid,
-        identifier: existing.identifier ?? att.identifier,
-        name: this.isStubName(existing.name) && !this.isStubName(att.name) ? att.name : existing.name,
-        iconHtml: existing.iconHtml ?? att.iconHtml,
-      };
-      this.attachments = this.attachments.map((a, i) => i === existingIndex ? merged : a);
-      return;
-    }
     this.attachments = [...this.attachments, att];
-  }
-
-  private isStubName(name: string): boolean {
-    return /^sys_file:\d+$/.test(name);
   }
 
   private removeAttachment(index: number): void {
