@@ -264,9 +264,18 @@ class AgentServiceTest extends FunctionalTestCase
         $task = $this->getTask($taskUid);
         $messages = $this->decodeMessages($task['messages']);
 
-        // System message should contain page context (either actual page data or error message)
-        $systemContent = $messages[0]['content'] ?? '';
-        self::assertStringContainsString('page context', strtolower($systemContent));
+        // Expected shape after buildMessages() — context turn precedes user prompt:
+        // [0] system, [1] assistant(narration content + GetPage tool_call),
+        // [2] tool(GetPage result), [3] user(prompt), [4] assistant(final mock response)
+        self::assertSame('assistant', $messages[1]['role']);
+        self::assertIsString($messages[1]['content']);
+        self::assertStringContainsString('Arbeitskontext', $messages[1]['content']);
+        self::assertStringContainsString('#1', $messages[1]['content']);
+        self::assertNotEmpty($messages[1]['tool_calls']);
+        self::assertSame('GetPage', $messages[1]['tool_calls'][0]['function']['name']);
+        self::assertSame('tool', $messages[2]['role']);
+        self::assertSame('user', $messages[3]['role']);
+        self::assertSame('Describe this page', $messages[3]['content']);
     }
 
     public function testContinueChatPersistsAttachmentsStructuredAndSerializesForLlm(): void
@@ -585,13 +594,18 @@ class AgentServiceTest extends FunctionalTestCase
 
         $agentService->processTask($taskUid, $progress);
 
-        self::assertCount(2, $calls);
+        // Fresh tasks emit a `user_message` event up front so the UI can render
+        // the prompt in the same slot it occupies in the persisted state.
+        self::assertCount(3, $calls);
 
-        self::assertSame('llm_start', $calls[0][0]);
-        self::assertSame(0, $calls[0][1]['iteration']);
+        self::assertSame('user_message', $calls[0][0]);
+        self::assertSame('Hello', $calls[0][1]['message']['content']);
 
-        self::assertSame('assistant_message', $calls[1][0]);
+        self::assertSame('llm_start', $calls[1][0]);
         self::assertSame(0, $calls[1][1]['iteration']);
-        self::assertSame('Done.', $calls[1][1]['message']['content']);
+
+        self::assertSame('assistant_message', $calls[2][0]);
+        self::assertSame(0, $calls[2][1]['iteration']);
+        self::assertSame('Done.', $calls[2][1]['message']['content']);
     }
 }

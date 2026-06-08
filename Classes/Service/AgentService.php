@@ -78,8 +78,17 @@ class AgentService implements LoggerAwareInterface
         // Set up backend user context from task's cruser_id (and workspace, if persisted)
         $this->setupBackendUserContext((int)($task['cruser_id'] ?? 0), (int)($task['workspace_id'] ?? 0));
 
-        // Load or build messages
+        // For fresh tasks (no persisted messages yet) buildMessages() synthesizes
+        // an assistant turn with pre-loaded context tool calls. These never pass
+        // through runLoop and would otherwise only become visible to the UI after
+        // a page reload — stream them explicitly so the chat renders them live.
+        $isFreshTask = $this->decodeMessages($task['messages'] ?? null) === null;
+
         $messages = $this->buildMessages($task);
+
+        if ($isFreshTask && $progress !== null) {
+            $this->emitInitialContextEvents($messages, $progress);
+        }
 
         $this->runLoop($taskUid, $messages, $progress);
     }
@@ -315,21 +324,23 @@ class AgentService implements LoggerAwareInterface
         $config = $this->extensionConfiguration->get('agent');
         $systemPrompt = $config['systemPrompt'] ?? 'You are a helpful TYPO3 CMS assistant.';
 
+        $userMessage = ['role' => 'user', 'content' => $task['prompt'] ?? ''];
         $messages = [
             ['role' => 'system', 'content' => $systemPrompt],
-            ['role' => 'user', 'content' => $task['prompt'] ?? ''],
         ];
 
-        // Build context tool calls to inject as a simulated assistant turn.
-        // This makes the LLM see the context as structured tool output rather
-        // than prose, so it knows the data is already fetched and which tools
-        // produced it.
+        // Build context tool calls to inject as a simulated assistant turn
+        // BEFORE the user prompt. From the LLM's perspective the agent has
+        // already loaded the working context (page/record the user is on) as
+        // its first action, and the user prompt then arrives with that context
+        // visible. The user message is appended after the context block below.
         $pid = (int)($task['pid'] ?? 0);
         $contextTable = (string)($task['context_table'] ?? '');
         $contextUid = (int)($task['context_uid'] ?? 0);
 
         $toolCalls = [];
         $toolResults = [];
+        $loadedParts = [];
 
         // Page context via GetPage
         if ($pid > 0) {
@@ -349,11 +360,14 @@ class AgentService implements LoggerAwareInterface
                     'tool_call_id' => $callId,
                     'content' => $pageContext,
                 ];
+                $loadedParts[] = 'Seite #' . $pid;
             }
         }
 
-        // Record context via ReadTable
-        if ($contextTable !== '' && $contextUid > 0) {
+        // Record context via ReadTable — skip when it would duplicate the
+        // page context already loaded above (same UID on the pages table).
+        $isPageDuplicate = $contextTable === 'pages' && $contextUid === $pid && $pid > 0;
+        if ($contextTable !== '' && $contextUid > 0 && !$isPageDuplicate) {
             $recordContext = $this->getRecordContext($contextTable, $contextUid);
             if ($recordContext !== '') {
                 $callId = 'record_context_' . $contextTable . '_' . $contextUid;
@@ -370,20 +384,81 @@ class AgentService implements LoggerAwareInterface
                     'tool_call_id' => $callId,
                     'content' => $recordContext,
                 ];
+                $loadedParts[] = $contextTable . ' #' . $contextUid;
             }
         }
 
-        // Append the simulated assistant tool-call turn + results
+        // Append the simulated assistant tool-call turn + results.
+        // The narration in `content` frames the pre-fetched tool calls as the
+        // working context the user is currently on — without it the LLM has
+        // to infer purpose from message position alone.
         if ($toolCalls !== []) {
             $messages[] = [
                 'role' => 'assistant',
-                'content' => null,
+                'content' => 'Ich lade zuerst den aktuellen Arbeitskontext: ' . implode(', ', $loadedParts) . '.',
                 'tool_calls' => $toolCalls,
             ];
             array_push($messages, ...$toolResults);
         }
 
+        $messages[] = $userMessage;
+
         return $messages;
+    }
+
+    /**
+     * Emit progress events for the synthetic turns produced by buildMessages()
+     * so the chat UI can render them in the same order they will appear after
+     * a reload. For a fresh task the persisted order is
+     *   [system, (assistant_narration, tool, ...), user]
+     * which means the UI must see the synthetic context block (if any) BEFORE
+     * the user prompt — the `user_message` event at the end materializes the
+     * user turn that buildMessages() appended last.
+     *
+     * iteration=-1 marks these as pre-loop (not part of any LLM iteration).
+     *
+     * @param callable(string, array): void $progress
+     */
+    private function emitInitialContextEvents(array $messages, callable $progress): void
+    {
+        $toolResultsByCallId = [];
+        foreach ($messages as $msg) {
+            if (($msg['role'] ?? '') === 'tool' && isset($msg['tool_call_id'])) {
+                $toolResultsByCallId[(string)$msg['tool_call_id']] = (string)($msg['content'] ?? '');
+            }
+        }
+
+        foreach ($messages as $msg) {
+            if (($msg['role'] ?? '') !== 'assistant' || empty($msg['tool_calls'])) {
+                continue;
+            }
+            $progress('assistant_message', ['iteration' => -1, 'message' => $msg]);
+            foreach ($msg['tool_calls'] as $toolCall) {
+                $toolCallId = (string)($toolCall['id'] ?? '');
+                $toolName = (string)($toolCall['function']['name'] ?? '');
+                $progress('tool_start', [
+                    'iteration' => -1,
+                    'tool_call_id' => $toolCallId,
+                    'tool_name' => $toolName,
+                    'arguments' => $toolCall['function']['arguments'] ?? '{}',
+                ]);
+                if (isset($toolResultsByCallId[$toolCallId])) {
+                    $progress('tool_result', [
+                        'iteration' => -1,
+                        'tool_call_id' => $toolCallId,
+                        'tool_name' => $toolName,
+                        'content' => $toolResultsByCallId[$toolCallId],
+                    ]);
+                }
+            }
+        }
+
+        foreach ($messages as $msg) {
+            if (($msg['role'] ?? '') === 'user') {
+                $progress('user_message', ['message' => $msg]);
+                break;
+            }
+        }
     }
 
     /**

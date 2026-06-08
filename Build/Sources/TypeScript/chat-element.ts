@@ -386,7 +386,9 @@ export class ChatElement extends LitElement {
           ${msg.content
             ? html`<div class="chat-msg-content">${unsafeHTML(this.renderMarkdown(msg.content))}</div>`
             : nothing}
-          ${msg.tool_calls?.map(tc => this.renderToolCall(tc)) ?? nothing}
+          ${msg.tool_calls && msg.tool_calls.length > 0
+            ? this.renderToolCallsGroup(msg.tool_calls)
+            : nothing}
         </div>
       `;
     }
@@ -409,9 +411,25 @@ export class ChatElement extends LitElement {
     `;
   }
 
+  private renderToolCallsGroup(tcs: ToolCall[]): TemplateResult {
+    const count = tcs.length;
+    const noun = count === 1 ? 'Tool Call' : 'Tool Calls';
+    return html`
+      <details class="chat-toolcalls mt-2 p-2 rounded border bg-body-tertiary small">
+        <summary class="d-flex align-items-center gap-2">
+          <typo3-backend-icon identifier="actions-cog" size="small"></typo3-backend-icon>
+          <span><strong>${count}</strong> ${noun}</span>
+        </summary>
+        <div class="d-flex flex-column gap-2 mt-2">
+          ${tcs.map(tc => this.renderToolCall(tc))}
+        </div>
+      </details>
+    `;
+  }
+
   private renderToolCall(tc: ToolCall): TemplateResult {
     return html`
-      <details class="bg-warning-subtle mt-2 p-2 border-start border-3 border-warning font-monospace small">
+      <details class="chat-toolcall p-2 rounded border bg-body font-monospace small">
         <summary>
           ${tc.function?.name ?? 'unknown'}
         </summary>
@@ -579,9 +597,10 @@ export class ChatElement extends LitElement {
   // -- Auto-start ------------------------------------------------------------
 
   private async doAutoStart(): Promise<void> {
-    if (this.initialPrompt) {
-      this.messages = [...this.messages, {role: 'user', content: this.initialPrompt}];
-    }
+    // Note: the user-bubble is intentionally NOT pushed optimistically here.
+    // The backend streams a `user_message` event after any synthetic context
+    // turns so live and reload renderings stay identical (the persisted order
+    // is [system, assistant_context?, tool*, user, ...]).
     this.loading = true;
     await this.sendStreaming('');
     this.finishSend();
@@ -707,6 +726,17 @@ export class ChatElement extends LitElement {
       case 'tool_call_delta':
         this.thinking = false;
         break;
+
+      case 'user_message': {
+        // Emitted exactly once during initial processing, after any synthetic
+        // context turns. Renders the user prompt in the same slot it occupies
+        // in the persisted message array.
+        const msg = data.message as ChatMessage | undefined;
+        if (msg) {
+          this.messages = [...this.messages, msg];
+        }
+        break;
+      }
 
       case 'assistant_message': {
         this.thinking = false;

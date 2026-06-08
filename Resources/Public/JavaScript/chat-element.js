@@ -254,7 +254,7 @@ let ChatElement = class extends LitElement {
         <div class="rounded-4 bg-white border p-3 me-3">
           <div class="chat-msg-role fw-bold small opacity-75 mb-1 text-uppercase">${roleLabel}</div>
           ${msg.content ? html`<div class="chat-msg-content">${unsafeHTML(this.renderMarkdown(msg.content))}</div>` : nothing}
-          ${msg.tool_calls?.map((tc) => this.renderToolCall(tc)) ?? nothing}
+          ${msg.tool_calls && msg.tool_calls.length > 0 ? this.renderToolCallsGroup(msg.tool_calls) : nothing}
         </div>
       `;
     }
@@ -269,9 +269,24 @@ let ChatElement = class extends LitElement {
       </div>
     `;
   }
+  renderToolCallsGroup(tcs) {
+    const count = tcs.length;
+    const noun = count === 1 ? "Tool Call" : "Tool Calls";
+    return html`
+      <details class="chat-toolcalls mt-2 p-2 rounded border bg-body-tertiary small">
+        <summary class="d-flex align-items-center gap-2">
+          <typo3-backend-icon identifier="actions-cog" size="small"></typo3-backend-icon>
+          <span><strong>${count}</strong> ${noun}</span>
+        </summary>
+        <div class="d-flex flex-column gap-2 mt-2">
+          ${tcs.map((tc) => this.renderToolCall(tc))}
+        </div>
+      </details>
+    `;
+  }
   renderToolCall(tc) {
     return html`
-      <details class="bg-warning-subtle mt-2 p-2 border-start border-3 border-warning font-monospace small">
+      <details class="chat-toolcall p-2 rounded border bg-body font-monospace small">
         <summary>
           ${tc.function?.name ?? "unknown"}
         </summary>
@@ -410,9 +425,6 @@ let ChatElement = class extends LitElement {
   }
   // -- Auto-start ------------------------------------------------------------
   async doAutoStart() {
-    if (this.initialPrompt) {
-      this.messages = [...this.messages, { role: "user", content: this.initialPrompt }];
-    }
     this.loading = true;
     await this.sendStreaming("");
     this.finishSend();
@@ -515,6 +527,13 @@ let ChatElement = class extends LitElement {
       case "tool_call_delta":
         this.thinking = false;
         break;
+      case "user_message": {
+        const msg = data.message;
+        if (msg) {
+          this.messages = [...this.messages, msg];
+        }
+        break;
+      }
       case "assistant_message": {
         this.thinking = false;
         const msg = data.message;
