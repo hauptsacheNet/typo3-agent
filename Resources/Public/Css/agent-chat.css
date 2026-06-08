@@ -60,14 +60,25 @@ hn-agent-chat .chat-upload-zone #typo3-filelist {
     display: none !important;
 }
 
-hn-agent-chat .chat-attachments .badge {
-    padding: 0.35rem 0.5rem;
-    font-weight: normal;
-    font-size: 0.875rem;
-}
-
-hn-agent-chat .chat-attachments .badge button {
+hn-agent-chat .chat-attachment-chip button {
     background: transparent;
     color: inherit;
     line-height: 1;
+}
+
+hn-agent-chat .chat-attachment-thumb {
+    width: 48px;
+    height: 48px;
+    object-fit: cover;
+    flex: 0 0 48px;
+}
+
+hn-agent-chat .chat-attachment-icon {
+    width: 48px;
+    height: 48px;
+    flex: 0 0 48px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bs-tertiary-bg, rgba(0, 0, 0, 0.05));
 }

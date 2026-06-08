@@ -25,7 +25,6 @@ use TYPO3\CMS\Core\Resource\Folder;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Imaging\IconFactory;
 use TYPO3\CMS\Core\Imaging\IconSize;
-use TYPO3\CMS\Core\Page\PageRenderer;
 
 /**
  * Backend module controller for chatting with the AI agent.
@@ -53,7 +52,6 @@ class ChatController
         private readonly PageRepository        $pageRepository,
         private readonly ConnectionPool        $connectionPool,
         private readonly DefaultUploadFolderResolver $defaultUploadFolderResolver,
-        private readonly PageRenderer          $pageRenderer,
     )
     {
     }
@@ -253,7 +251,28 @@ class ChatController
                 'task' => $taskUid,
                 'id' => $pageId,
             ]),
+            'fileInfoUri' => (string)$this->uriBuilder->buildUriFromRoute('ajax_ai_agent_file_info'),
         ])->renderResponse('Chat/Show');
+    }
+
+    public function fileInfoAction(ServerRequestInterface $request): ResponseInterface
+    {
+        $uid = (int)($request->getQueryParams()['uid'] ?? 0);
+        if ($uid <= 0) {
+            return new JsonResponse(['error' => 'invalid uid'], 400);
+        }
+        try {
+            $file = GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class)->getFileObject($uid);
+        } catch (\Throwable) {
+            return new JsonResponse(['error' => 'not found'], 404);
+        }
+        $iconHtml = $this->iconFactory->getIconForResource($file, IconSize::SMALL)->render();
+        return new JsonResponse([
+            'uid' => $file->getUid(),
+            'identifier' => $file->getCombinedIdentifier(),
+            'name' => $file->getName(),
+            'iconHtml' => $iconHtml,
+        ]);
     }
 
     public function newAction(ServerRequestInterface $request): ResponseInterface

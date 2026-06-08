@@ -72,6 +72,7 @@ export class ChatElement extends LitElement {
   @property({attribute: 'switch-workspace-uri'}) switchWorkspaceUri = '';
   @property({attribute: 'default-upload-folder'}) defaultUploadFolder = '';
   @property({attribute: 'file-browser-uri'}) fileBrowserUri = '';
+  @property({attribute: 'file-info-uri'}) fileInfoUri = '';
 
   @property({
     attribute: 'initial-messages',
@@ -148,7 +149,47 @@ export class ChatElement extends LitElement {
     this.addAttachment({uid: file.uid, identifier: file.id, name: file.name, iconHtml: file.icon});
   };
 
+  // DragUploader sends this postMessage in IRRE mode for BOTH the normal
+  // upload path and the "use existing" override path — the only reliable
+  // success signal for existing-file selections, since no uploadSuccess
+  // DOM event fires there.
+  private irreInsertListener = (e: MessageEvent): void => {
+    if (!MessageUtility.verifyOrigin(e.origin)) return;
+    const data = e.data as {actionName?: string; objectGroup?: string; table?: string; uid?: number};
+    if (data.actionName !== 'typo3:foreignRelation:insert') return;
+    if (data.objectGroup !== 'hn-agent-chat') return;
+    if (data.table !== 'sys_file' || !data.uid) return;
+    const uid = data.uid;
+    this.addAttachment({uid, name: `sys_file:${uid}`});
+    void this.fetchFileInfo(uid);
+  };
+
+  private async fetchFileInfo(uid: number): Promise<void> {
+    if (!this.fileInfoUri) return;
+    try {
+      const url = new URL(this.fileInfoUri, window.location.origin);
+      url.searchParams.set('uid', String(uid));
+      const response = await fetch(url.toString(), {headers: {'Accept': 'application/json'}});
+      if (!response.ok) return;
+      const info = await response.json() as {uid: number; identifier?: string; name?: string; iconHtml?: string};
+      if (!info.uid) return;
+      this.addAttachment({
+        uid: info.uid,
+        identifier: info.identifier,
+        name: info.name ?? `sys_file:${info.uid}`,
+        iconHtml: info.iconHtml,
+      });
+    } catch {
+      // swallow — stub chip remains visible
+    }
+  }
+
   // -- Lifecycle -------------------------------------------------------------
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    window.addEventListener('message', this.irreInsertListener);
+  }
 
   override firstUpdated(): void {
     this.messages = this.mergeToolResults(this.initialMessages);
@@ -168,6 +209,7 @@ export class ChatElement extends LitElement {
     super.disconnectedCallback();
     this.uploadTriggerEl?.removeEventListener('uploadSuccess', this.uploadSuccessListener);
     window.removeEventListener('message', this.elementBrowserListener);
+    window.removeEventListener('message', this.irreInsertListener);
   }
 
   private isWorkspaceMismatch(): boolean {
@@ -196,39 +238,49 @@ export class ChatElement extends LitElement {
           ${this.thinking && !this.isStreaming ? this.renderThinkingIndicator() : nothing}
         </div>
 
-        <div class="t3js-drag-uploader chat-upload-zone"
-             data-target-folder=${this.defaultUploadFolder}
-             data-max-file-size="0"
-             data-dropzone-target=".chat-upload-anchor"
-             data-dropzone-trigger=".chat-upload-trigger"
-             data-default-action="rename"
-             data-file-irre-object="hn-agent-chat">
+        <div
+            class="t3js-drag-uploader chat-upload-zone"
+            data-target-folder=${this.defaultUploadFolder}
+            data-max-file-size="0"
+            data-dropzone-target=".chat-upload-anchor"
+            data-dropzone-trigger=".chat-upload-trigger"
+            data-default-action="rename"
+            data-file-irre-object="hn-agent-chat">
 
-          <div class="chat-upload-anchor"></div>
+          
 
           ${mismatch ? this.renderWorkspaceMismatch() : nothing}
 
-          ${this.renderAttachmentsBar(uploadEnabled, pickEnabled, inputDisabled)}
 
-          <form class="position-relative" @submit=${this.onSubmit}>
-          <textarea
-              name="message"
-              class="chat-input d-block w-100 rounded-4 border p-3 bg-white"
-              rows="2"
-              placeholder="Type a follow-up message\u2026"
-              .value=${this.inputValue}
-              ?disabled=${inputDisabled}
-              @input=${this.onInput}
-              @keydown=${this.onKeydown}
-          ></textarea>
-            <div class="position-absolute bottom-0 end-0 p-2">
-              <button type="submit" class="btn" ?disabled=${!canSubmit}>
-                <typo3-backend-icon
-                    identifier="actions-arrow-down-start-alt"
-                    size="small"/>
-              </button>
+          <form class="position-relative rounded-4 border bg-white overflow-hidden d-flex flex-column gap-3 p-3 " @submit=${this.onSubmit}>
+            <textarea
+                name="message"
+                class="chat-input border-0 d-block w-100 bg-white"
+                rows="2"
+                placeholder="Type a follow-up message\u2026"
+                .value=${this.inputValue}
+                ?disabled=${inputDisabled}
+                @input=${this.onInput}
+                @keydown=${this.onKeydown}
+            ></textarea>
+            ${this.attachments.length > 0
+              ? html`<div class="chat-attachments d-flex flex-wrap gap-2">
+                  ${this.attachments.map((a, i) => this.renderAttachmentChip(a, i))}
+                </div>`
+              : nothing}
+            <div class="chat-upload-anchor" style="display:none"></div>
+            <div class="w-100 d-flex flex-row">
+              ${this.renderAttachmentsBar(uploadEnabled, pickEnabled, inputDisabled)}
+              <div class="ms-auto">
+                <button type="submit" class="btn btn-sm" ?disabled=${!canSubmit}>
+                  <typo3-backend-icon
+                      identifier="actions-arrow-down-start-alt"
+                      size="small"/>
+                </button>
+              </div>
             </div>
           </form>
+
           ${this.errorMessage
               ? html`
                 <div class="alert alert-danger">${this.errorMessage}</div>`
@@ -241,7 +293,7 @@ export class ChatElement extends LitElement {
 
   private renderAttachmentsBar(uploadEnabled: boolean, pickEnabled: boolean, inputDisabled: boolean): TemplateResult {
     return html`
-      <div class="chat-attachments d-flex flex-wrap align-items-center gap-2 mb-2">
+      <div>
         <button type="button"
                 class="chat-upload-trigger btn btn-sm btn-default"
                 ?disabled=${inputDisabled || !uploadEnabled}
@@ -256,22 +308,51 @@ export class ChatElement extends LitElement {
           <typo3-backend-icon identifier="actions-folder" size="small"/>
           Ausw\u00e4hlen
         </button>
-        ${this.attachments.map((a, i) => this.renderAttachmentChip(a, i))}
+        
       </div>
     `;
   }
 
   private renderAttachmentChip(att: Attachment, index: number): TemplateResult {
+    const thumbUrl = this.buildThumbnailUrl(att);
+    const onThumbError = (e: Event): void => {
+      const img = e.target as HTMLImageElement;
+      img.style.display = 'none';
+      const fallback = img.nextElementSibling as HTMLElement | null;
+      if (fallback) fallback.style.display = '';
+    };
     return html`
-      <span class="badge bg-secondary d-inline-flex align-items-center gap-1">
-        ${att.iconHtml ? unsafeHTML(att.iconHtml) : html`<typo3-backend-icon identifier="mimetypes-other-other" size="small"/>`}
-        <span>${att.name}</span>
+      <span class="chat-attachment-chip d-inline-flex align-items-center gap-2 border rounded bg-body p-1 pe-2">
+        ${thumbUrl
+          ? html`
+              <img src=${thumbUrl} alt="" class="chat-attachment-thumb rounded" @error=${onThumbError}/>
+              <span class="chat-attachment-icon rounded" style="display:none">${this.renderFallbackIcon(att)}</span>`
+          : html`<span class="chat-attachment-icon rounded">${this.renderFallbackIcon(att)}</span>`}
+        <span class="chat-attachment-name">${att.name}</span>
         <button type="button"
-                class="btn btn-sm p-0 ms-1 text-white border-0"
+                class="btn btn-sm p-0 border-0 text-muted"
                 title="Entfernen"
                 @click=${() => this.removeAttachment(index)}>\u00d7</button>
       </span>
     `;
+  }
+
+  private renderFallbackIcon(att: Attachment): TemplateResult {
+    if (att.iconHtml) return html`${unsafeHTML(att.iconHtml)}`;
+    return html`<typo3-backend-icon identifier="mimetypes-other-other" size="medium"></typo3-backend-icon>`;
+  }
+
+  private buildThumbnailUrl(att: Attachment): string {
+    const base = (window.top as unknown as {TYPO3?: {settings?: {Resource?: {thumbnailUrl?: string}}}})
+      ?.TYPO3?.settings?.Resource?.thumbnailUrl;
+    if (!base) return '';
+    const ref = att.uid ?? att.identifier;
+    if (ref === undefined || ref === null || ref === '') return '';
+    const url = new URL(base, window.location.origin);
+    url.searchParams.set('identifier', String(ref));
+    url.searchParams.set('size', 'large');
+    url.searchParams.set('keepAspectRatio', 'false');
+    return url.toString();
   }
 
   private renderWorkspaceMismatch(): TemplateResult {
@@ -438,12 +519,26 @@ export class ChatElement extends LitElement {
   }
 
   private addAttachment(att: Attachment): void {
-    const isDup = this.attachments.some(existing =>
-      (att.uid && existing.uid === att.uid) ||
-      (att.identifier && existing.identifier === att.identifier),
+    const existingIndex = this.attachments.findIndex(existing =>
+      (att.uid !== undefined && existing.uid === att.uid) ||
+      (att.identifier !== undefined && existing.identifier === att.identifier),
     );
-    if (isDup) return;
+    if (existingIndex >= 0) {
+      const existing = this.attachments[existingIndex];
+      const merged: Attachment = {
+        uid: existing.uid ?? att.uid,
+        identifier: existing.identifier ?? att.identifier,
+        name: this.isStubName(existing.name) && !this.isStubName(att.name) ? att.name : existing.name,
+        iconHtml: existing.iconHtml ?? att.iconHtml,
+      };
+      this.attachments = this.attachments.map((a, i) => i === existingIndex ? merged : a);
+      return;
+    }
     this.attachments = [...this.attachments, att];
+  }
+
+  private isStubName(name: string): boolean {
+    return /^sys_file:\d+$/.test(name);
   }
 
   private removeAttachment(index: number): void {
