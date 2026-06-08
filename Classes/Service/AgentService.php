@@ -20,18 +20,12 @@ use TYPO3\CMS\Core\Context\WorkspaceAspect;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 use TYPO3\CMS\Core\Resource\File;
-use TYPO3\CMS\Core\Resource\ResourceFactory;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
 class AgentService implements LoggerAwareInterface
 {
     use LoggerAwareTrait;
-
-    private const SUPPORTED_IMAGE_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
-    private const SUPPORTED_DOCUMENT_MIME_TYPES = ['application/pdf'];
-    private const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
-    private const MAX_DOCUMENT_BYTES = 30 * 1024 * 1024;
 
     public function __construct(
         private readonly LlmService $llmService,
@@ -40,7 +34,7 @@ class AgentService implements LoggerAwareInterface
         private readonly ExtensionConfiguration $extensionConfiguration,
         private readonly ConnectionPool $connectionPool,
         private readonly AgentTaskRepository $repository,
-        private readonly ResourceFactory $resourceFactory,
+        private readonly AttachmentService $attachmentService,
     ) {}
 
     /**
@@ -238,24 +232,32 @@ class AgentService implements LoggerAwareInterface
                     );
 
                     // Track workspace changes from write operations
-                    $change = $this->trackChange($taskUid, $toolResult);
+                    $change = $this->trackChange($taskUid, $toolResult['text']);
                     if ($change !== null && $progress !== null) {
                         $progress('change_tracked', $change);
                     }
 
-                    // Append tool result message
-                    $messages[] = [
+                    // Append tool result message. `_media` carries inline image
+                    // payloads (e.g. from ReadFile on a sys_file image) — kept
+                    // separate from the human-readable `content` so the UI can
+                    // render text as-is while serializeForLlm() rebuilds the
+                    // multimodal block array for the LLM.
+                    $toolMessage = [
                         'role' => 'tool',
                         'tool_call_id' => $toolCallId,
-                        'content' => $toolResult,
+                        'content' => $toolResult['text'],
                     ];
+                    if (!empty($toolResult['media'])) {
+                        $toolMessage['_media'] = $toolResult['media'];
+                    }
+                    $messages[] = $toolMessage;
 
                     if ($progress !== null) {
                         $progress('tool_result', [
                             'iteration' => $iteration,
                             'tool_call_id' => $toolCallId,
                             'tool_name' => $toolName,
-                            'content' => $toolResult,
+                            'content' => $toolResult['text'],
                         ]);
                     }
                 }
@@ -718,7 +720,7 @@ class AgentService implements LoggerAwareInterface
             if (!is_array($entry)) {
                 continue;
             }
-            $file = $this->resolveAttachmentFile($entry);
+            $file = $this->attachmentService->resolveFile($entry);
             if ($file instanceof File) {
                 $refs[] = [
                     'uid' => $file->getUid(),
@@ -746,19 +748,17 @@ class AgentService implements LoggerAwareInterface
     /**
      * Project the persisted message array into the form the LLM client expects.
      *
-     * For user messages without attachments: passthrough (with the empty
-     * `attachments` key dropped). For messages with attachments:
-     *  - A marker text block is always produced (lists each attachment as
-     *    `sys_file:UID — path (mime)` so the LLM can refer to them in
-     *    subsequent tool calls).
-     *  - Supported images become OpenAI-compatible `image_url` blocks (base64
-     *    data URI).
-     *  - Supported documents (PDF) become `file` blocks (base64 data URI).
-     *  - Unresolvable / oversize / unsupported attachments stay marker-only
-     *    with an explanatory note in the marker line.
-     *  - If at least one media block is produced, `content` becomes an
-     *    OpenAI/OpenRouter content-block array. If only the marker is left,
-     *    `content` stays a plain string (cheaper, identical semantics).
+     * User attachments are surfaced as a metadata-only marker block
+     * (`sys_file:UID — path (mime)`). The LLM never sees the file bytes
+     * directly via this path — it has to call the `ReadFile` tool to actually
+     * inspect content. This keeps the file-access path uniform (always
+     * through a tool) and keeps user messages small.
+     *
+     * Tool messages may carry a `_media` field produced by the ToolConverter
+     * when the tool returned ImageContent (e.g. ReadFile on a sys_file).
+     * Those are converted into OpenAI/OpenRouter image_url/file content
+     * blocks so the LLM actually sees the bytes — the persisted `content`
+     * string stays untouched for the UI.
      *
      * @param array<int, array<string, mixed>> $messages
      * @return array<int, array<string, mixed>>
@@ -766,9 +766,78 @@ class AgentService implements LoggerAwareInterface
     private function serializeForLlm(array $messages): array
     {
         $out = [];
+        // Media from tool results (both images and documents) accumulate
+        // across a tool-call batch and get emitted as ONE follow-up user
+        // message right after the LAST tool message of that batch.
+        //
+        // OpenAI/OpenRouter strictly require all `tool` messages to follow
+        // their owning assistant turn contiguously — inserting any non-tool
+        // role between sibling tool results invalidates the sequence and
+        // OpenRouter returns 500. Putting blocks INSIDE `tool` content also
+        // turns out to be brittle through the OpenAI→Anthropic mapping (the
+        // tool_result block expects string-or-image-array on the Anthropic
+        // side and providers reject mixed content). The safest pattern that
+        // matches what already works for user attachments: text-only tool
+        // result, real media in a follow-up user-style message.
+        $pendingMediaBlocks = [];
+        $flushMedia = static function () use (&$out, &$pendingMediaBlocks): void {
+            if ($pendingMediaBlocks === []) {
+                return;
+            }
+            $out[] = [
+                'role' => 'user',
+                'content' => array_merge(
+                    [['type' => 'text', 'text' => 'Inhalt der über ReadFile abgerufenen Datei(en):']],
+                    $pendingMediaBlocks,
+                ),
+            ];
+            $pendingMediaBlocks = [];
+        };
+
         foreach ($messages as $message) {
-            if (!is_array($message) || empty($message['attachments']) || !is_array($message['attachments'])) {
-                if (is_array($message) && array_key_exists('attachments', $message)) {
+            if (!is_array($message)) {
+                $flushMedia();
+                $out[] = $message;
+                continue;
+            }
+
+            $role = $message['role'] ?? '';
+
+            // Any non-tool message ends the current tool batch — flush
+            // accumulated media now so blocks land after all tool results
+            // but before the next turn.
+            if ($role !== 'tool') {
+                $flushMedia();
+            }
+
+            if ($role === 'tool' && !empty($message['_media']) && is_array($message['_media'])) {
+                foreach ($message['_media'] as $media) {
+                    if (!is_array($media)) {
+                        continue;
+                    }
+                    $mime = (string)($media['mime'] ?? 'application/octet-stream');
+                    $data = (string)($media['data'] ?? '');
+                    if ($data === '') {
+                        continue;
+                    }
+                    $dataUri = 'data:' . $mime . ';base64,' . $data;
+                    if (str_starts_with($mime, 'image/')) {
+                        $pendingMediaBlocks[] = ['type' => 'image_url', 'image_url' => ['url' => $dataUri]];
+                    } else {
+                        $filename = (string)($media['filename'] ?? 'attachment');
+                        $pendingMediaBlocks[] = ['type' => 'file', 'file' => ['filename' => $filename, 'file_data' => $dataUri]];
+                    }
+                }
+                unset($message['_media']);
+                // tool_result stays plain text — actual bytes ride in the
+                // upcoming follow-up user message instead.
+                $message['content'] = (string)($message['content'] ?? '');
+                $out[] = $message;
+                continue;
+            }
+
+            if (empty($message['attachments']) || !is_array($message['attachments'])) {
+                if (array_key_exists('attachments', $message)) {
                     unset($message['attachments']);
                 }
                 $out[] = $message;
@@ -776,77 +845,41 @@ class AgentService implements LoggerAwareInterface
             }
 
             $markerLines = [];
-            $mediaBlocks = [];
             foreach ($message['attachments'] as $ref) {
                 if (!is_array($ref)) {
                     continue;
                 }
-                [$block, $note] = $this->buildContentBlockForAttachment($ref);
-                $markerLines[] = $this->buildAttachmentMarker($ref, $note);
-                if ($block !== null) {
-                    $mediaBlocks[] = $block;
-                }
+                $markerLines[] = $this->buildAttachmentMarker($ref, $this->attachmentNoteFor($ref));
             }
 
             $userText = (string)($message['content'] ?? '');
-            $markerBlock = "---\nAngehängte Dateien:\n" . implode("\n", $markerLines);
-            $combinedText = $userText !== '' ? rtrim($userText) . "\n\n" . $markerBlock : $markerBlock;
-
-            if ($mediaBlocks === []) {
-                $message['content'] = $combinedText;
-            } else {
-                $message['content'] = array_merge(
-                    [['type' => 'text', 'text' => $combinedText]],
-                    $mediaBlocks,
-                );
-            }
+            $markerBlock = "---\nAngehängte Dateien (Inhalt via ReadFile abrufbar):\n" . implode("\n", $markerLines);
+            $message['content'] = $userText !== '' ? rtrim($userText) . "\n\n" . $markerBlock : $markerBlock;
             unset($message['attachments']);
             $out[] = $message;
         }
+
+        // Flush any media that came from the last batch in the conversation.
+        $flushMedia();
         return $out;
     }
 
     /**
-     * Classify an attachment for LLM-embedding eligibility, *without* reading
-     * the file contents. Single source of truth for the embed decision —
-     * used by both buildContentBlockForAttachment() (actual embed) and
-     * previewAttachment() (UI pre-flight). Reads only FAL metadata.
+     * Produce the marker-line note for an attachment. Image/PDF inside the
+     * size limit need no note (LLM can call ReadFile to inspect). Oversize
+     * and unsupported get a hint so the LLM doesn't waste a tool call.
      *
      * @param array<string, mixed> $ref
-     * @return array{kind: 'image'|'document'|'unsupported'|'oversize'|'unresolvable', mime: string, size: int, file: ?File, reason: ?string}
      */
-    private function classifyAttachment(array $ref): array
+    private function attachmentNoteFor(array $ref): ?string
     {
-        if (!empty($ref['unresolvable'])) {
-            return ['kind' => 'unresolvable', 'mime' => '', 'size' => 0, 'file' => null, 'reason' => 'Datei nicht auflösbar'];
-        }
-
-        $file = $this->resolveAttachmentFile($ref);
-        if (!$file instanceof File) {
-            return ['kind' => 'unresolvable', 'mime' => '', 'size' => 0, 'file' => null, 'reason' => 'Datei nicht auflösbar'];
-        }
-
-        $mime = strtolower((string)$file->getMimeType());
-        $size = (int)$file->getSize();
-        $isImage = in_array($mime, self::SUPPORTED_IMAGE_MIME_TYPES, true);
-        $isDocument = in_array($mime, self::SUPPORTED_DOCUMENT_MIME_TYPES, true);
-
-        if (!$isImage && !$isDocument) {
-            return ['kind' => 'unsupported', 'mime' => $mime, 'size' => $size, 'file' => $file, 'reason' => 'Format nicht unterstützt'];
-        }
-
-        $limit = $isImage ? self::MAX_IMAGE_BYTES : self::MAX_DOCUMENT_BYTES;
-        if ($size > $limit) {
-            return [
-                'kind' => 'oversize',
-                'mime' => $mime,
-                'size' => $size,
-                'file' => $file,
-                'reason' => sprintf('zu groß (%s > %s)', $this->formatBytes($size), $this->formatBytes($limit)),
-            ];
-        }
-
-        return ['kind' => $isImage ? 'image' : 'document', 'mime' => $mime, 'size' => $size, 'file' => $file, 'reason' => null];
+        $info = $this->attachmentService->classify($ref);
+        return match ($info['kind']) {
+            'unresolvable' => 'Datei nicht auflösbar',
+            'unsupported' => 'Format nicht über ReadFile lesbar',
+            'oversize' => $info['reason'] . ' — Inhalt nicht abrufbar',
+            default => null,
+        };
     }
 
     /**
@@ -862,7 +895,7 @@ class AgentService implements LoggerAwareInterface
      */
     public function previewAttachment(array $ref): array
     {
-        $info = $this->classifyAttachment($ref);
+        $info = $this->attachmentService->classify($ref);
         $file = $info['file'];
         return [
             'uid' => $file?->getUid() ?? (int)($ref['uid'] ?? 0),
@@ -872,53 +905,6 @@ class AgentService implements LoggerAwareInterface
             'size' => $info['size'],
             'embedAsContent' => in_array($info['kind'], ['image', 'document'], true),
             'reason' => $info['reason'],
-        ];
-    }
-
-    /**
-     * Try to build an OpenRouter-compatible content block (image_url or file)
-     * for one attachment. Returns `[$block, $note]` — both may be null:
-     *  - $block === null means we don't ship the file as content; the marker
-     *    line will carry the explanation via $note.
-     *  - $note === null means the file was embedded successfully (no extra
-     *    note needed in the marker).
-     *
-     * @param array<string, mixed> $ref
-     * @return array{0: ?array<string, mixed>, 1: ?string}
-     */
-    private function buildContentBlockForAttachment(array $ref): array
-    {
-        $info = $this->classifyAttachment($ref);
-        $file = $info['file'];
-
-        if ($info['kind'] === 'unresolvable') {
-            return [null, 'Datei nicht auflösbar'];
-        }
-        if ($info['kind'] === 'unsupported') {
-            return [null, 'nur Metadaten'];
-        }
-        if ($info['kind'] === 'oversize') {
-            $this->logger?->warning('Attachment exceeds size limit, falling back to metadata only', [
-                'uid' => $file?->getUid(),
-                'mime' => $info['mime'],
-                'size' => $info['size'],
-            ]);
-            return [null, sprintf('%s — zu groß, nur Metadaten', $this->formatBytes($info['size']))];
-        }
-
-        $base64 = base64_encode($file->getContents());
-        $dataUri = 'data:' . $info['mime'] . ';base64,' . $base64;
-
-        if ($info['kind'] === 'image') {
-            return [
-                ['type' => 'image_url', 'image_url' => ['url' => $dataUri]],
-                null,
-            ];
-        }
-
-        return [
-            ['type' => 'file', 'file' => ['filename' => $file->getName(), 'file_data' => $dataUri]],
-            null,
         ];
     }
 
@@ -947,45 +933,5 @@ class AgentService implements LoggerAwareInterface
             $path = '';
         }
         return '- ' . $head . $path . ' (' . $parens . ')';
-    }
-
-    private function formatBytes(int $bytes): string
-    {
-        if ($bytes >= 1024 * 1024) {
-            return sprintf('%.1f MiB', $bytes / (1024 * 1024));
-        }
-        if ($bytes >= 1024) {
-            return sprintf('%.1f KiB', $bytes / 1024);
-        }
-        return $bytes . ' B';
-    }
-
-    /**
-     * @param array{uid?: int|string, identifier?: string} $entry
-     */
-    private function resolveAttachmentFile(array $entry): ?File
-    {
-        $uid = (int)($entry['uid'] ?? 0);
-        $identifier = trim((string)($entry['identifier'] ?? ''));
-        try {
-            if ($uid > 0) {
-                return $this->resourceFactory->getFileObject($uid);
-            }
-            if ($identifier !== '') {
-                $file = $this->resourceFactory->getFileObjectFromCombinedIdentifier($identifier);
-                return $file instanceof File ? $file : null;
-            }
-        } catch (\Throwable $e) {
-            $this->logger?->warning('Attachment could not be resolved', [
-                'uid' => $uid,
-                'identifier' => $identifier,
-                'exception' => $e->getMessage(),
-            ]);
-            return null;
-        }
-        $this->logger?->warning('Attachment entry has neither uid nor identifier', [
-            'entry' => $entry,
-        ]);
-        return null;
     }
 }

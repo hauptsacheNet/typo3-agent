@@ -68,6 +68,9 @@ class ToolConverterServiceTest extends FunctionalTestCase
         self::assertContains('Search', $toolNames);
         self::assertContains('ReadTable', $toolNames);
         self::assertContains('ListTables', $toolNames);
+        // ReadFile lives in the agent package and registers itself via the
+        // mcp.tool autoconfigure tag — must show up alongside vendor tools.
+        self::assertContains('ReadFile', $toolNames);
     }
 
     public function testExecuteToolCallSuccess(): void
@@ -78,8 +81,9 @@ class ToolConverterServiceTest extends FunctionalTestCase
             ['depth' => 1],
         );
 
-        self::assertNotEmpty($result);
-        self::assertStringNotContainsString('Error', $result);
+        self::assertNotEmpty($result['text']);
+        self::assertStringNotContainsString('Error', $result['text']);
+        self::assertSame([], $result['media']);
     }
 
     public function testExecuteToolCallWithStringArguments(): void
@@ -90,8 +94,8 @@ class ToolConverterServiceTest extends FunctionalTestCase
             '{"depth": 1}',
         );
 
-        self::assertNotEmpty($result);
-        self::assertStringNotContainsString('Error', $result);
+        self::assertNotEmpty($result['text']);
+        self::assertStringNotContainsString('Error', $result['text']);
     }
 
     public function testExecuteToolCallNotFound(): void
@@ -102,8 +106,9 @@ class ToolConverterServiceTest extends FunctionalTestCase
             [],
         );
 
-        self::assertStringContainsString('Error', $result);
-        self::assertStringContainsString('not found', $result);
+        self::assertStringContainsString('Error', $result['text']);
+        self::assertStringContainsString('not found', $result['text']);
+        self::assertSame([], $result['media']);
     }
 
     public function testExecuteToolCallHandlesErrors(): void
@@ -115,7 +120,8 @@ class ToolConverterServiceTest extends FunctionalTestCase
             ['uid' => -999],
         );
 
-        // Should return error string, not throw
-        self::assertIsString($result);
+        // Should return structured array with error text, not throw
+        self::assertIsArray($result);
+        self::assertIsString($result['text']);
     }
 }

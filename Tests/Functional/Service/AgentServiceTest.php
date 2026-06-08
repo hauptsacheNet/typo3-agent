@@ -6,6 +6,7 @@ namespace Hn\Agent\Tests\Functional\Service;
 
 use Hn\Agent\Domain\AgentTaskRepository;
 use Hn\Agent\Service\AgentService;
+use Hn\Agent\Service\AttachmentService;
 use Hn\Agent\Service\LlmService;
 use Hn\Agent\Service\ToolConverterService;
 use Hn\McpServer\MCP\ToolRegistry;
@@ -125,7 +126,7 @@ class AgentServiceTest extends FunctionalTestCase
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
-            GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class),
+            new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class)),
         );
     }
 
@@ -231,7 +232,7 @@ class AgentServiceTest extends FunctionalTestCase
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
-            GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class),
+            new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class)),
         );
 
         try {
@@ -300,7 +301,7 @@ class AgentServiceTest extends FunctionalTestCase
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
-            GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class),
+            new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class)),
         );
 
         // Pass an unresolvable attachment (no such sys_file UID) — keeps the
@@ -344,7 +345,7 @@ class AgentServiceTest extends FunctionalTestCase
         }
         self::assertNotNull($llmUserMsg, 'User message reached LlmService');
         self::assertArrayNotHasKey('attachments', $llmUserMsg, 'LLM payload has no structured attachments field');
-        self::assertStringContainsString('Angehängte Dateien:', $llmUserMsg['content']);
+        self::assertStringContainsString('Angehängte Dateien', $llmUserMsg['content']);
         self::assertStringContainsString('phantom.pdf', $llmUserMsg['content']);
         self::assertStringContainsString('nicht auflösbar', $llmUserMsg['content']);
     }
@@ -369,7 +370,7 @@ class AgentServiceTest extends FunctionalTestCase
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
-            $resourceFactory,
+            new AttachmentService($resourceFactory),
         );
     }
 
@@ -426,12 +427,13 @@ class AgentServiceTest extends FunctionalTestCase
         return null;
     }
 
-    public function testImageAttachmentBecomesImageUrlBlock(): void
+    public function testImageAttachmentStaysMarkerOnlyForReadFile(): void
     {
-        // Smallest valid PNG payload (1x1 transparent) — only the byte content
-        // matters for round-tripping through base64; the mock owns size/MIME.
-        $pngBytes = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkAAIAAAoAAv/lxKUAAAAASUVORK5CYII=');
-        $file = $this->buildFileMock(101, 'image/png', strlen($pngBytes), 'pixel.png', '1:/uploads/pixel.png', $pngBytes);
+        // The image is *not* embedded into the user message any more — the
+        // LLM has to call the ReadFile tool to actually see the bytes.
+        // content=null on the mock asserts that getContents() is never read
+        // during serialization (file bytes only flow through ReadFile).
+        $file = $this->buildFileMock(101, 'image/png', 2048, 'pixel.png', '1:/uploads/pixel.png', null);
         $resourceFactory = $this->buildResourceFactoryReturning(101, $file);
 
         $capturedMessages = [];
@@ -444,21 +446,16 @@ class AgentServiceTest extends FunctionalTestCase
         $userMsg = $this->findLlmUserMessage($capturedMessages[0], 'Was siehst du?');
         self::assertNotNull($userMsg, 'User message reached LlmService');
 
-        self::assertIsArray($userMsg['content'], 'Content is a block array when media is embedded');
-        self::assertCount(2, $userMsg['content'], 'Exactly one text + one media block');
-        self::assertSame('text', $userMsg['content'][0]['type']);
-        self::assertStringContainsString('Was siehst du?', $userMsg['content'][0]['text']);
-        self::assertStringContainsString('sys_file:101', $userMsg['content'][0]['text']);
-
-        self::assertSame('image_url', $userMsg['content'][1]['type']);
-        self::assertStringStartsWith('data:image/png;base64,', $userMsg['content'][1]['image_url']['url']);
-        self::assertStringContainsString(base64_encode($pngBytes), $userMsg['content'][1]['image_url']['url']);
+        self::assertIsString($userMsg['content'], 'Content stays plain text — files reach the LLM only via ReadFile');
+        self::assertStringContainsString('Was siehst du?', $userMsg['content']);
+        self::assertStringContainsString('sys_file:101', $userMsg['content']);
+        self::assertStringContainsString('image/png', $userMsg['content']);
+        self::assertStringContainsString('ReadFile', $userMsg['content']);
     }
 
-    public function testPdfAttachmentBecomesFileBlock(): void
+    public function testPdfAttachmentStaysMarkerOnlyForReadFile(): void
     {
-        $pdfBytes = "%PDF-1.4\n% minimal\n";
-        $file = $this->buildFileMock(202, 'application/pdf', strlen($pdfBytes), 'doc.pdf', '1:/uploads/doc.pdf', $pdfBytes);
+        $file = $this->buildFileMock(202, 'application/pdf', 4096, 'doc.pdf', '1:/uploads/doc.pdf', null);
         $resourceFactory = $this->buildResourceFactoryReturning(202, $file);
 
         $capturedMessages = [];
@@ -469,14 +466,12 @@ class AgentServiceTest extends FunctionalTestCase
 
         $userMsg = $this->findLlmUserMessage($capturedMessages[0], 'Fass zusammen.');
         self::assertNotNull($userMsg);
-        self::assertIsArray($userMsg['content']);
-        self::assertSame('file', $userMsg['content'][1]['type']);
-        self::assertSame('doc.pdf', $userMsg['content'][1]['file']['filename']);
-        self::assertStringStartsWith('data:application/pdf;base64,', $userMsg['content'][1]['file']['file_data']);
-        self::assertStringContainsString(base64_encode($pdfBytes), $userMsg['content'][1]['file']['file_data']);
+        self::assertIsString($userMsg['content']);
+        self::assertStringContainsString('sys_file:202', $userMsg['content']);
+        self::assertStringContainsString('application/pdf', $userMsg['content']);
     }
 
-    public function testOversizedImageFallsBackToMarkerOnly(): void
+    public function testOversizedImageMarkerWarnsLlmNotToCallReadFile(): void
     {
         // 6 MiB > 5 MiB image cap. content=null asserts getContents() is never invoked.
         $file = $this->buildFileMock(303, 'image/png', 6 * 1024 * 1024, 'huge.png', '1:/uploads/huge.png', null);
@@ -490,13 +485,13 @@ class AgentServiceTest extends FunctionalTestCase
 
         $userMsg = $this->findLlmUserMessage($capturedMessages[0], 'Trotzdem?');
         self::assertNotNull($userMsg);
-        self::assertIsString($userMsg['content'], 'Content stays a plain string when no media is embedded');
+        self::assertIsString($userMsg['content']);
         self::assertStringContainsString('sys_file:303', $userMsg['content']);
         self::assertStringContainsString('zu groß', $userMsg['content']);
-        self::assertStringContainsString('nur Metadaten', $userMsg['content']);
+        self::assertStringContainsString('nicht abrufbar', $userMsg['content']);
     }
 
-    public function testUnsupportedMimeFallsBackToMarkerOnly(): void
+    public function testUnsupportedMimeMarkerWarnsLlmNotToCallReadFile(): void
     {
         // text/plain isn't on our allowlist — even though small, must stay marker-only.
         $file = $this->buildFileMock(404, 'text/plain', 100, 'notes.txt', '1:/uploads/notes.txt', null);
@@ -513,7 +508,7 @@ class AgentServiceTest extends FunctionalTestCase
         self::assertIsString($userMsg['content']);
         self::assertStringContainsString('sys_file:404', $userMsg['content']);
         self::assertStringContainsString('text/plain', $userMsg['content']);
-        self::assertStringContainsString('nur Metadaten', $userMsg['content']);
+        self::assertStringContainsString('nicht über ReadFile lesbar', $userMsg['content']);
         self::assertStringNotContainsString('zu groß', $userMsg['content']);
     }
 
@@ -607,5 +602,239 @@ class AgentServiceTest extends FunctionalTestCase
         self::assertSame('assistant_message', $calls[2][0]);
         self::assertSame(0, $calls[2][1]['iteration']);
         self::assertSame('Done.', $calls[2][1]['message']['content']);
+    }
+
+    /**
+     * Tool messages may carry a `_media` field (set by AgentService::runLoop
+     * when the tool returned ImageContent). serializeForLlm() emits a
+     * text-only tool message followed by a synthetic user message carrying
+     * the image — putting the bytes inside `tool_result` content breaks
+     * OpenRouter's OpenAI→Anthropic mapping in some configurations, so we
+     * always route media through the user-message path that already works
+     * for chat attachments. The persisted `content` string stays untouched.
+     */
+    public function testToolMessageWithMediaBecomesMultimodalBlockForLlm(): void
+    {
+        $existingMessages = [
+            ['role' => 'system', 'content' => 'sys'],
+            ['role' => 'user', 'content' => 'show me'],
+            ['role' => 'assistant', 'content' => null, 'tool_calls' => [
+                ['id' => 'call_img', 'type' => 'function', 'function' => ['name' => 'ReadFile', 'arguments' => '{"uid":42}']],
+            ]],
+            [
+                'role' => 'tool',
+                'tool_call_id' => 'call_img',
+                'content' => "File: pixel.png\nMIME: image/png\nSize: 70 B\nUID: sys_file:42",
+                '_media' => [
+                    ['mime' => 'image/png', 'data' => 'AAAA'],
+                ],
+            ],
+        ];
+
+        $taskUid = $this->createTask('Tool media test', 'show me', 0, 0, $existingMessages);
+
+        $capturedMessages = [];
+        $llmMock = $this->createMock(LlmService::class);
+        $llmMock->method('chatCompletionStream')->willReturnCallback(
+            function (array $messages) use (&$capturedMessages): array {
+                $capturedMessages[] = $messages;
+                return ['role' => 'assistant', 'content' => 'Seen.'];
+            }
+        );
+
+        $agentService = new AgentService(
+            $llmMock,
+            GeneralUtility::makeInstance(ToolConverterService::class),
+            GeneralUtility::makeInstance(ToolRegistry::class),
+            GeneralUtility::makeInstance(ExtensionConfiguration::class),
+            $this->connectionPool,
+            new AgentTaskRepository($this->connectionPool),
+            new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class)),
+        );
+        $agentService->processTask($taskUid);
+
+        self::assertNotEmpty($capturedMessages, 'LlmService received a payload');
+        $llmMessages = $capturedMessages[0];
+
+        $toolIndex = null;
+        foreach ($llmMessages as $i => $m) {
+            if (($m['role'] ?? '') === 'tool' && ($m['tool_call_id'] ?? '') === 'call_img') {
+                $toolIndex = $i;
+                break;
+            }
+        }
+        self::assertNotNull($toolIndex, 'Tool message reached LlmService');
+
+        $toolMsg = $llmMessages[$toolIndex];
+        self::assertIsString($toolMsg['content'], 'tool_result stays text-only — media rides in follow-up user message');
+        self::assertStringContainsString('pixel.png', $toolMsg['content']);
+        self::assertArrayNotHasKey('_media', $toolMsg);
+
+        // Image lives in the synthetic user message that comes right after.
+        self::assertArrayHasKey($toolIndex + 1, $llmMessages);
+        $followUp = $llmMessages[$toolIndex + 1];
+        self::assertSame('user', $followUp['role']);
+        self::assertIsArray($followUp['content']);
+        self::assertSame('image_url', $followUp['content'][1]['type']);
+        self::assertSame('data:image/png;base64,AAAA', $followUp['content'][1]['image_url']['url']);
+
+        // Persisted record keeps the structured `_media` so reloading the
+        // chat after a page refresh still ships the image to the LLM.
+        $task = $this->getTask($taskUid);
+        $persisted = $this->decodeMessages($task['messages']);
+        $persistedTool = null;
+        foreach ($persisted as $m) {
+            if (($m['role'] ?? '') === 'tool' && ($m['tool_call_id'] ?? '') === 'call_img') {
+                $persistedTool = $m;
+                break;
+            }
+        }
+        self::assertNotNull($persistedTool);
+        self::assertIsString($persistedTool['content'], 'Persisted content stays a string for the UI');
+        self::assertArrayHasKey('_media', $persistedTool);
+        self::assertSame('AAAA', $persistedTool['_media'][0]['data']);
+    }
+
+    /**
+     * PDFs and other non-image media can't live inside an Anthropic
+     * tool_result block — they're emitted as a follow-up user message
+     * directly after, where document blocks ARE legal. The tool message
+     * itself stays plain text for the LLM.
+     */
+    public function testToolMessageWithPdfMediaSplitsIntoFollowUpUserMessage(): void
+    {
+        $existingMessages = [
+            ['role' => 'system', 'content' => 'sys'],
+            ['role' => 'user', 'content' => 'show pdf'],
+            ['role' => 'assistant', 'content' => null, 'tool_calls' => [
+                ['id' => 'call_pdf', 'type' => 'function', 'function' => ['name' => 'ReadFile', 'arguments' => '{"uid":48}']],
+            ]],
+            [
+                'role' => 'tool',
+                'tool_call_id' => 'call_pdf',
+                'content' => "File: doc.pdf\nMIME: application/pdf\nSize: 1.0 KiB\nUID: sys_file:48",
+                '_media' => [
+                    ['mime' => 'application/pdf', 'data' => 'BBBB', 'filename' => 'doc.pdf'],
+                ],
+            ],
+        ];
+
+        $taskUid = $this->createTask('Tool pdf test', 'show pdf', 0, 0, $existingMessages);
+
+        $capturedMessages = [];
+        $llmMock = $this->createMock(LlmService::class);
+        $llmMock->method('chatCompletionStream')->willReturnCallback(
+            function (array $messages) use (&$capturedMessages): array {
+                $capturedMessages[] = $messages;
+                return ['role' => 'assistant', 'content' => 'Got it.'];
+            }
+        );
+
+        $agentService = new AgentService(
+            $llmMock,
+            GeneralUtility::makeInstance(ToolConverterService::class),
+            GeneralUtility::makeInstance(ToolRegistry::class),
+            GeneralUtility::makeInstance(ExtensionConfiguration::class),
+            $this->connectionPool,
+            new AgentTaskRepository($this->connectionPool),
+            new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class)),
+        );
+        $agentService->processTask($taskUid);
+
+        $llmMessages = $capturedMessages[0];
+
+        $toolIndex = null;
+        foreach ($llmMessages as $i => $m) {
+            if (($m['role'] ?? '') === 'tool' && ($m['tool_call_id'] ?? '') === 'call_pdf') {
+                $toolIndex = $i;
+                break;
+            }
+        }
+        self::assertNotNull($toolIndex);
+
+        $toolMsg = $llmMessages[$toolIndex];
+        self::assertIsString($toolMsg['content'], 'tool_result keeps text-only when media is non-image');
+        self::assertStringContainsString('doc.pdf', $toolMsg['content']);
+        self::assertArrayNotHasKey('_media', $toolMsg);
+
+        // Immediately followed by a synthetic user message carrying the file block.
+        self::assertArrayHasKey($toolIndex + 1, $llmMessages);
+        $followUp = $llmMessages[$toolIndex + 1];
+        self::assertSame('user', $followUp['role']);
+        self::assertIsArray($followUp['content']);
+        self::assertSame('text', $followUp['content'][0]['type']);
+        self::assertSame('file', $followUp['content'][1]['type']);
+        self::assertSame('doc.pdf', $followUp['content'][1]['file']['filename']);
+        self::assertSame('data:application/pdf;base64,BBBB', $followUp['content'][1]['file']['file_data']);
+    }
+
+    /**
+     * Two consecutive ReadFile calls in one assistant turn produce two
+     * `tool` messages. The OpenAI/OpenRouter format requires all sibling
+     * tool messages to be emitted contiguously — the follow-up user message
+     * carrying the document blocks must come AFTER the last tool message,
+     * never between them. Without this guarantee OpenRouter returns 500.
+     */
+    public function testMultiplePdfToolResultsBatchedIntoSingleFollowUp(): void
+    {
+        $existingMessages = [
+            ['role' => 'system', 'content' => 'sys'],
+            ['role' => 'user', 'content' => 'show both'],
+            ['role' => 'assistant', 'content' => null, 'tool_calls' => [
+                ['id' => 'call_a', 'type' => 'function', 'function' => ['name' => 'ReadFile', 'arguments' => '{"uid":1}']],
+                ['id' => 'call_b', 'type' => 'function', 'function' => ['name' => 'ReadFile', 'arguments' => '{"uid":2}']],
+            ]],
+            [
+                'role' => 'tool', 'tool_call_id' => 'call_a',
+                'content' => 'File: a.pdf',
+                '_media' => [['mime' => 'application/pdf', 'data' => 'AAAA', 'filename' => 'a.pdf']],
+            ],
+            [
+                'role' => 'tool', 'tool_call_id' => 'call_b',
+                'content' => 'File: b.pdf',
+                '_media' => [['mime' => 'application/pdf', 'data' => 'CCCC', 'filename' => 'b.pdf']],
+            ],
+        ];
+
+        $taskUid = $this->createTask('Multi pdf', 'show both', 0, 0, $existingMessages);
+
+        $capturedMessages = [];
+        $llmMock = $this->createMock(LlmService::class);
+        $llmMock->method('chatCompletionStream')->willReturnCallback(
+            function (array $messages) use (&$capturedMessages): array {
+                $capturedMessages[] = $messages;
+                return ['role' => 'assistant', 'content' => 'OK.'];
+            }
+        );
+
+        $agentService = new AgentService(
+            $llmMock,
+            GeneralUtility::makeInstance(ToolConverterService::class),
+            GeneralUtility::makeInstance(ToolRegistry::class),
+            GeneralUtility::makeInstance(ExtensionConfiguration::class),
+            $this->connectionPool,
+            new AgentTaskRepository($this->connectionPool),
+            new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class)),
+        );
+        $agentService->processTask($taskUid);
+
+        $llmMessages = $capturedMessages[0];
+
+        $roles = array_map(static fn(array $m): string => (string)($m['role'] ?? ''), $llmMessages);
+        // Expected tail: ..., assistant(tool_calls), tool(a), tool(b), user(documents)
+        $tail = array_slice($roles, -4);
+        self::assertSame(['assistant', 'tool', 'tool', 'user'], $tail, 'Tool messages stay contiguous, follow-up user comes after both');
+
+        // The single follow-up message carries both file blocks.
+        $followUp = $llmMessages[array_key_last($llmMessages)];
+        self::assertSame('user', $followUp['role']);
+        self::assertIsArray($followUp['content']);
+        $fileBlocks = array_values(array_filter(
+            $followUp['content'],
+            static fn(array $b): bool => ($b['type'] ?? '') === 'file',
+        ));
+        self::assertCount(2, $fileBlocks);
+        self::assertSame('a.pdf', $fileBlocks[0]['file']['filename']);
+        self::assertSame('b.pdf', $fileBlocks[1]['file']['filename']);
     }
 }

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Hn\Agent\Service;
 
+use GuzzleHttp\Exception\BadResponseException;
 use Psr\Http\Message\StreamInterface;
 use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
 use TYPO3\CMS\Core\Http\RequestFactory;
@@ -100,17 +101,27 @@ class LlmService
             $body['tools'] = $tools;
         }
 
-        $response = $this->requestFactory->request($apiUrl, 'POST', [
-            'headers' => [
-                'Authorization' => 'Bearer ' . $config['apiKey'],
-                'Content-Type' => 'application/json',
-                'Accept' => 'text/event-stream',
-            ],
-            'json' => $body,
-            'stream' => true,
-            'connect_timeout' => 10,
-            'read_timeout' => 60,
-        ]);
+        try {
+            $response = $this->requestFactory->request($apiUrl, 'POST', [
+                'headers' => [
+                    'Authorization' => 'Bearer ' . $config['apiKey'],
+                    'Content-Type' => 'application/json',
+                    'Accept' => 'text/event-stream',
+                ],
+                'json' => $body,
+                'stream' => true,
+                'connect_timeout' => 10,
+                'read_timeout' => 60,
+                'http_errors' => false,
+            ]);
+        } catch (BadResponseException $e) {
+            $errResp = $e->getResponse();
+            throw new \RuntimeException(
+                'LLM API returned HTTP ' . $errResp->getStatusCode() . ': ' . (string)$errResp->getBody(),
+                0,
+                $e,
+            );
+        }
 
         $statusCode = $response->getStatusCode();
         if ($statusCode < 200 || $statusCode >= 300) {
