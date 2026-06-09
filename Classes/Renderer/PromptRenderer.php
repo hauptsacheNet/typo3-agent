@@ -81,6 +81,7 @@ class PromptRenderer
         $upload = $this->getUploadContext($pageId, $tableName, 'hn-agent-new-task');
 
         $this->pageRenderer->addInlineLanguageLabelFile('EXT:agent/Resources/Private/Language/locallang.xlf');
+        $this->pageRenderer->addCssFile('EXT:agent/Resources/Public/Css/agent-chat.css');
 
         return sprintf(
             '<hn-agent-new-task action-uri="%s" table="%s" uid="%d" placeholder="%s" workspace-id="%d" workspace-title="%s" default-upload-folder="%s" file-browser-uri="%s" preflight-uri="%s"></hn-agent-new-task>',
@@ -120,6 +121,7 @@ class PromptRenderer
         $this->pageRenderer->addInlineSetting('Agent', 'fileBrowserUri', $upload['fileBrowserUri']);
         $this->pageRenderer->addInlineSetting('Agent', 'preflightUri', $upload['preflightUri']);
         $this->pageRenderer->addInlineLanguageLabelFile('EXT:agent/Resources/Private/Language/locallang.xlf');
+        $this->pageRenderer->addCssFile('EXT:agent/Resources/Public/Css/agent-chat.css');
         $this->pageRenderer->loadJavaScriptModule('@hn/agent/auto-insert-new-task.js');
     }
 }
