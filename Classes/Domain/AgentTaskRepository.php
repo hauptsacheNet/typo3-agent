@@ -6,6 +6,7 @@ namespace Hn\Agent\Domain;
 
 use Doctrine\DBAL\ParameterType;
 use Doctrine\DBAL\Types\Types;
+use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 
 class AgentTaskRepository
@@ -56,7 +57,7 @@ class AgentTaskRepository
      * Empty $pageIds yields an empty result (no query is dispatched).
      *
      * @param int[] $pageIds
-     * @return array<int, array{uid:int,pid:int,title:string,status:int,tstamp:int,crdate:int}>
+     * @return array<int, array{uid:int,pid:int,title:string,status:int,tstamp:int,crdate:int,pageTitle:string}>
      */
     public function findTasksForUser(int $userId, array $pageIds, int $limit = 500): array
     {
@@ -64,7 +65,7 @@ class AgentTaskRepository
             return [];
         }
         $qb = $this->connectionPool->getQueryBuilderForTable(self::TABLE);
-        return $qb
+        $tasks = $qb
             ->select('uid', 'pid', 'title', 'status', 'tstamp', 'crdate')
             ->from(self::TABLE)
             ->where(
@@ -75,6 +76,20 @@ class AgentTaskRepository
             ->setMaxResults($limit)
             ->executeQuery()
             ->fetchAllAssociative();
+
+        $titleCache = [];
+        foreach ($tasks as &$task) {
+            $pid = (int)$task['pid'];
+            if (!array_key_exists($pid, $titleCache)) {
+                $pageRecord = BackendUtility::getRecord('pages', $pid);
+                $titleCache[$pid] = $pageRecord !== null
+                    ? BackendUtility::getRecordTitle('pages', $pageRecord)
+                    : 'Seite #' . $pid;
+            }
+            $task['pageTitle'] = $titleCache[$pid];
+        }
+        unset($task);
+        return $tasks;
     }
 
     /**

@@ -50,10 +50,7 @@
                             <td>{task.title}</td>
                             <f:if condition="{showPage}">
                                 <td>
-                                    <f:if condition="{task.pageUri}">
-                                        <f:then><a href="{task.pageUri}">{task.pageTitle}</a></f:then>
-                                        <f:else>{task.pageTitle}</f:else>
-                                    </f:if>
+                                    <a href="{f:be.uri(route:'ai_agent_chat', parameters:'{id:task.pid}')}">{task.pageTitle}</a>
                                 </td>
                             </f:if>
                             <td>

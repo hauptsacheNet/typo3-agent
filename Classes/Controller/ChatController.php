@@ -66,9 +66,7 @@ class ChatController
         $tasks = $this->repository->findTasksForUser($userId, [$pageId]);
 
         $descendantPageIds = $this->collectDescendantPageIds($pageId);
-        $subpageTasks = $this->enrichTasksWithPage(
-            $this->repository->findTasksForUser($userId, $descendantPageIds)
-        );
+        $subpageTasks = $this->repository->findTasksForUser($userId, $descendantPageIds);
 
         $this->addReloadButton($view, $request);
 
@@ -132,39 +130,6 @@ class ChatController
             }
         }
         return $descendants;
-    }
-
-    /**
-     * Enrich each task with its page title and a module URI for the page,
-     * caching per pid so multiple tasks on the same page hit BackendUtility only once.
-     *
-     * @param array<int, array<string, mixed>> $tasks
-     * @return array<int, array<string, mixed>>
-     */
-    private function enrichTasksWithPage(array $tasks): array
-    {
-        $pageCache = [];
-        foreach ($tasks as &$task) {
-            $pid = (int)$task['pid'];
-            if (!isset($pageCache[$pid])) {
-                $pageRecord = BackendUtility::getRecord('pages', $pid);
-                if ($pageRecord !== null) {
-                    $pageCache[$pid] = [
-                        'title' => BackendUtility::getRecordTitle('pages', $pageRecord),
-                        'uri' => (string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat', ['id' => $pid]),
-                    ];
-                } else {
-                    $pageCache[$pid] = [
-                        'title' => 'Seite #' . $pid,
-                        'uri' => null,
-                    ];
-                }
-            }
-            $task['pageTitle'] = $pageCache[$pid]['title'];
-            $task['pageUri'] = $pageCache[$pid]['uri'];
-        }
-        unset($task);
-        return $tasks;
     }
 
     public function showAction(ServerRequestInterface $request): ResponseInterface
