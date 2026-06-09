@@ -6,7 +6,9 @@ namespace Hn\Agent\Controller;
 
 use Doctrine\DBAL\ParameterType;
 use Hn\Agent\Domain\AgentTaskRepository;
+use Hn\Agent\Domain\TaskStatus;
 use Hn\Agent\Http\SseStream;
+use Hn\Agent\Renderer\PromptRenderer;
 use Hn\Agent\Service\AgentService;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -20,8 +22,6 @@ use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Domain\Repository\PageRepository;
 use TYPO3\CMS\Core\Page\PageRenderer;
-use TYPO3\CMS\Core\Resource\DefaultUploadFolderResolver;
-use TYPO3\CMS\Core\Resource\Folder;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Imaging\IconFactory;
 use TYPO3\CMS\Core\Imaging\IconSize;
@@ -48,10 +48,10 @@ class ChatController
         private readonly IconFactory           $iconFactory,
         private readonly AgentTaskRepository   $repository,
         private readonly AgentService          $agentService,
-        protected readonly PageRenderer $pageRenderer,
+        protected readonly PageRenderer        $pageRenderer,
         private readonly PageRepository        $pageRepository,
         private readonly ConnectionPool        $connectionPool,
-        private readonly DefaultUploadFolderResolver $defaultUploadFolderResolver,
+        private readonly PromptRenderer        $promptRenderer,
     )
     {
     }
@@ -63,11 +63,11 @@ class ChatController
         $view->setTitle($GLOBALS['LANG']->sL('LLL:EXT:agent/Resources/Private/Language/locallang.xlf:index.heading'));
 
         $userId = (int)($GLOBALS['BE_USER']->user['uid'] ?? 0);
-        $tasks = $this->repository->findTasksForUser($userId, $pageId);
+        $tasks = $this->repository->findTasksForUser($userId, [$pageId]);
 
         $descendantPageIds = $this->collectDescendantPageIds($pageId);
         $subpageTasks = $this->enrichTasksWithPage(
-            $this->repository->findTasksForUserOnPages($userId, $descendantPageIds)
+            $this->repository->findTasksForUser($userId, $descendantPageIds)
         );
 
         $this->addReloadButton($view, $request);
@@ -86,6 +86,8 @@ class ChatController
             'subpages' => (bool)($collapsedTables['agent-tasks-subpages'] ?? false),
         ];
 
+        $uploadContext = $this->promptRenderer->getUploadContext($pageId, '', 'hn-agent-new-task');
+
         return $view->assignMultiple([
             'tasks' => $tasks,
             'subpageTasks' => $subpageTasks,
@@ -94,6 +96,9 @@ class ChatController
             'placeholder' => $placeholder,
             'workspace' => $this->getActiveWorkspaceInfo(),
             'collapsed' => $collapsed,
+            'defaultUploadFolder' => $uploadContext['defaultUploadFolder'],
+            'fileBrowserUri' => $uploadContext['fileBrowserUri'],
+            'preflightUri' => $uploadContext['preflightUri'],
         ])->renderResponse('Chat/Index');
     }
 
@@ -208,27 +213,17 @@ class ChatController
         }
 
         $messages = $this->agentService->decodeMessages($task['messages'] ?? null) ?? [];
-        $isNewTask = $messages === [] && !empty($task['prompt']);
+        $isNewTask = (int)($task['status'] ?? 0) === TaskStatus::Pending->value;
         $changes = $this->repository->getChanges($taskUid);
 
-        $beUser = $GLOBALS['BE_USER'];
-        $uploadFolder = $beUser instanceof \TYPO3\CMS\Core\Authentication\BackendUserAuthentication
-            ? $this->defaultUploadFolderResolver->resolve($beUser, $pageId, $contextTable !== '' ? $contextTable : null)
-            : false;
-        $defaultUploadFolder = $uploadFolder instanceof Folder ? $uploadFolder->getCombinedIdentifier() : '';
-
-        // DragUploader reads TYPO3.lang["file_upload.*"] from inline labels; these are
-        // not loaded by the module shell, so inject them here (same pattern as filelist).
-        $this->pageRenderer->addInlineLanguageLabelFile('EXT:core/Resources/Private/Language/locallang_core.xlf', 'file_upload');
-
-        $fileBrowserUri = (string)$this->uriBuilder->buildUriFromRoute('wizard_element_browser', [
-            'mode' => 'file',
-            'bparams' => 'hn-agent-chat|||*|',
-        ]);
+        $uploadContext = $this->promptRenderer->getUploadContext($pageId, $contextTable, 'hn-agent-chat');
 
         return $view->assignMultiple([
             'task' => $task,
-            'messages' => $messages,
+            // Bei einem frischen Task läuft die Initial-Konversation live via
+            // emitInitialContextEvents — initial-messages bleibt leer, sonst
+            // doppelt sich die User-Bubble (initial-messages + user_message-SSE).
+            'messages' => $isNewTask ? [] : $messages,
             'changes' => $changes,
             'isNewTask' => $isNewTask,
             'contextLabel' => $contextLabel,
@@ -237,8 +232,8 @@ class ChatController
             'returnUrl' => $returnUrl,
             'taskWorkspace' => $this->getWorkspaceInfoById((int)($task['workspace_id'] ?? 0)),
             'activeWorkspace' => $this->getActiveWorkspaceInfo(),
-            'defaultUploadFolder' => $defaultUploadFolder,
-            'fileBrowserUri' => $fileBrowserUri,
+            'defaultUploadFolder' => $uploadContext['defaultUploadFolder'],
+            'fileBrowserUri' => $uploadContext['fileBrowserUri'],
             'sendUri' => (string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat.sendMessage', [
                 'task' => $taskUid,
                 'id' => $pageId,
@@ -251,7 +246,7 @@ class ChatController
                 'task' => $taskUid,
                 'id' => $pageId,
             ]),
-            'preflightUri' => (string)$this->uriBuilder->buildUriFromRoute('ajax_ai_agent_attachment_preflight'),
+            'preflightUri' => $uploadContext['preflightUri'],
         ])->renderResponse('Chat/Show');
     }
 
@@ -283,7 +278,8 @@ class ChatController
         $pageId = $this->getPageId($request);
         $body = (array)$request->getParsedBody();
         $message = trim((string)($body['message'] ?? ''));
-        if ($message === '') {
+        $rawAttachments = $this->parseAttachments($body['attachments'] ?? null);
+        if ($message === '' && $rawAttachments === []) {
             return new RedirectResponse((string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat', ['id' => $pageId]));
         }
 
@@ -297,8 +293,29 @@ class ChatController
         $contextUid = (int)($body['uid'] ?? 0);
         $returnUrl = GeneralUtility::sanitizeLocalUrl((string)($body['return_url'] ?? ''));
 
+        // FAL permission checks for attachments run against the current
+        // BE_USER (= task owner) inside buildInitialMessages.
+        $initialMessages = $this->agentService->buildInitialMessages(
+            $pageId,
+            $contextTable,
+            $contextUid,
+            $message,
+            $rawAttachments,
+        );
+
+        $title = $message !== '' ? mb_substr($message, 0, 80) : ($rawAttachments[0]['name'] ?? 'Anhang');
         $userId = (int)($GLOBALS['BE_USER']->user['uid'] ?? 0);
-        $taskUid = $this->repository->insert($pageId, $userId, mb_substr($message, 0, 80), $message, $contextTable, $contextUid, $returnUrl, $workspaceId);
+        $taskUid = $this->repository->insert(
+            $pageId,
+            $userId,
+            $title,
+            $message,
+            $contextTable,
+            $contextUid,
+            $returnUrl,
+            $workspaceId,
+            $initialMessages,
+        );
         return new RedirectResponse((string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat.show', [
             'task' => $taskUid,
             'id' => $pageId,
@@ -463,8 +480,8 @@ class ChatController
             });
         }
 
-        $existingMessages = $this->agentService->decodeMessages($task['messages'] ?? null);
-        $isInitialProcessing = $existingMessages === null && $message === '' && $attachments === [];
+        $isInitialProcessing = (int)($task['status'] ?? 0) === TaskStatus::Pending->value
+            && $message === '' && $attachments === [];
 
         if (!$isInitialProcessing && $message === '' && $attachments === []) {
             return $this->buildSseResponse(static function (callable $send): void {

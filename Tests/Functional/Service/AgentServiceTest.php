@@ -48,23 +48,38 @@ class AgentServiceTest extends FunctionalTestCase
 
     /**
      * Create a task record directly in the database and return its UID.
+     *
+     * Mirrors what ChatController::newAction does in production: when no
+     * pre-built $messages array is provided, the initial conversation
+     * (system + synthetic GetPage/ReadTable context + user message) is
+     * synthesized via AgentService::buildInitialMessages and persisted.
+     * Pass a non-null $messages to bypass the synthesis (resume scenarios).
      */
-    private function createTask(string $title, string $prompt, int $pid = 0, int $status = 0, ?array $messages = null): int
+    private function createTask(string $title, string $prompt, int $pid = 0, int $status = 0, ?array $messages = null, string $contextTable = '', int $contextUid = 0): int
     {
+        if ($messages === null) {
+            $messages = $this->buildAgentServiceWithMock([])
+                ->buildInitialMessages($pid, $contextTable, $contextUid, $prompt);
+        }
+
         $connection = $this->connectionPool->getConnectionForTable('tx_agent_task');
-        $connection->insert('tx_agent_task', [
-            'pid' => $pid,
-            'title' => $title,
-            'prompt' => $prompt,
-            'status' => $status,
-            'messages' => $messages,
-            'result' => '',
-            'cruser_id' => 1,
-            'crdate' => time(),
-            'tstamp' => time(),
-            'deleted' => 0,
-            'hidden' => 0,
-        ]);
+        $connection->insert(
+            'tx_agent_task',
+            [
+                'pid' => $pid,
+                'title' => $title,
+                'prompt' => $prompt,
+                'status' => $status,
+                'messages' => $messages,
+                'result' => '',
+                'cruser_id' => 1,
+                'crdate' => time(),
+                'tstamp' => time(),
+                'deleted' => 0,
+                'hidden' => 0,
+            ],
+            ['messages' => \Doctrine\DBAL\Types\Types::JSON],
+        );
         return (int)$connection->lastInsertId();
     }
 
@@ -109,8 +124,8 @@ class AgentServiceTest extends FunctionalTestCase
     private function buildAgentServiceWithMock(array $responses): AgentService
     {
         $callIndex = 0;
-        $llmMock = $this->createMock(LlmService::class);
-        $llmMock->method('chatCompletionStream')->willReturnCallback(
+        $llmStub = $this->createStub(LlmService::class);
+        $llmStub->method('chatCompletionStream')->willReturnCallback(
             function () use (&$callIndex, $responses) {
                 if ($callIndex >= count($responses)) {
                     throw new \RuntimeException('LlmService mock exhausted: no more responses');
@@ -120,7 +135,7 @@ class AgentServiceTest extends FunctionalTestCase
         );
 
         return new AgentService(
-            $llmMock,
+            $llmStub,
             GeneralUtility::makeInstance(ToolConverterService::class),
             GeneralUtility::makeInstance(ToolRegistry::class),
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
@@ -220,13 +235,13 @@ class AgentServiceTest extends FunctionalTestCase
     {
         $taskUid = $this->createTask('Fail test', 'Do something');
 
-        $llmMock = $this->createMock(LlmService::class);
-        $llmMock->method('chatCompletionStream')->willThrowException(
+        $llmStub = $this->createStub(LlmService::class);
+        $llmStub->method('chatCompletionStream')->willThrowException(
             new \RuntimeException('API connection failed')
         );
 
         $agentService = new AgentService(
-            $llmMock,
+            $llmStub,
             GeneralUtility::makeInstance(ToolConverterService::class),
             GeneralUtility::makeInstance(ToolRegistry::class),
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
@@ -286,8 +301,8 @@ class AgentServiceTest extends FunctionalTestCase
         // Capture what is handed to LlmService so we can prove the markdown
         // block exists in the LLM payload — but NOT in the persisted state.
         $capturedMessages = [];
-        $llmMock = $this->createMock(LlmService::class);
-        $llmMock->method('chatCompletionStream')->willReturnCallback(
+        $llmStub = $this->createStub(LlmService::class);
+        $llmStub->method('chatCompletionStream')->willReturnCallback(
             function (array $messages) use (&$capturedMessages): array {
                 $capturedMessages[] = $messages;
                 return ['role' => 'assistant', 'content' => 'OK.'];
@@ -295,7 +310,7 @@ class AgentServiceTest extends FunctionalTestCase
         );
 
         $agentService = new AgentService(
-            $llmMock,
+            $llmStub,
             GeneralUtility::makeInstance(ToolConverterService::class),
             GeneralUtility::makeInstance(ToolRegistry::class),
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
@@ -355,8 +370,8 @@ class AgentServiceTest extends FunctionalTestCase
      */
     private function buildAgentServiceCapturing(array &$capturedMessages, ResourceFactory $resourceFactory): AgentService
     {
-        $llmMock = $this->createMock(LlmService::class);
-        $llmMock->method('chatCompletionStream')->willReturnCallback(
+        $llmStub = $this->createStub(LlmService::class);
+        $llmStub->method('chatCompletionStream')->willReturnCallback(
             function (array $messages) use (&$capturedMessages): array {
                 $capturedMessages[] = $messages;
                 return ['role' => 'assistant', 'content' => 'OK.'];
@@ -364,7 +379,7 @@ class AgentServiceTest extends FunctionalTestCase
         );
 
         return new AgentService(
-            $llmMock,
+            $llmStub,
             GeneralUtility::makeInstance(ToolConverterService::class),
             GeneralUtility::makeInstance(ToolRegistry::class),
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
@@ -525,7 +540,7 @@ class AgentServiceTest extends FunctionalTestCase
         self::assertSame(101, $preview['uid']);
         self::assertSame('image/png', $preview['mime']);
         self::assertSame(2048, $preview['size']);
-        self::assertTrue($preview['embedAsContent']);
+        self::assertTrue($preview['readableByLlm']);
         self::assertNull($preview['reason']);
     }
 
@@ -539,7 +554,7 @@ class AgentServiceTest extends FunctionalTestCase
 
         $preview = $agentService->previewAttachment(['uid' => 303]);
 
-        self::assertFalse($preview['embedAsContent']);
+        self::assertFalse($preview['readableByLlm']);
         self::assertNotNull($preview['reason']);
         self::assertStringContainsString('zu groß', $preview['reason']);
         self::assertStringContainsString('MiB', $preview['reason']);
@@ -555,7 +570,7 @@ class AgentServiceTest extends FunctionalTestCase
 
         $preview = $agentService->previewAttachment(['uid' => 404]);
 
-        self::assertFalse($preview['embedAsContent']);
+        self::assertFalse($preview['readableByLlm']);
         self::assertSame('Format nicht unterstützt', $preview['reason']);
     }
 
@@ -570,7 +585,7 @@ class AgentServiceTest extends FunctionalTestCase
 
         $preview = $agentService->previewAttachment(['uid' => 999999]);
 
-        self::assertFalse($preview['embedAsContent']);
+        self::assertFalse($preview['readableByLlm']);
         self::assertSame('Datei nicht auflösbar', $preview['reason']);
     }
 
@@ -634,8 +649,8 @@ class AgentServiceTest extends FunctionalTestCase
         $taskUid = $this->createTask('Tool media test', 'show me', 0, 0, $existingMessages);
 
         $capturedMessages = [];
-        $llmMock = $this->createMock(LlmService::class);
-        $llmMock->method('chatCompletionStream')->willReturnCallback(
+        $llmStub = $this->createStub(LlmService::class);
+        $llmStub->method('chatCompletionStream')->willReturnCallback(
             function (array $messages) use (&$capturedMessages): array {
                 $capturedMessages[] = $messages;
                 return ['role' => 'assistant', 'content' => 'Seen.'];
@@ -643,7 +658,7 @@ class AgentServiceTest extends FunctionalTestCase
         );
 
         $agentService = new AgentService(
-            $llmMock,
+            $llmStub,
             GeneralUtility::makeInstance(ToolConverterService::class),
             GeneralUtility::makeInstance(ToolRegistry::class),
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
@@ -722,8 +737,8 @@ class AgentServiceTest extends FunctionalTestCase
         $taskUid = $this->createTask('Tool pdf test', 'show pdf', 0, 0, $existingMessages);
 
         $capturedMessages = [];
-        $llmMock = $this->createMock(LlmService::class);
-        $llmMock->method('chatCompletionStream')->willReturnCallback(
+        $llmStub = $this->createStub(LlmService::class);
+        $llmStub->method('chatCompletionStream')->willReturnCallback(
             function (array $messages) use (&$capturedMessages): array {
                 $capturedMessages[] = $messages;
                 return ['role' => 'assistant', 'content' => 'Got it.'];
@@ -731,7 +746,7 @@ class AgentServiceTest extends FunctionalTestCase
         );
 
         $agentService = new AgentService(
-            $llmMock,
+            $llmStub,
             GeneralUtility::makeInstance(ToolConverterService::class),
             GeneralUtility::makeInstance(ToolRegistry::class),
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
@@ -799,8 +814,8 @@ class AgentServiceTest extends FunctionalTestCase
         $taskUid = $this->createTask('Multi pdf', 'show both', 0, 0, $existingMessages);
 
         $capturedMessages = [];
-        $llmMock = $this->createMock(LlmService::class);
-        $llmMock->method('chatCompletionStream')->willReturnCallback(
+        $llmStub = $this->createStub(LlmService::class);
+        $llmStub->method('chatCompletionStream')->willReturnCallback(
             function (array $messages) use (&$capturedMessages): array {
                 $capturedMessages[] = $messages;
                 return ['role' => 'assistant', 'content' => 'OK.'];
@@ -808,7 +823,7 @@ class AgentServiceTest extends FunctionalTestCase
         );
 
         $agentService = new AgentService(
-            $llmMock,
+            $llmStub,
             GeneralUtility::makeInstance(ToolConverterService::class),
             GeneralUtility::makeInstance(ToolRegistry::class),
             GeneralUtility::makeInstance(ExtensionConfiguration::class),

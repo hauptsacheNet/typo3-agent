@@ -7,6 +7,9 @@ interface AgentSettings {
   placeholder?: string;
   workspaceId?: string;
   workspaceTitle?: string;
+  defaultUploadFolder?: string;
+  fileBrowserUri?: string;
+  preflightUri?: string;
 }
 
 // Self-insertion for FormEngine context:
@@ -33,6 +36,9 @@ function autoInsert(): void {
   el.setAttribute('return-url', window.location.href);
   el.setAttribute('workspace-id', settings.workspaceId ?? '0');
   el.setAttribute('workspace-title', settings.workspaceTitle ?? '');
+  el.setAttribute('default-upload-folder', settings.defaultUploadFolder ?? '');
+  el.setAttribute('file-browser-uri', settings.fileBrowserUri ?? '');
+  el.setAttribute('preflight-uri', settings.preflightUri ?? '');
 
   const target = document.querySelector('.t3js-module-body');
   if (target) {

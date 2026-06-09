@@ -51,7 +51,8 @@ interface Attachment {
   iconHtml?: string;
   unresolvable?: boolean;
   // Pre-flight result (populated async after add; undefined while loading).
-  embedAsContent?: boolean;
+  // True when the LLM can fetch the file's bytes via the ReadFile tool.
+  readableByLlm?: boolean;
   reason?: string;
   size?: number;
 }
@@ -286,9 +287,9 @@ export class ChatElement extends LitElement {
       const fallback = img.nextElementSibling as HTMLElement | null;
       if (fallback) fallback.style.display = '';
     };
-    const willNotEmbed = att.embedAsContent === false;
-    const warnTitle = willNotEmbed
-      ? `Wird nicht als Inhalt an den Assistenten gegeben \u2014 nur Metadaten${att.reason ? ` (${att.reason})` : ''}`
+    const notReadable = att.readableByLlm === false;
+    const warnTitle = notReadable
+      ? `LLM kann den Inhalt nicht via ReadFile lesen \u2014 nur Metadaten${att.reason ? ` (${att.reason})` : ''}`
       : (att.unresolvable ? 'Datei nicht aufl\u00f6sbar' : '');
     return html`
       <span class="chat-attachment-chip d-inline-flex align-items-center gap-2 border rounded bg-body p-1 ${onRemove ? 'pe-2' : 'px-2'}"
@@ -299,7 +300,7 @@ export class ChatElement extends LitElement {
               <span class="chat-attachment-icon rounded" style="display:none">${this.renderFallbackIcon(att)}</span>`
           : html`<span class="chat-attachment-icon rounded">${this.renderFallbackIcon(att)}</span>`}
         <span class="chat-attachment-name ${att.unresolvable ? 'text-decoration-line-through opacity-75' : ''}">${att.name}</span>
-        ${willNotEmbed
+        ${notReadable
           ? html`<span class="chat-attachment-warn badge bg-warning-subtle text-warning-emphasis border border-warning-subtle"
                        title=${warnTitle}>
               <typo3-backend-icon identifier="actions-exclamation" size="small"/>
@@ -530,7 +531,7 @@ export class ChatElement extends LitElement {
       const info = await response.json() as {
         uid?: number; identifier?: string; name?: string;
         mime?: string; size?: number;
-        embedAsContent: boolean; reason?: string | null;
+        readableByLlm: boolean; reason?: string | null;
       };
       this.attachments = this.attachments.map(a => {
         const sameUid = info.uid !== undefined && a.uid === info.uid;
@@ -540,7 +541,7 @@ export class ChatElement extends LitElement {
           ...a,
           mime_type: info.mime || a.mime_type,
           size: typeof info.size === 'number' ? info.size : a.size,
-          embedAsContent: info.embedAsContent,
+          readableByLlm: info.readableByLlm,
           reason: info.reason ?? undefined,
         };
       });

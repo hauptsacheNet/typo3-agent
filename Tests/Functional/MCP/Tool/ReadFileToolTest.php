@@ -145,7 +145,7 @@ class ReadFileToolTest extends FunctionalTestCase
         if ($content === null) {
             $file->expects(self::never())->method('getContents');
         } else {
-            $file->method('getContents')->willReturn($content);
+            $file->expects(self::atLeastOnce())->method('getContents')->willReturn($content);
         }
 
         $factory = $this->getMockBuilder(ResourceFactory::class)->disableOriginalConstructor()->getMock();

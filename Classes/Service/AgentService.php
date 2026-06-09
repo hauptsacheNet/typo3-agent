@@ -62,6 +62,12 @@ class AgentService implements LoggerAwareInterface
             throw new \RuntimeException('Task with UID ' . $taskUid . ' not found.');
         }
 
+        // Evaluate fresh-status BEFORE claim() flips it to InProgress.
+        // Pending = newAction just created the task and the agent has never run;
+        // the initial conversation (system + synthetic GetPage/ReadTable + user)
+        // has been built and persisted by newAction → buildInitialMessages.
+        $isFreshTask = (int)$task['status'] === TaskStatus::Pending->value;
+
         // Atomically claim the task: only set to in_progress if it's still pending/failed
         // This prevents race conditions when multiple agent:run processes run concurrently
         $claimed = $this->repository->claim($taskUid, TaskStatus::from((int)$task['status']));
@@ -72,14 +78,12 @@ class AgentService implements LoggerAwareInterface
         // Set up backend user context from task's cruser_id (and workspace, if persisted)
         $this->setupBackendUserContext((int)($task['cruser_id'] ?? 0), (int)($task['workspace_id'] ?? 0));
 
-        // For fresh tasks (no persisted messages yet) buildMessages() synthesizes
-        // an assistant turn with pre-loaded context tool calls. These never pass
-        // through runLoop and would otherwise only become visible to the UI after
-        // a page reload — stream them explicitly so the chat renders them live.
-        $isFreshTask = $this->decodeMessages($task['messages'] ?? null) === null;
+        $messages = $this->decodeMessages($task['messages'] ?? null) ?? [];
 
-        $messages = $this->buildMessages($task);
-
+        // For fresh tasks the persisted messages contain a synthetic assistant
+        // turn with pre-loaded context tool calls. These never pass through
+        // runLoop and would otherwise only become visible to the UI after a
+        // page reload — stream them explicitly so the chat renders them live.
         if ($isFreshTask && $progress !== null) {
             $this->emitInitialContextEvents($messages, $progress);
         }
@@ -116,8 +120,7 @@ class AgentService implements LoggerAwareInterface
         // block for the LLM is only built transiently in serializeForLlm() at call-site.
         $attachmentRefs = $this->resolveAttachmentRefs($attachments);
 
-        // Load or build existing messages, then append the new user message
-        $messages = $this->buildMessages($task);
+        $messages = $this->decodeMessages($task['messages'] ?? null) ?? [];
         $userMessageRecord = ['role' => 'user', 'content' => $userMessage];
         if ($attachmentRefs !== []) {
             $userMessageRecord['attachments'] = $attachmentRefs;
@@ -310,23 +313,27 @@ class AgentService implements LoggerAwareInterface
     }
 
     /**
-     * Build the messages array for a task.
+     * Build the initial conversation for a brand-new task: system prompt
+     * + synthetic GetPage/ReadTable context turn + user message (with
+     * resolved attachments, if any).
      *
-     * If the task already has messages (resuming), decode and return them.
-     * Otherwise, build initial messages from system prompt + page context + user prompt.
+     * Invoked by ChatController::newAction (and persisted there into
+     * tx_agent_task.messages), so subsequent reads (processTask,
+     * continueChat) just decode the JSON instead of synthesizing.
+     *
+     * @param array<int, array{uid?: int|string, identifier?: string, name?: string}> $rawAttachments
+     *        Raw attachment refs from the request — resolved against the current BE_USER's FAL permissions.
      */
-    private function buildMessages(array $task): array
+    public function buildInitialMessages(int $pid, string $contextTable, int $contextUid, string $prompt, array $rawAttachments = []): array
     {
-        // Resume from existing messages
-        $existingMessages = $this->decodeMessages($task['messages'] ?? null);
-        if ($existingMessages !== null) {
-            return $existingMessages;
-        }
-
         $config = $this->extensionConfiguration->get('agent');
         $systemPrompt = $config['systemPrompt'] ?? 'You are a helpful TYPO3 CMS assistant.';
 
-        $userMessage = ['role' => 'user', 'content' => $task['prompt'] ?? ''];
+        $userMessage = ['role' => 'user', 'content' => $prompt];
+        $attachmentRefs = $this->resolveAttachmentRefs($rawAttachments);
+        if ($attachmentRefs !== []) {
+            $userMessage['attachments'] = $attachmentRefs;
+        }
         $messages = [
             ['role' => 'system', 'content' => $systemPrompt],
         ];
@@ -336,10 +343,6 @@ class AgentService implements LoggerAwareInterface
         // already loaded the working context (page/record the user is on) as
         // its first action, and the user prompt then arrives with that context
         // visible. The user message is appended after the context block below.
-        $pid = (int)($task['pid'] ?? 0);
-        $contextTable = (string)($task['context_table'] ?? '');
-        $contextUid = (int)($task['context_uid'] ?? 0);
-
         $toolCalls = [];
         $toolResults = [];
         $loadedParts = [];
@@ -409,13 +412,13 @@ class AgentService implements LoggerAwareInterface
     }
 
     /**
-     * Emit progress events for the synthetic turns produced by buildMessages()
-     * so the chat UI can render them in the same order they will appear after
-     * a reload. For a fresh task the persisted order is
+     * Emit progress events for the synthetic turns produced by
+     * buildInitialMessages() so the chat UI can render them in the same order
+     * they will appear after a reload. For a fresh task the persisted order is
      *   [system, (assistant_narration, tool, ...), user]
      * which means the UI must see the synthetic context block (if any) BEFORE
      * the user prompt — the `user_message` event at the end materializes the
-     * user turn that buildMessages() appended last.
+     * user turn appended last.
      *
      * iteration=-1 marks these as pre-loop (not part of any LLM iteration).
      *
@@ -890,8 +893,13 @@ class AgentService implements LoggerAwareInterface
      * is what we want: the user only sees pre-flight info for files they can
      * actually access.
      *
+     * `readableByLlm` answers: can the LLM retrieve the file's bytes by
+     * calling the `ReadFile` tool? True for images / PDFs within size
+     * limits. False means the LLM can only see the marker metadata; the
+     * `reason` field then explains why (oversize, unsupported MIME, etc.).
+     *
      * @param array<string, mixed> $ref
-     * @return array{uid: int, identifier: string, name: string, mime: string, size: int, embedAsContent: bool, reason: ?string}
+     * @return array{uid: int, identifier: string, name: string, mime: string, size: int, readableByLlm: bool, reason: ?string}
      */
     public function previewAttachment(array $ref): array
     {
@@ -903,7 +911,7 @@ class AgentService implements LoggerAwareInterface
             'name' => $file?->getName() ?? (string)($ref['name'] ?? ''),
             'mime' => $info['mime'],
             'size' => $info['size'],
-            'embedAsContent' => in_array($info['kind'], ['image', 'document'], true),
+            'readableByLlm' => in_array($info['kind'], ['image', 'document'], true),
             'reason' => $info['reason'],
         ];
     }

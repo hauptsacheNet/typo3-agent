@@ -52,36 +52,15 @@ class AgentTaskRepository
     }
 
     /**
-     * Load task list for a backend user, restricted to a single page (pid is matched exactly,
-     * including pid=0 which means "stored at the page tree root").
+     * Load tasks for a backend user, restricted to one or more page UIDs.
+     * Empty $pageIds yields an empty result (no query is dispatched).
      *
-     * @return array<int, array{uid: int, pid: int, title: string, status: int, tstamp: int, crdate: int}>
+     * @param int[] $pageIds
+     * @return array<int, array{uid:int,pid:int,title:string,status:int,tstamp:int,crdate:int}>
      */
-    public function findTasksForUser(int $userId, int $pid, int $limit = 100): array
+    public function findTasksForUser(int $userId, array $pageIds, int $limit = 500): array
     {
-        $qb = $this->connectionPool->getQueryBuilderForTable(self::TABLE);
-        return $qb
-            ->select('uid', 'pid', 'title', 'status', 'tstamp', 'crdate')
-            ->from(self::TABLE)
-            ->where(
-                $qb->expr()->eq('cruser_id', $qb->createNamedParameter($userId, ParameterType::INTEGER)),
-                $qb->expr()->eq('pid', $qb->createNamedParameter($pid, ParameterType::INTEGER)),
-            )
-            ->orderBy('tstamp', 'DESC')
-            ->setMaxResults($limit)
-            ->executeQuery()
-            ->fetchAllAssociative();
-    }
-
-    /**
-     * Load tasks across a set of page UIDs, ordered by last update.
-     * Used to render the "tasks on subpages" section.
-     *
-     * @return array<int, array{uid: int, pid: int, title: string, status: int, tstamp: int, crdate: int}>
-     */
-    public function findTasksForUserOnPages(int $userId, array $pageUids, int $limit = 500): array
-    {
-        if ($pageUids === []) {
+        if ($pageIds === []) {
             return [];
         }
         $qb = $this->connectionPool->getQueryBuilderForTable(self::TABLE);
@@ -90,7 +69,7 @@ class AgentTaskRepository
             ->from(self::TABLE)
             ->where(
                 $qb->expr()->eq('cruser_id', $qb->createNamedParameter($userId, ParameterType::INTEGER)),
-                $qb->expr()->in('pid', $qb->createNamedParameter($pageUids, \Doctrine\DBAL\ArrayParameterType::INTEGER)),
+                $qb->expr()->in('pid', $qb->createNamedParameter($pageIds, \Doctrine\DBAL\ArrayParameterType::INTEGER)),
             )
             ->orderBy('tstamp', 'DESC')
             ->setMaxResults($limit)
@@ -137,26 +116,35 @@ class AgentTaskRepository
 
     /**
      * Insert a new task and return its UID.
+     *
+     * @param array<int, array<string, mixed>>|null $initialMessages
+     *        Pre-built initial conversation (system + synthetic context + user).
+     *        Persisted as JSON so processTask resumes from it on auto-start
+     *        instead of synthesizing.
      */
-    public function insert(int $pid, int $cruserId, string $title, string $prompt, string $contextTable = '', int $contextUid = 0, string $returnUrl = '', int $workspaceId = 0): int
+    public function insert(int $pid, int $cruserId, string $title, string $prompt, string $contextTable = '', int $contextUid = 0, string $returnUrl = '', int $workspaceId = 0, ?array $initialMessages = null): int
     {
         $now = time();
         $connection = $this->connectionPool->getConnectionForTable(self::TABLE);
-        $connection->insert(self::TABLE, [
-            'pid' => $pid,
-            'cruser_id' => $cruserId,
-            'tstamp' => $now,
-            'crdate' => $now,
-            'title' => $title,
-            'prompt' => $prompt,
-            'status' => TaskStatus::Pending->value,
-            'messages' => null,
-            'result' => '',
-            'context_table' => $contextTable,
-            'context_uid' => $contextUid,
-            'return_url' => $returnUrl,
-            'workspace_id' => $workspaceId,
-        ]);
+        $connection->insert(
+            self::TABLE,
+            [
+                'pid' => $pid,
+                'cruser_id' => $cruserId,
+                'tstamp' => $now,
+                'crdate' => $now,
+                'title' => $title,
+                'prompt' => $prompt,
+                'status' => TaskStatus::Pending->value,
+                'messages' => $initialMessages,
+                'result' => '',
+                'context_table' => $contextTable,
+                'context_uid' => $contextUid,
+                'return_url' => $returnUrl,
+                'workspace_id' => $workspaceId,
+            ],
+            $initialMessages !== null ? ['messages' => Types::JSON] : [],
+        );
         return (int)$connection->lastInsertId();
     }
 
