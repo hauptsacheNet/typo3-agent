@@ -1,0 +1,40 @@
+<html xmlns:f="http://typo3.org/ns/TYPO3/CMS/Fluid/ViewHelpers"
+      data-namespace-typo3-fluid="true">
+<f:comment>
+    Collapsible, read-only view of the editor-maintained agent instructions
+    that inform the agent. "Always" instructions are injected into the system
+    prompt; "on-demand" instructions are loaded by the agent via the
+    GetInstruction tool when relevant. Editing happens via the
+    tx_agent_instruction records in the List module (restricted to the
+    permitted backend group). The body is rich text, rendered via
+    f:transform.html (resolves t3:// links) piped through f:sanitize.html
+    (XSS-safe in backend context). Renders nothing when there are no
+    instructions.
+</f:comment>
+<f:if condition="{instructions}">
+    <details class="hn-agent-instructions card mb-3">
+        <summary class="card-header">
+            <f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.heading"/>
+            <span class="badge badge-info">{instructions -> f:count()}</span>
+        </summary>
+        <div class="card-body">
+            <p class="text-muted">
+                <f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.intro"/>
+            </p>
+            <f:for each="{instructions}" as="instruction">
+                <div class="hn-agent-instruction mb-2">
+                    <strong>{instruction.title}</strong>
+                    <f:if condition="{instruction.mode} == 'on_demand'">
+                        <f:then><span class="badge badge-info"><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.badge.onDemand"/></span></f:then>
+                        <f:else><span class="badge badge-default"><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.badge.always"/></span></f:else>
+                    </f:if>
+                    <f:if condition="{instruction.description}">
+                        <div class="text-muted"><em>{instruction.description}</em></div>
+                    </f:if>
+                    <div>{instruction.instruction -> f:transform.html() -> f:sanitize.html()}</div>
+                </div>
+            </f:for>
+        </div>
+    </details>
+</f:if>
+</html>

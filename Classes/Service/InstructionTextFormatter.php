@@ -5,19 +5,20 @@ declare(strict_types=1);
 namespace Hn\Agent\Service;
 
 /**
- * Converts the RTE (HTML) body of an agent skill into clean plain text /
+ * Converts the RTE (HTML) body of an agent instruction into clean plain text /
  * lightweight Markdown for LLM consumption.
  *
- * The skill body is authored with a rich-text editor and stored as HTML, but
- * the LLM should receive readable text rather than raw markup. This keeps the
- * structure that carries meaning (lists, paragraphs, emphasis) while dropping
- * the tags. Used by both the system-prompt injection (mode "always") and the
- * GetSkill tool (mode "on_demand") so the model never sees raw HTML.
+ * The instruction body is authored with a rich-text editor and stored as HTML,
+ * but the LLM should receive readable text rather than raw markup. This keeps
+ * the structure that carries meaning (lists, paragraphs, emphasis) while
+ * dropping the tags. Used by both the system-prompt injection (mode "always")
+ * and the GetInstruction tool (mode "on_demand") so the model never sees raw
+ * HTML.
  *
  * Deliberately dependency-free (no HTML-to-Markdown library): a small,
  * predictable transform covering the structures the default RTE produces.
  */
-class SkillTextFormatter
+class InstructionTextFormatter
 {
     public function toPromptText(string $html): string
     {

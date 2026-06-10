@@ -4,16 +4,16 @@ declare(strict_types=1);
 
 namespace Hn\Agent\Tests\Functional\MCP\Tool;
 
-use Hn\Agent\Domain\AgentSkillRepository;
-use Hn\Agent\MCP\Tool\GetSkillTool;
-use Hn\Agent\Service\SkillTextFormatter;
+use Hn\Agent\Domain\AgentInstructionRepository;
+use Hn\Agent\MCP\Tool\GetInstructionTool;
+use Hn\Agent\Service\InstructionTextFormatter;
 use Mcp\Types\TextContent;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
 
-class GetSkillToolTest extends FunctionalTestCase
+class GetInstructionToolTest extends FunctionalTestCase
 {
     protected array $coreExtensionsToLoad = [
         'workspaces',
@@ -36,10 +36,10 @@ class GetSkillToolTest extends FunctionalTestCase
         $this->connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
     }
 
-    private function createSkill(string $title, string $instruction, string $mode = 'on_demand', string $description = '', int $hidden = 0, int $sorting = 0): int
+    private function createInstruction(string $title, string $instruction, string $mode = 'on_demand', string $description = '', int $hidden = 0, int $sorting = 0): int
     {
-        $connection = $this->connectionPool->getConnectionForTable('tx_agent_skill');
-        $connection->insert('tx_agent_skill', [
+        $connection = $this->connectionPool->getConnectionForTable('tx_agent_instruction');
+        $connection->insert('tx_agent_instruction', [
             'pid' => 0,
             'title' => $title,
             'description' => $description,
@@ -54,11 +54,11 @@ class GetSkillToolTest extends FunctionalTestCase
         return (int)$connection->lastInsertId();
     }
 
-    private function buildTool(): GetSkillTool
+    private function buildTool(): GetInstructionTool
     {
-        return new GetSkillTool(
-            new AgentSkillRepository($this->connectionPool),
-            new SkillTextFormatter(),
+        return new GetInstructionTool(
+            new AgentInstructionRepository($this->connectionPool),
+            new InstructionTextFormatter(),
         );
     }
 
@@ -70,11 +70,11 @@ class GetSkillToolTest extends FunctionalTestCase
         return $block->text;
     }
 
-    public function testNoArgumentsReturnsIndexOfOnDemandSkills(): void
+    public function testNoArgumentsReturnsIndexOfOnDemandInstructions(): void
     {
-        $uid = $this->createSkill('News writing', '<p>Full body here.</p>', 'on_demand', 'When writing news', 0, 10);
-        // "always" skills must not show up in the on-demand index.
-        $this->createSkill('Global tone', 'Always polite.', 'always', '', 0, 20);
+        $uid = $this->createInstruction('News writing', '<p>Full body here.</p>', 'on_demand', 'When writing news', 0, 10);
+        // "always" instructions must not show up in the on-demand index.
+        $this->createInstruction('Global tone', 'Always polite.', 'always', '', 0, 20);
 
         $text = $this->firstText($this->buildTool()->execute([]));
 
@@ -88,7 +88,7 @@ class GetSkillToolTest extends FunctionalTestCase
 
     public function testIdsReturnFullConvertedBody(): void
     {
-        $uid = $this->createSkill(
+        $uid = $this->createInstruction(
             'News writing',
             '<p>Use <strong>active</strong> voice.</p><ul><li>Short teaser</li></ul>',
             'on_demand',
@@ -103,10 +103,10 @@ class GetSkillToolTest extends FunctionalTestCase
         self::assertStringNotContainsString('<p>', $text);
     }
 
-    public function testQueryReturnsMatchingSkillBody(): void
+    public function testQueryReturnsMatchingInstructionBody(): void
     {
-        $this->createSkill('News writing', 'Teaser rules for news articles.', 'on_demand', 'When writing news');
-        $this->createSkill('Image captions', 'Caption rules.', 'on_demand', 'When adding images');
+        $this->createInstruction('News writing', 'Teaser rules for news articles.', 'on_demand', 'When writing news');
+        $this->createInstruction('Image captions', 'Caption rules.', 'on_demand', 'When adding images');
 
         $text = $this->firstText($this->buildTool()->execute(['query' => 'news']));
 
@@ -114,14 +114,14 @@ class GetSkillToolTest extends FunctionalTestCase
         self::assertStringNotContainsString('Caption rules.', $text);
     }
 
-    public function testHiddenSkillIsNotReturnedByIds(): void
+    public function testHiddenInstructionIsNotReturnedByIds(): void
     {
-        $uid = $this->createSkill('Hidden skill', 'Secret body.', 'on_demand', '', 1);
+        $uid = $this->createInstruction('Hidden instruction', 'Secret body.', 'on_demand', '', 1);
 
         $result = $this->buildTool()->execute(['ids' => [$uid]]);
         $text = $this->firstText($result);
 
         self::assertStringNotContainsString('Secret body.', $text);
-        self::assertStringContainsString('No active skills found', $text);
+        self::assertStringContainsString('No active instructions found', $text);
     }
 }

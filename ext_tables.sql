@@ -11,7 +11,7 @@ CREATE TABLE tx_agent_task (
     workspace_id int(11) unsigned DEFAULT '0' NOT NULL,
 );
 
-CREATE TABLE tx_agent_skill (
+CREATE TABLE tx_agent_instruction (
     title varchar(255) DEFAULT '' NOT NULL,
     description varchar(255) DEFAULT '' NOT NULL,
     instruction text,

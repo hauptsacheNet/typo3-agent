@@ -87,46 +87,46 @@
             <trans-unit id="workspace.chat.switching" resname="workspace.chat.switching">
                 <source>Switching workspace…</source>
             </trans-unit>
-            <trans-unit id="tx_agent_skill" resname="tx_agent_skill">
-                <source>Agent Skill</source>
+            <trans-unit id="tx_agent_instruction" resname="tx_agent_instruction">
+                <source>Agent Instruction</source>
             </trans-unit>
-            <trans-unit id="tx_agent_skill.title" resname="tx_agent_skill.title">
+            <trans-unit id="tx_agent_instruction.title" resname="tx_agent_instruction.title">
                 <source>Name</source>
             </trans-unit>
-            <trans-unit id="tx_agent_skill.mode" resname="tx_agent_skill.mode">
+            <trans-unit id="tx_agent_instruction.mode" resname="tx_agent_instruction.mode">
                 <source>Mode</source>
             </trans-unit>
-            <trans-unit id="tx_agent_skill.mode.description" resname="tx_agent_skill.mode.description">
-                <source>"Always" adds the skill body to the system prompt of every new chat (global base rule). "On demand" only lists the skill in the prompt; the agent loads the full body via the GetSkill tool when relevant.</source>
+            <trans-unit id="tx_agent_instruction.mode.description" resname="tx_agent_instruction.mode.description">
+                <source>"Always" adds the instruction body to the system prompt of every new chat (global base rule). "On demand" only lists the instruction in the prompt; the agent loads the full body via the GetInstruction tool when relevant.</source>
             </trans-unit>
-            <trans-unit id="tx_agent_skill.mode.always" resname="tx_agent_skill.mode.always">
+            <trans-unit id="tx_agent_instruction.mode.always" resname="tx_agent_instruction.mode.always">
                 <source>Always (in system prompt)</source>
             </trans-unit>
-            <trans-unit id="tx_agent_skill.mode.on_demand" resname="tx_agent_skill.mode.on_demand">
+            <trans-unit id="tx_agent_instruction.mode.on_demand" resname="tx_agent_instruction.mode.on_demand">
                 <source>On demand (loaded when relevant)</source>
             </trans-unit>
-            <trans-unit id="tx_agent_skill.description" resname="tx_agent_skill.description">
+            <trans-unit id="tx_agent_instruction.description" resname="tx_agent_instruction.description">
                 <source>When to use</source>
             </trans-unit>
-            <trans-unit id="tx_agent_skill.description.description" resname="tx_agent_skill.description.description">
-                <source>Short hint describing when this skill applies, e.g. "When writing or revising texts for content elements or news". Shown in the prompt index so the agent knows when to load the full skill.</source>
+            <trans-unit id="tx_agent_instruction.description.description" resname="tx_agent_instruction.description.description">
+                <source>Short hint describing when this instruction applies, e.g. "When writing or revising texts for content elements or news". Shown in the prompt index so the agent knows when to load the full instruction.</source>
             </trans-unit>
-            <trans-unit id="tx_agent_skill.instruction" resname="tx_agent_skill.instruction">
-                <source>Skill content</source>
+            <trans-unit id="tx_agent_instruction.instruction" resname="tx_agent_instruction.instruction">
+                <source>Instruction content</source>
             </trans-unit>
-            <trans-unit id="tx_agent_skill.instruction.description" resname="tx_agent_skill.instruction.description">
+            <trans-unit id="tx_agent_instruction.instruction.description" resname="tx_agent_instruction.instruction.description">
                 <source>The guidance itself — e.g. tone of voice, wording rules, or how to handle specific content elements or records.</source>
             </trans-unit>
-            <trans-unit id="skills.heading" resname="skills.heading">
-                <source>Agent skills</source>
+            <trans-unit id="instructions.heading" resname="instructions.heading">
+                <source>Agent instructions</source>
             </trans-unit>
-            <trans-unit id="skills.intro" resname="skills.intro">
-                <source>These skills inform newly started chats. "Always" skills are part of every prompt; "on-demand" skills are loaded by the agent when relevant.</source>
+            <trans-unit id="instructions.intro" resname="instructions.intro">
+                <source>These instructions inform newly started chats. "Always" instructions are part of every prompt; "on-demand" instructions are loaded by the agent when relevant.</source>
             </trans-unit>
-            <trans-unit id="skills.badge.always" resname="skills.badge.always">
+            <trans-unit id="instructions.badge.always" resname="instructions.badge.always">
                 <source>always</source>
             </trans-unit>
-            <trans-unit id="skills.badge.onDemand" resname="skills.badge.onDemand">
+            <trans-unit id="instructions.badge.onDemand" resname="instructions.badge.onDemand">
                 <source>on-demand</source>
             </trans-unit>
         </body>
