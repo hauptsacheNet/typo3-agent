@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Hn\Agent\Controller;
 
 use Doctrine\DBAL\ParameterType;
+use Hn\Agent\Domain\AgentInstructionRepository;
 use Hn\Agent\Domain\AgentTaskRepository;
 use Hn\Agent\Domain\TaskStatus;
 use Hn\Agent\Http\SseStream;
@@ -52,6 +53,7 @@ class ChatController
         private readonly PageRepository        $pageRepository,
         private readonly ConnectionPool        $connectionPool,
         private readonly PromptRenderer        $promptRenderer,
+        private readonly AgentInstructionRepository $instructionRepository,
     )
     {
     }
@@ -97,6 +99,7 @@ class ChatController
             'defaultUploadFolder' => $uploadContext['defaultUploadFolder'],
             'fileBrowserUri' => $uploadContext['fileBrowserUri'],
             'preflightUri' => $uploadContext['preflightUri'],
+            'instructions' => $this->instructionRepository->findActiveInstructions(),
         ])->renderResponse('Chat/Index');
     }
 
@@ -212,6 +215,7 @@ class ChatController
                 'id' => $pageId,
             ]),
             'preflightUri' => $uploadContext['preflightUri'],
+            'instructions' => $this->instructionRepository->findActiveInstructions(),
         ])->renderResponse('Chat/Show');
     }
 

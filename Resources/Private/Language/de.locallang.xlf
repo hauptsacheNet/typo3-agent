@@ -111,6 +111,30 @@
                 <source>Switching workspace…</source>
                 <target>Workspace wird gewechselt…</target>
             </trans-unit>
+            <trans-unit id="tx_agent_instruction" resname="tx_agent_instruction">
+                <source>Agent Instruction</source>
+                <target>Agent-Instruktion</target>
+            </trans-unit>
+            <trans-unit id="tx_agent_instruction.title" resname="tx_agent_instruction.title">
+                <source>Title</source>
+                <target>Titel</target>
+            </trans-unit>
+            <trans-unit id="tx_agent_instruction.instruction" resname="tx_agent_instruction.instruction">
+                <source>Instruction</source>
+                <target>Instruktion</target>
+            </trans-unit>
+            <trans-unit id="tx_agent_instruction.instruction.description" resname="tx_agent_instruction.instruction.description">
+                <source>Guidance for the AI agent — e.g. tone of voice, wording rules, or how to handle specific content elements or records. Added to the system prompt of newly started chats.</source>
+                <target>Vorgabe für den KI-Agenten — z.B. Tonalität, Formulierungsregeln oder wie mit bestimmten Content-Elementen oder Records umzugehen ist. Wird dem System-Prompt neu gestarteter Chats hinzugefügt.</target>
+            </trans-unit>
+            <trans-unit id="instructions.heading" resname="instructions.heading">
+                <source>Editorial instructions for the AI agent</source>
+                <target>Redaktionelle Instruktionen für den KI-Agenten</target>
+            </trans-unit>
+            <trans-unit id="instructions.intro" resname="instructions.intro">
+                <source>These instructions are applied automatically to every newly started chat.</source>
+                <target>Diese Instruktionen werden bei jedem neu gestarteten Chat automatisch angewendet.</target>
+            </trans-unit>
         </body>
     </file>
 </xliff>

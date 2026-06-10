@@ -61,6 +61,44 @@ The task's `cruser_id` determines which backend user's permissions the agent use
 
 **Note:** TYPO3 13.4 no longer auto-populates `cruser_id` via DataHandler. When `cruser_id` is 0 (default), the agent falls back to admin context. To run the agent as a specific user, set `cruser_id` manually on the task record.
 
+### Editorial Instructions
+
+Editors can maintain reusable instructions for the agent — tone of voice,
+wording rules, or how to handle specific content elements or records — as
+**Agent Instruction** records (`tx_agent_instruction`). Every active record is
+appended to the agent's system prompt when a **new** chat/task is started.
+
+**Note:** Instructions are baked into the conversation at creation time, so
+they apply to newly started chats — chats already in progress keep the prompt
+they were created with.
+
+Each record has:
+
+| Field | Description |
+|-------|-------------|
+| Title | Short label, shown in the read-only instructions panel |
+| Instruction | The guidance text injected into the system prompt |
+| Hidden / Start / Stop | Standard visibility controls to stage or retire instructions without deleting them |
+
+**Where to keep them:** create a dedicated folder (SysFolder) and store the
+instruction records there.
+
+**Restricting who may edit (native TYPO3 permissions):** the extension does
+*not* hard-code a group. Instead, grant editing to the desired backend group
+via the standard access mechanism:
+
+1. Edit the backend group in **Backend Users > Groups**.
+2. Under **Access Lists > Tables (modify)**, enable `Agent Instruction`.
+3. Give the group access to the SysFolder that holds the records (DB mounts /
+   page permissions).
+
+Groups without modify rights can still *read* the instructions, so they remain
+visible in the List module and in the chat info panel.
+
+**Viewing:** the instructions appear in a collapsible panel at the top of the
+AI chat (both the chat list and individual chats), and — like any record — in
+the **List module**.
+
 ### Running the Agent
 
 Process all pending tasks:

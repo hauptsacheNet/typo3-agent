@@ -90,3 +90,19 @@ hn-agent-chat .chat-attachment-warn {
     align-items: center;
     line-height: 1;
 }
+
+/* Editorial instructions panel (Chat index + show) */
+.hn-agent-instructions > summary {
+    cursor: pointer;
+    font-weight: 600;
+    list-style-position: inside;
+}
+
+.hn-agent-instructions > summary .badge {
+    margin-left: .5em;
+}
+
+.hn-agent-instruction:not(:last-child) {
+    border-bottom: 1px solid var(--bs-border-color, rgba(0, 0, 0, 0.1));
+    padding-bottom: .5rem;
+}

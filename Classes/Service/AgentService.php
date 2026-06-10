@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Hn\Agent\Service;
 
 use Doctrine\DBAL\ParameterType;
+use Hn\Agent\Domain\AgentInstructionRepository;
 use Hn\Agent\Domain\AgentTaskRepository;
 use Hn\Agent\Domain\TaskStatus;
 use Hn\McpServer\MCP\ToolRegistry;
@@ -35,6 +36,7 @@ class AgentService implements LoggerAwareInterface
         private readonly ConnectionPool $connectionPool,
         private readonly AgentTaskRepository $repository,
         private readonly AttachmentService $attachmentService,
+        private readonly AgentInstructionRepository $instructionRepository,
     ) {}
 
     /**
@@ -328,6 +330,7 @@ class AgentService implements LoggerAwareInterface
     {
         $config = $this->extensionConfiguration->get('agent');
         $systemPrompt = $config['systemPrompt'] ?? 'You are a helpful TYPO3 CMS assistant.';
+        $systemPrompt .= $this->buildEditorInstructionsSection();
 
         $userMessage = ['role' => 'user', 'content' => $prompt];
         $attachmentRefs = $this->resolveAttachmentRefs($rawAttachments);
@@ -409,6 +412,35 @@ class AgentService implements LoggerAwareInterface
         $messages[] = $userMessage;
 
         return $messages;
+    }
+
+    /**
+     * Build the editorial-instructions block that is appended to the system
+     * prompt. Editors maintain these as tx_agent_instruction records (tone of
+     * voice, how to handle certain content elements/records, …); every active
+     * record is concatenated here.
+     *
+     * Returns an empty string when there are no active instructions, so the
+     * system prompt is left untouched in that case. The block is baked into
+     * the stored system message at task-creation time — it therefore applies
+     * to newly started chats, not to ones already in progress.
+     */
+    private function buildEditorInstructionsSection(): string
+    {
+        $instructions = $this->instructionRepository->findActiveInstructions();
+        if ($instructions === []) {
+            return '';
+        }
+
+        $section = "\n\n# Editorial instructions\n"
+            . "The following guidance was maintained by the editorial team and must be "
+            . "followed for all texts and changes you produce:\n";
+        foreach ($instructions as $instruction) {
+            $title = trim($instruction['title']);
+            $section .= "\n## " . ($title !== '' ? $title : 'Instruction') . "\n"
+                . $instruction['instruction'] . "\n";
+        }
+        return $section;
     }
 
     /**
