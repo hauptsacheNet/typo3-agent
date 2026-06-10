@@ -29,8 +29,16 @@ class AttachmentService implements LoggerAwareInterface
 
     public const SUPPORTED_IMAGE_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
     public const SUPPORTED_DOCUMENT_MIME_TYPES = ['application/pdf'];
+    public const SUPPORTED_SPREADSHEET_MIME_TYPES = [
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // xlsx
+        'application/vnd.ms-excel',                                          // xls
+        'application/vnd.oasis.opendocument.spreadsheet',                    // ods
+        'text/csv',
+    ];
+    public const SUPPORTED_SPREADSHEET_EXTENSIONS = ['xlsx', 'xls', 'ods', 'csv'];
     public const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
     public const MAX_DOCUMENT_BYTES = 30 * 1024 * 1024;
+    public const MAX_SPREADSHEET_BYTES = 30 * 1024 * 1024;
 
     public function __construct(
         private readonly ResourceFactory $resourceFactory,
@@ -41,7 +49,7 @@ class AttachmentService implements LoggerAwareInterface
      * the file contents. Reads only FAL metadata.
      *
      * @param array<string, mixed> $ref
-     * @return array{kind: 'image'|'document'|'unsupported'|'oversize'|'unresolvable', mime: string, size: int, file: ?File, reason: ?string}
+     * @return array{kind: 'image'|'document'|'spreadsheet'|'unsupported'|'oversize'|'unresolvable', mime: string, size: int, file: ?File, reason: ?string}
      */
     public function classify(array $ref): array
     {
@@ -55,15 +63,31 @@ class AttachmentService implements LoggerAwareInterface
         }
 
         $mime = strtolower((string)$file->getMimeType());
+        $extension = strtolower((string)$file->getExtension());
         $size = (int)$file->getSize();
         $isImage = in_array($mime, self::SUPPORTED_IMAGE_MIME_TYPES, true);
         $isDocument = in_array($mime, self::SUPPORTED_DOCUMENT_MIME_TYPES, true);
+        // Spreadsheet detection is intentionally lenient: TYPO3 FAL frequently
+        // mislabels XLSX/ODS as application/zip, XLS as application/octet-stream
+        // and CSV as text/plain, so we also accept by file extension.
+        $isSpreadsheet = in_array($mime, self::SUPPORTED_SPREADSHEET_MIME_TYPES, true)
+            || in_array($extension, self::SUPPORTED_SPREADSHEET_EXTENSIONS, true);
 
-        if (!$isImage && !$isDocument) {
+        if (!$isImage && !$isSpreadsheet && !$isDocument) {
             return ['kind' => 'unsupported', 'mime' => $mime, 'size' => $size, 'file' => $file, 'reason' => 'Format nicht unterstützt'];
         }
 
-        $limit = $isImage ? self::MAX_IMAGE_BYTES : self::MAX_DOCUMENT_BYTES;
+        if ($isImage) {
+            $kind = 'image';
+            $limit = self::MAX_IMAGE_BYTES;
+        } elseif ($isSpreadsheet) {
+            $kind = 'spreadsheet';
+            $limit = self::MAX_SPREADSHEET_BYTES;
+        } else {
+            $kind = 'document';
+            $limit = self::MAX_DOCUMENT_BYTES;
+        }
+
         if ($size > $limit) {
             return [
                 'kind' => 'oversize',
@@ -74,7 +98,7 @@ class AttachmentService implements LoggerAwareInterface
             ];
         }
 
-        return ['kind' => $isImage ? 'image' : 'document', 'mime' => $mime, 'size' => $size, 'file' => $file, 'reason' => null];
+        return ['kind' => $kind, 'mime' => $mime, 'size' => $size, 'file' => $file, 'reason' => null];
     }
 
     /**

@@ -6,6 +6,7 @@ namespace Hn\Agent\MCP\Tool;
 
 use Doctrine\DBAL\ParameterType;
 use Hn\Agent\Service\AttachmentService;
+use Hn\Agent\Service\SpreadsheetExtractionService;
 use Hn\McpServer\MCP\Tool\AbstractTool;
 use Mcp\Types\CallToolResult;
 use Mcp\Types\ImageContent;
@@ -16,7 +17,9 @@ use TYPO3\CMS\Core\Resource\File;
 /**
  * Read a file from FAL by its sys_file UID. For supported binary formats
  * (PNG/JPEG/WEBP/GIF, PDF) the contents are returned as base64-encoded
- * ImageContent so the LLM can see / inspect them directly. Other formats
+ * ImageContent so the LLM can see / inspect them directly. Spreadsheets
+ * (XLSX/XLS/ODS/CSV) are parsed server-side into text (plus best-effort
+ * embedded images) since the LLM cannot read their raw bytes. Other formats
  * return only metadata.
  *
  * As a usability safety net, the tool also accepts sys_file_reference and
@@ -35,6 +38,7 @@ class ReadFileTool extends AbstractTool
     public function __construct(
         private readonly AttachmentService $attachmentService,
         private readonly ConnectionPool $connectionPool,
+        private readonly SpreadsheetExtractionService $spreadsheetExtractor,
     ) {}
 
     public function getSchema(): array
@@ -42,7 +46,9 @@ class ReadFileTool extends AbstractTool
         return [
             'description' => 'Read a file from TYPO3\'s File Abstraction Layer (FAL) by its sys_file UID. '
                 . 'For images (PNG/JPEG/WEBP/GIF) and PDFs the binary content is returned base64-encoded '
-                . 'so it can be displayed / analyzed inline. For other file types only metadata '
+                . 'so it can be displayed / analyzed inline. Spreadsheets (XLSX/XLS/ODS/CSV) are parsed '
+                . 'server-side and returned as text (one block per sheet) plus any embedded images. '
+                . 'For other file types only metadata '
                 . '(name, MIME, size) is returned. Use this whenever you encounter a sys_file:UID '
                 . 'reference (e.g. from ReadTable on sys_file / sys_file_reference / sys_file_metadata) '
                 . 'and need to actually inspect the file content. '
@@ -101,6 +107,16 @@ class ReadFileTool extends AbstractTool
             return new CallToolResult([
                 new TextContent($metadata . "\n" . $info['reason'] . ' — metadata only.'),
             ]);
+        }
+
+        if ($info['kind'] === 'spreadsheet') {
+            $extracted = $this->spreadsheetExtractor->extract($file);
+            $note = $extracted['truncated'] ? "\n(Hinweis: Inhalt wurde aus Größengründen gekürzt.)" : '';
+            $content = [new TextContent($metadata . $note . "\n\n" . $extracted['text'])];
+            foreach ($extracted['images'] as $img) {
+                $content[] = new ImageContent($img['data'], $img['mime']);
+            }
+            return new CallToolResult($content);
         }
 
         // image / document: embed via ImageContent. For application/pdf the

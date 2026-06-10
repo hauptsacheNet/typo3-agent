@@ -893,9 +893,10 @@ class AgentService implements LoggerAwareInterface
      * is what we want: the user only sees pre-flight info for files they can
      * actually access.
      *
-     * `readableByLlm` answers: can the LLM retrieve the file's bytes by
-     * calling the `ReadFile` tool? True for images / PDFs within size
-     * limits. False means the LLM can only see the marker metadata; the
+     * `readableByLlm` answers: can the LLM retrieve the file's content by
+     * calling the `ReadFile` tool? True for images / PDFs / spreadsheets
+     * within size limits. False means the LLM can only see the marker
+     * metadata; the
      * `reason` field then explains why (oversize, unsupported MIME, etc.).
      *
      * @param array<string, mixed> $ref
@@ -911,7 +912,7 @@ class AgentService implements LoggerAwareInterface
             'name' => $file?->getName() ?? (string)($ref['name'] ?? ''),
             'mime' => $info['mime'],
             'size' => $info['size'],
-            'readableByLlm' => in_array($info['kind'], ['image', 'document'], true),
+            'readableByLlm' => in_array($info['kind'], ['image', 'document', 'spreadsheet'], true),
             'reason' => $info['reason'],
         ];
     }

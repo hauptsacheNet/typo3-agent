@@ -6,8 +6,12 @@ namespace Hn\Agent\Tests\Functional\MCP\Tool;
 
 use Hn\Agent\MCP\Tool\ReadFileTool;
 use Hn\Agent\Service\AttachmentService;
+use Hn\Agent\Service\SpreadsheetExtractionService;
 use Mcp\Types\ImageContent;
 use Mcp\Types\TextContent;
+use PhpOffice\PhpSpreadsheet\IOFactory;
+use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Worksheet\Drawing;
 use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 use TYPO3\CMS\Core\Resource\File;
 use TYPO3\CMS\Core\Resource\ResourceFactory;
@@ -109,6 +113,7 @@ class ReadFileToolTest extends FunctionalTestCase
         $tool = new ReadFileTool(
             new AttachmentService(GeneralUtility::makeInstance(ResourceFactory::class)),
             GeneralUtility::makeInstance(\TYPO3\CMS\Core\Database\ConnectionPool::class),
+            new SpreadsheetExtractionService(),
         );
 
         $result = $tool->execute(['uid' => 999999]);
@@ -126,6 +131,7 @@ class ReadFileToolTest extends FunctionalTestCase
         $tool = new ReadFileTool(
             new AttachmentService(GeneralUtility::makeInstance(ResourceFactory::class)),
             GeneralUtility::makeInstance(\TYPO3\CMS\Core\Database\ConnectionPool::class),
+            new SpreadsheetExtractionService(),
         );
 
         $result = $tool->execute(['uid' => 0]);
@@ -154,6 +160,100 @@ class ReadFileToolTest extends FunctionalTestCase
         return new ReadFileTool(
             new AttachmentService($factory),
             GeneralUtility::makeInstance(\TYPO3\CMS\Core\Database\ConnectionPool::class),
+            new SpreadsheetExtractionService(),
+        );
+    }
+
+    public function testReadsXlsxAndExtractsTextAndEmbeddedImage(): void
+    {
+        $xlsxPath = $this->createXlsxFixture();
+        $tool = $this->buildSpreadsheetTool(
+            501,
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'xlsx',
+            'report.xlsx',
+            '1:/uploads/report.xlsx',
+            $xlsxPath,
+        );
+
+        $result = $tool->execute(['uid' => 501]);
+
+        self::assertFalse($result->isError);
+        self::assertInstanceOf(TextContent::class, $result->content[0]);
+        self::assertStringContainsString('report.xlsx', $result->content[0]->text);
+        self::assertStringContainsString('Daten', $result->content[0]->text);
+        self::assertStringContainsString('Hallo', $result->content[0]->text);
+        self::assertStringContainsString('Welt', $result->content[0]->text);
+
+        $images = array_values(array_filter(
+            $result->content,
+            static fn ($c) => $c instanceof ImageContent,
+        ));
+        self::assertNotEmpty($images, 'Embedded image should be extracted best-effort');
+        self::assertStringStartsWith('image/', $images[0]->mimeType);
+    }
+
+    public function testReadsCsvAsText(): void
+    {
+        $csvPath = tempnam(sys_get_temp_dir(), 'csvfix') . '.csv';
+        file_put_contents($csvPath, "Name,Wert\nAlpha,1\nBeta,2\n");
+
+        $tool = $this->buildSpreadsheetTool(601, 'text/csv', 'csv', 'data.csv', '1:/uploads/data.csv', $csvPath);
+
+        $result = $tool->execute(['uid' => 601]);
+
+        self::assertFalse($result->isError);
+        self::assertInstanceOf(TextContent::class, $result->content[0]);
+        self::assertStringContainsString('Alpha', $result->content[0]->text);
+        self::assertStringContainsString('Beta', $result->content[0]->text);
+
+        $images = array_filter($result->content, static fn ($c) => $c instanceof ImageContent);
+        self::assertEmpty($images, 'CSV carries no embedded images');
+    }
+
+    private function createXlsxFixture(): string
+    {
+        $pngBytes = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkAAIAAAoAAv/lxKUAAAAASUVORK5CYII=');
+        $pngPath = tempnam(sys_get_temp_dir(), 'xlsximg') . '.png';
+        file_put_contents($pngPath, $pngBytes);
+
+        $spreadsheet = new Spreadsheet();
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setTitle('Daten');
+        $sheet->setCellValue('A1', 'Hallo');
+        $sheet->setCellValue('B1', 'Welt');
+        $sheet->setCellValue('A2', 42);
+
+        $drawing = new Drawing();
+        $drawing->setName('Logo');
+        $drawing->setPath($pngPath);
+        $drawing->setCoordinates('D1');
+        $drawing->setWorksheet($sheet);
+
+        $xlsxPath = tempnam(sys_get_temp_dir(), 'xlsxfix') . '.xlsx';
+        IOFactory::createWriter($spreadsheet, 'Xlsx')->save($xlsxPath);
+
+        return $xlsxPath;
+    }
+
+    private function buildSpreadsheetTool(int $uid, string $mime, string $extension, string $name, string $identifier, string $localPath): ReadFileTool
+    {
+        $file = $this->getMockBuilder(File::class)->disableOriginalConstructor()->getMock();
+        $file->method('getUid')->willReturn($uid);
+        $file->method('getMimeType')->willReturn($mime);
+        $file->method('getExtension')->willReturn($extension);
+        $file->method('getSize')->willReturn(filesize($localPath) ?: 1024);
+        $file->method('getName')->willReturn($name);
+        $file->method('getCombinedIdentifier')->willReturn($identifier);
+        $file->method('getForLocalProcessing')->willReturn($localPath);
+
+        $factory = $this->getMockBuilder(ResourceFactory::class)->disableOriginalConstructor()->getMock();
+        $factory->method('getFileObject')->with($uid)->willReturn($file);
+
+        return new ReadFileTool(
+            new AttachmentService($factory),
+            GeneralUtility::makeInstance(\TYPO3\CMS\Core\Database\ConnectionPool::class),
+            new SpreadsheetExtractionService(),
         );
     }
 }
