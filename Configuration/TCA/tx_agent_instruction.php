@@ -33,7 +33,6 @@ return [
         'crdate' => 'crdate',
         'delete' => 'deleted',
         'sortby' => 'sorting',
-        'default_sortby' => 'sorting ASC',
         'enablecolumns' => [
             'disabled' => 'hidden',
             'starttime' => 'starttime',
