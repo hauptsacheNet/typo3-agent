@@ -61,43 +61,56 @@ The task's `cruser_id` determines which backend user's permissions the agent use
 
 **Note:** TYPO3 13.4 no longer auto-populates `cruser_id` via DataHandler. When `cruser_id` is 0 (default), the agent falls back to admin context. To run the agent as a specific user, set `cruser_id` manually on the task record.
 
-### Editorial Instructions
+### Agent Skills
 
-Editors can maintain reusable instructions for the agent — tone of voice,
-wording rules, or how to handle specific content elements or records — as
-**Agent Instruction** records (`tx_agent_instruction`). Every active record is
-appended to the agent's system prompt when a **new** chat/task is started.
+Editors can maintain reusable **skills** for the agent — tone of voice, wording
+rules, or how to handle specific content elements or records — as **Agent
+Skill** records (`tx_agent_skill`). This follows the progressive-disclosure idea
+of the [SKILL.md open standard](https://agentskills.io): the agent is its own
+harness, so the extension implements the skill pattern itself (provider-neutral —
+the OpenAI-compatible chat API has no native skills parameter).
 
-**Note:** Instructions are baked into the conversation at creation time, so
-they apply to newly started chats — chats already in progress keep the prompt
-they were created with.
+Each skill has a **mode**:
+
+- **Always** — the body is appended to the agent's system prompt for every new
+  chat (global base rules). Use sparingly for guidance that always applies.
+- **On demand** — only the name and the "when to use" hint go into the prompt as
+  a short index; the agent loads the full body via the `GetSkill` tool when it is
+  about to produce the relevant kind of content. This keeps the prompt small and
+  scales to many skills.
+
+**Note:** Skills are baked into the conversation at creation time, so they apply
+to newly started chats — chats already in progress keep the prompt they were
+created with.
 
 Each record has:
 
 | Field | Description |
 |-------|-------------|
-| Title | Short label, shown in the read-only instructions panel |
-| Instruction | The guidance text injected into the system prompt |
-| Hidden / Start / Stop | Standard visibility controls to stage or retire instructions without deleting them |
+| Name | Short label, shown in the prompt index and the read-only panel |
+| Mode | `Always` (in every prompt) or `On demand` (loaded via `GetSkill`) |
+| When to use | Short hint shown in the prompt index so the agent knows when an on-demand skill applies |
+| Skill content | The guidance itself — authored as rich text; converted to plain text/Markdown before it reaches the LLM |
+| Hidden / Start / Stop | Standard visibility controls to stage or retire skills without deleting them |
 
 **Where to keep them:** create a dedicated folder (SysFolder) and store the
-instruction records there.
+skill records there.
 
 **Restricting who may edit (native TYPO3 permissions):** the extension does
 *not* hard-code a group. Instead, grant editing to the desired backend group
 via the standard access mechanism:
 
 1. Edit the backend group in **Backend Users > Groups**.
-2. Under **Access Lists > Tables (modify)**, enable `Agent Instruction`.
+2. Under **Access Lists > Tables (modify)**, enable `Agent Skill`.
 3. Give the group access to the SysFolder that holds the records (DB mounts /
    page permissions).
 
-Groups without modify rights can still *read* the instructions, so they remain
-visible in the List module and in the chat info panel.
+Groups without modify rights can still *read* the skills, so they remain visible
+in the List module and in the chat info panel.
 
-**Viewing:** the instructions appear in a collapsible panel at the top of the
-AI chat (both the chat list and individual chats), and — like any record — in
-the **List module**.
+**Viewing:** the skills appear in a collapsible panel at the top of the AI chat
+(both the chat list and individual chats), and — like any record — in the **List
+module**.
 
 ### Running the Agent
 

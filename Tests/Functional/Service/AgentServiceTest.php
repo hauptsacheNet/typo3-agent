@@ -4,11 +4,12 @@ declare(strict_types=1);
 
 namespace Hn\Agent\Tests\Functional\Service;
 
-use Hn\Agent\Domain\AgentInstructionRepository;
+use Hn\Agent\Domain\AgentSkillRepository;
 use Hn\Agent\Domain\AgentTaskRepository;
 use Hn\Agent\Service\AgentService;
 use Hn\Agent\Service\AttachmentService;
 use Hn\Agent\Service\LlmService;
+use Hn\Agent\Service\SkillTextFormatter;
 use Hn\Agent\Service\ToolConverterService;
 use Hn\McpServer\MCP\ToolRegistry;
 use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
@@ -143,20 +144,23 @@ class AgentServiceTest extends FunctionalTestCase
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
             new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class)),
-            new AgentInstructionRepository($this->connectionPool),
+            new AgentSkillRepository($this->connectionPool),
+            new SkillTextFormatter(),
         );
     }
 
     /**
-     * Insert a tx_agent_instruction record and return its UID.
+     * Insert a tx_agent_skill record and return its UID.
      */
-    private function createInstruction(string $title, string $instruction, int $hidden = 0, int $sorting = 0): int
+    private function createSkill(string $title, string $instruction, string $mode = 'always', string $description = '', int $hidden = 0, int $sorting = 0): int
     {
-        $connection = $this->connectionPool->getConnectionForTable('tx_agent_instruction');
-        $connection->insert('tx_agent_instruction', [
+        $connection = $this->connectionPool->getConnectionForTable('tx_agent_skill');
+        $connection->insert('tx_agent_skill', [
             'pid' => 0,
             'title' => $title,
+            'description' => $description,
             'instruction' => $instruction,
+            'mode' => $mode,
             'hidden' => $hidden,
             'sorting' => $sorting,
             'deleted' => 0,
@@ -166,12 +170,12 @@ class AgentServiceTest extends FunctionalTestCase
         return (int)$connection->lastInsertId();
     }
 
-    public function testActiveInstructionsAreAppendedToSystemPrompt(): void
+    public function testAlwaysSkillsAreInlinedIntoSystemPrompt(): void
     {
-        $this->createInstruction('Tone of voice', 'Always write in a friendly, formal tone.', 0, 10);
-        $this->createInstruction('News handling', 'Never delete news records, only hide them.', 0, 20);
-        // Hidden instruction must be excluded.
-        $this->createInstruction('Draft', 'This guidance is not active yet.', 1, 30);
+        $this->createSkill('Tone of voice', 'Always write in a friendly, formal tone.', 'always', '', 0, 10);
+        $this->createSkill('News handling', 'Never delete news records, only hide them.', 'always', '', 0, 20);
+        // Hidden skill must be excluded.
+        $this->createSkill('Draft', 'This guidance is not active yet.', 'always', '', 1, 30);
 
         $messages = $this->buildAgentServiceWithMock([])
             ->buildInitialMessages(0, '', 0, 'Do something');
@@ -190,13 +194,57 @@ class AgentServiceTest extends FunctionalTestCase
         );
     }
 
-    public function testNoInstructionsLeavesSystemPromptUntouched(): void
+    public function testOnDemandSkillsAreOnlyIndexedNotInlined(): void
+    {
+        $uid = $this->createSkill(
+            'News writing',
+            'The full body: use active voice, max 60 chars in the teaser.',
+            'on_demand',
+            'When writing or revising news articles',
+            0,
+            10,
+        );
+
+        $messages = $this->buildAgentServiceWithMock([])
+            ->buildInitialMessages(0, '', 0, 'Do something');
+
+        $systemContent = $messages[0]['content'];
+        // Index: name + "when to use" + the uid the agent passes to GetSkill.
+        self::assertStringContainsString('News writing', $systemContent);
+        self::assertStringContainsString('When writing or revising news articles', $systemContent);
+        self::assertStringContainsString('#' . $uid, $systemContent);
+        self::assertStringContainsString('GetSkill', $systemContent);
+        // The full body must NOT be inlined for on-demand skills.
+        self::assertStringNotContainsString('use active voice, max 60 chars', $systemContent);
+    }
+
+    public function testRteSkillBodyIsConvertedToPlainTextInPrompt(): void
+    {
+        $this->createSkill(
+            'Formatting',
+            '<p>Use <strong>active</strong> voice.</p><ul><li>Short sentences</li><li>No jargon</li></ul>',
+            'always',
+        );
+
+        $messages = $this->buildAgentServiceWithMock([])
+            ->buildInitialMessages(0, '', 0, 'Do something');
+
+        $systemContent = $messages[0]['content'];
+        self::assertStringContainsString('**active**', $systemContent);
+        self::assertStringContainsString('- Short sentences', $systemContent);
+        // No raw HTML tags should leak into the prompt.
+        self::assertStringNotContainsString('<p>', $systemContent);
+        self::assertStringNotContainsString('<li>', $systemContent);
+    }
+
+    public function testNoSkillsLeavesSystemPromptUntouched(): void
     {
         $messages = $this->buildAgentServiceWithMock([])
             ->buildInitialMessages(0, '', 0, 'Do something');
 
         self::assertSame('system', $messages[0]['role']);
-        self::assertStringNotContainsString('Editorial instructions', $messages[0]['content']);
+        self::assertStringNotContainsString('Editorial guidelines', $messages[0]['content']);
+        self::assertStringNotContainsString('On-demand skills', $messages[0]['content']);
     }
 
     public function testSimpleResponseWithoutToolCalls(): void
@@ -302,7 +350,8 @@ class AgentServiceTest extends FunctionalTestCase
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
             new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class)),
-            new AgentInstructionRepository($this->connectionPool),
+            new AgentSkillRepository($this->connectionPool),
+            new SkillTextFormatter(),
         );
 
         try {
@@ -372,7 +421,8 @@ class AgentServiceTest extends FunctionalTestCase
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
             new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class)),
-            new AgentInstructionRepository($this->connectionPool),
+            new AgentSkillRepository($this->connectionPool),
+            new SkillTextFormatter(),
         );
 
         // Pass an unresolvable attachment (no such sys_file UID) — keeps the
@@ -442,7 +492,8 @@ class AgentServiceTest extends FunctionalTestCase
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
             new AttachmentService($resourceFactory),
-            new AgentInstructionRepository($this->connectionPool),
+            new AgentSkillRepository($this->connectionPool),
+            new SkillTextFormatter(),
         );
     }
 
@@ -722,7 +773,8 @@ class AgentServiceTest extends FunctionalTestCase
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
             new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class)),
-            new AgentInstructionRepository($this->connectionPool),
+            new AgentSkillRepository($this->connectionPool),
+            new SkillTextFormatter(),
         );
         $agentService->processTask($taskUid);
 
@@ -811,7 +863,8 @@ class AgentServiceTest extends FunctionalTestCase
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
             new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class)),
-            new AgentInstructionRepository($this->connectionPool),
+            new AgentSkillRepository($this->connectionPool),
+            new SkillTextFormatter(),
         );
         $agentService->processTask($taskUid);
 
@@ -889,7 +942,8 @@ class AgentServiceTest extends FunctionalTestCase
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
             new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class)),
-            new AgentInstructionRepository($this->connectionPool),
+            new AgentSkillRepository($this->connectionPool),
+            new SkillTextFormatter(),
         );
         $agentService->processTask($taskUid);
 

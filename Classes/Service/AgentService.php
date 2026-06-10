@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Hn\Agent\Service;
 
 use Doctrine\DBAL\ParameterType;
-use Hn\Agent\Domain\AgentInstructionRepository;
+use Hn\Agent\Domain\AgentSkillRepository;
 use Hn\Agent\Domain\AgentTaskRepository;
 use Hn\Agent\Domain\TaskStatus;
 use Hn\McpServer\MCP\ToolRegistry;
@@ -36,7 +36,8 @@ class AgentService implements LoggerAwareInterface
         private readonly ConnectionPool $connectionPool,
         private readonly AgentTaskRepository $repository,
         private readonly AttachmentService $attachmentService,
-        private readonly AgentInstructionRepository $instructionRepository,
+        private readonly AgentSkillRepository $skillRepository,
+        private readonly SkillTextFormatter $skillTextFormatter,
     ) {}
 
     /**
@@ -330,7 +331,7 @@ class AgentService implements LoggerAwareInterface
     {
         $config = $this->extensionConfiguration->get('agent');
         $systemPrompt = $config['systemPrompt'] ?? 'You are a helpful TYPO3 CMS assistant.';
-        $systemPrompt .= $this->buildEditorInstructionsSection();
+        $systemPrompt .= $this->buildSkillsSection();
 
         $userMessage = ['role' => 'user', 'content' => $prompt];
         $attachmentRefs = $this->resolveAttachmentRefs($rawAttachments);
@@ -415,31 +416,54 @@ class AgentService implements LoggerAwareInterface
     }
 
     /**
-     * Build the editorial-instructions block that is appended to the system
-     * prompt. Editors maintain these as tx_agent_instruction records (tone of
-     * voice, how to handle certain content elements/records, …); every active
-     * record is concatenated here.
+     * Build the editor-maintained skills block appended to the system prompt.
+     * Skills are tx_agent_skill records (tone of voice, how to handle certain
+     * content elements/records, …) following the SKILL.md progressive-
+     * disclosure idea:
      *
-     * Returns an empty string when there are no active instructions, so the
-     * system prompt is left untouched in that case. The block is baked into
-     * the stored system message at task-creation time — it therefore applies
-     * to newly started chats, not to ones already in progress.
+     *  - "always" skills are inlined in full (global base rules).
+     *  - "on_demand" skills are only indexed (name + "when to use"); the agent
+     *    loads the full body via the GetSkill tool when relevant.
+     *
+     * Returns an empty string when there are no active skills, so the system
+     * prompt is left untouched in that case. The block is baked into the
+     * stored system message at task-creation time — it therefore applies to
+     * newly started chats, not to ones already in progress.
      */
-    private function buildEditorInstructionsSection(): string
+    private function buildSkillsSection(): string
     {
-        $instructions = $this->instructionRepository->findActiveInstructions();
-        if ($instructions === []) {
+        $always = $this->skillRepository->findAlways();
+        $onDemand = $this->skillRepository->findOnDemand();
+        if ($always === [] && $onDemand === []) {
             return '';
         }
 
-        $section = "\n\n# Editorial instructions\n"
-            . "The following guidance was maintained by the editorial team and must be "
-            . "followed for all texts and changes you produce:\n";
-        foreach ($instructions as $instruction) {
-            $title = trim($instruction['title']);
-            $section .= "\n## " . ($title !== '' ? $title : 'Instruction') . "\n"
-                . $instruction['instruction'] . "\n";
+        $section = '';
+
+        if ($always !== []) {
+            $section .= "\n\n# Editorial guidelines\n"
+                . "The following guidance was maintained by the editorial team and must be "
+                . "followed for all texts and changes you produce:\n";
+            foreach ($always as $skill) {
+                $name = trim($skill['title']) !== '' ? trim($skill['title']) : 'Guideline';
+                $section .= "\n## " . $name . "\n"
+                    . $this->skillTextFormatter->toPromptText($skill['instruction']) . "\n";
+            }
         }
+
+        if ($onDemand !== []) {
+            $section .= "\n\n# On-demand skills\n"
+                . "Detailed editorial guidelines are available on demand. Before producing the "
+                . "kind of content described below, call the `GetSkill` tool with the relevant "
+                . "id(s) to load the full guideline:\n";
+            foreach ($onDemand as $skill) {
+                $name = trim($skill['title']) !== '' ? trim($skill['title']) : 'Skill';
+                $hint = trim($skill['description']);
+                $section .= "- [#" . $skill['uid'] . '] ' . $name
+                    . ($hint !== '' ? ' — ' . $hint : '') . "\n";
+            }
+        }
+
         return $section;
     }
 

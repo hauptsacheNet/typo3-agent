@@ -111,29 +111,61 @@
                 <source>Switching workspace…</source>
                 <target>Workspace wird gewechselt…</target>
             </trans-unit>
-            <trans-unit id="tx_agent_instruction" resname="tx_agent_instruction">
-                <source>Agent Instruction</source>
-                <target>Agent-Instruktion</target>
+            <trans-unit id="tx_agent_skill" resname="tx_agent_skill">
+                <source>Agent Skill</source>
+                <target>Agent-Skill</target>
             </trans-unit>
-            <trans-unit id="tx_agent_instruction.title" resname="tx_agent_instruction.title">
-                <source>Title</source>
-                <target>Titel</target>
+            <trans-unit id="tx_agent_skill.title" resname="tx_agent_skill.title">
+                <source>Name</source>
+                <target>Name</target>
             </trans-unit>
-            <trans-unit id="tx_agent_instruction.instruction" resname="tx_agent_instruction.instruction">
-                <source>Instruction</source>
-                <target>Instruktion</target>
+            <trans-unit id="tx_agent_skill.mode" resname="tx_agent_skill.mode">
+                <source>Mode</source>
+                <target>Modus</target>
             </trans-unit>
-            <trans-unit id="tx_agent_instruction.instruction.description" resname="tx_agent_instruction.instruction.description">
-                <source>Guidance for the AI agent — e.g. tone of voice, wording rules, or how to handle specific content elements or records. Added to the system prompt of newly started chats.</source>
-                <target>Vorgabe für den KI-Agenten — z.B. Tonalität, Formulierungsregeln oder wie mit bestimmten Content-Elementen oder Records umzugehen ist. Wird dem System-Prompt neu gestarteter Chats hinzugefügt.</target>
+            <trans-unit id="tx_agent_skill.mode.description" resname="tx_agent_skill.mode.description">
+                <source>"Always" adds the skill body to the system prompt of every new chat (global base rule). "On demand" only lists the skill in the prompt; the agent loads the full body via the GetSkill tool when relevant.</source>
+                <target>„Immer" fügt den Skill-Inhalt dem System-Prompt jedes neuen Chats hinzu (globale Basis-Regel). „Bei Bedarf" listet den Skill nur im Prompt; den vollen Inhalt lädt der Agent bei Bedarf über das GetSkill-Tool.</target>
             </trans-unit>
-            <trans-unit id="instructions.heading" resname="instructions.heading">
-                <source>Editorial instructions for the AI agent</source>
-                <target>Redaktionelle Instruktionen für den KI-Agenten</target>
+            <trans-unit id="tx_agent_skill.mode.always" resname="tx_agent_skill.mode.always">
+                <source>Always (in system prompt)</source>
+                <target>Immer (im System-Prompt)</target>
             </trans-unit>
-            <trans-unit id="instructions.intro" resname="instructions.intro">
-                <source>These instructions are applied automatically to every newly started chat.</source>
-                <target>Diese Instruktionen werden bei jedem neu gestarteten Chat automatisch angewendet.</target>
+            <trans-unit id="tx_agent_skill.mode.on_demand" resname="tx_agent_skill.mode.on_demand">
+                <source>On demand (loaded when relevant)</source>
+                <target>Bei Bedarf (lädt wenn relevant)</target>
+            </trans-unit>
+            <trans-unit id="tx_agent_skill.description" resname="tx_agent_skill.description">
+                <source>When to use</source>
+                <target>Wann anwenden</target>
+            </trans-unit>
+            <trans-unit id="tx_agent_skill.description.description" resname="tx_agent_skill.description.description">
+                <source>Short hint describing when this skill applies, e.g. "When writing or revising texts for content elements or news". Shown in the prompt index so the agent knows when to load the full skill.</source>
+                <target>Kurzer Hinweis, wann dieser Skill gilt, z.B. „Beim Verfassen oder Überarbeiten von Texten für Content-Elemente oder News". Erscheint im Prompt-Index, damit der Agent weiß, wann er den vollen Skill laden soll.</target>
+            </trans-unit>
+            <trans-unit id="tx_agent_skill.instruction" resname="tx_agent_skill.instruction">
+                <source>Skill content</source>
+                <target>Skill-Inhalt</target>
+            </trans-unit>
+            <trans-unit id="tx_agent_skill.instruction.description" resname="tx_agent_skill.instruction.description">
+                <source>The guidance itself — e.g. tone of voice, wording rules, or how to handle specific content elements or records.</source>
+                <target>Die Vorgabe selbst — z.B. Tonalität, Formulierungsregeln oder wie mit bestimmten Content-Elementen oder Records umzugehen ist.</target>
+            </trans-unit>
+            <trans-unit id="skills.heading" resname="skills.heading">
+                <source>Agent skills</source>
+                <target>Agent-Skills</target>
+            </trans-unit>
+            <trans-unit id="skills.intro" resname="skills.intro">
+                <source>These skills inform newly started chats. "Always" skills are part of every prompt; "on-demand" skills are loaded by the agent when relevant.</source>
+                <target>Diese Skills wirken auf neu gestartete Chats. „Immer"-Skills sind Teil jedes Prompts; „on-demand"-Skills lädt der Agent bei Bedarf.</target>
+            </trans-unit>
+            <trans-unit id="skills.badge.always" resname="skills.badge.always">
+                <source>always</source>
+                <target>immer</target>
+            </trans-unit>
+            <trans-unit id="skills.badge.onDemand" resname="skills.badge.onDemand">
+                <source>on-demand</source>
+                <target>on-demand</target>
             </trans-unit>
         </body>
     </file>
