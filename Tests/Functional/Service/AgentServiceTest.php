@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace Hn\Agent\Tests\Functional\Service;
 
+use Hn\Agent\Domain\AgentInstructionRepository;
 use Hn\Agent\Domain\AgentTaskRepository;
 use Hn\Agent\Service\AgentService;
 use Hn\Agent\Service\AttachmentService;
+use Hn\Agent\Service\InstructionTextFormatter;
 use Hn\Agent\Service\LlmService;
 use Hn\Agent\Service\ToolConverterService;
 use Hn\McpServer\MCP\ToolRegistry;
@@ -142,7 +144,107 @@ class AgentServiceTest extends FunctionalTestCase
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
             new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class)),
+            new AgentInstructionRepository($this->connectionPool),
+            new InstructionTextFormatter(),
         );
+    }
+
+    /**
+     * Insert a tx_agent_instruction record and return its UID.
+     */
+    private function createInstruction(string $title, string $instruction, string $mode = 'always', string $description = '', int $hidden = 0, int $sorting = 0): int
+    {
+        $connection = $this->connectionPool->getConnectionForTable('tx_agent_instruction');
+        $connection->insert('tx_agent_instruction', [
+            'pid' => 0,
+            'title' => $title,
+            'description' => $description,
+            'instruction' => $instruction,
+            'mode' => $mode,
+            'hidden' => $hidden,
+            'sorting' => $sorting,
+            'deleted' => 0,
+            'crdate' => time(),
+            'tstamp' => time(),
+        ]);
+        return (int)$connection->lastInsertId();
+    }
+
+    public function testAlwaysInstructionsAreInlinedIntoSystemPrompt(): void
+    {
+        $this->createInstruction('Tone of voice', 'Always write in a friendly, formal tone.', 'always', '', 0, 10);
+        $this->createInstruction('News handling', 'Never delete news records, only hide them.', 'always', '', 0, 20);
+        // Hidden instruction must be excluded.
+        $this->createInstruction('Draft', 'This guidance is not active yet.', 'always', '', 1, 30);
+
+        $messages = $this->buildAgentServiceWithMock([])
+            ->buildInitialMessages(0, '', 0, 'Do something');
+
+        self::assertSame('system', $messages[0]['role']);
+        $systemContent = $messages[0]['content'];
+        self::assertStringContainsString('Tone of voice', $systemContent);
+        self::assertStringContainsString('Always write in a friendly, formal tone.', $systemContent);
+        self::assertStringContainsString('News handling', $systemContent);
+        self::assertStringContainsString('Never delete news records, only hide them.', $systemContent);
+        self::assertStringNotContainsString('This guidance is not active yet.', $systemContent);
+        // Ordering follows the sorting field.
+        self::assertLessThan(
+            strpos($systemContent, 'News handling'),
+            strpos($systemContent, 'Tone of voice'),
+        );
+    }
+
+    public function testOnDemandInstructionsAreOnlyIndexedNotInlined(): void
+    {
+        $uid = $this->createInstruction(
+            'News writing',
+            'The full body: use active voice, max 60 chars in the teaser.',
+            'on_demand',
+            'When writing or revising news articles',
+            0,
+            10,
+        );
+
+        $messages = $this->buildAgentServiceWithMock([])
+            ->buildInitialMessages(0, '', 0, 'Do something');
+
+        $systemContent = $messages[0]['content'];
+        // Index: name + "when to use" + the uid the agent passes to GetInstruction.
+        self::assertStringContainsString('News writing', $systemContent);
+        self::assertStringContainsString('When writing or revising news articles', $systemContent);
+        self::assertStringContainsString('#' . $uid, $systemContent);
+        self::assertStringContainsString('GetInstruction', $systemContent);
+        // The full body must NOT be inlined for on-demand instructions.
+        self::assertStringNotContainsString('use active voice, max 60 chars', $systemContent);
+    }
+
+    public function testRteInstructionBodyIsConvertedToPlainTextInPrompt(): void
+    {
+        $this->createInstruction(
+            'Formatting',
+            '<p>Use <strong>active</strong> voice.</p><ul><li>Short sentences</li><li>No jargon</li></ul>',
+            'always',
+        );
+
+        $messages = $this->buildAgentServiceWithMock([])
+            ->buildInitialMessages(0, '', 0, 'Do something');
+
+        $systemContent = $messages[0]['content'];
+        self::assertStringContainsString('**active**', $systemContent);
+        self::assertStringContainsString('- Short sentences', $systemContent);
+        // No raw HTML tags should leak into the prompt.
+        self::assertStringNotContainsString('<p>', $systemContent);
+        self::assertStringNotContainsString('<li>', $systemContent);
+    }
+
+    public function testNoInstructionsLeavesSystemPromptUntouched(): void
+    {
+        $messages = $this->buildAgentServiceWithMock([])
+            ->buildInitialMessages(0, '', 0, 'Do something');
+
+        self::assertSame('system', $messages[0]['role']);
+        self::assertStringNotContainsString('Editorial guidelines', $messages[0]['content']);
+        self::assertStringNotContainsString('On-demand instructions', $messages[0]['content']);
     }
 
     public function testSimpleResponseWithoutToolCalls(): void
@@ -248,6 +350,8 @@ class AgentServiceTest extends FunctionalTestCase
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
             new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class)),
+            new AgentInstructionRepository($this->connectionPool),
+            new InstructionTextFormatter(),
         );
 
         try {
@@ -317,6 +421,8 @@ class AgentServiceTest extends FunctionalTestCase
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
             new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class)),
+            new AgentInstructionRepository($this->connectionPool),
+            new InstructionTextFormatter(),
         );
 
         // Pass an unresolvable attachment (no such sys_file UID) — keeps the
@@ -386,6 +492,8 @@ class AgentServiceTest extends FunctionalTestCase
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
             new AttachmentService($resourceFactory),
+            new AgentInstructionRepository($this->connectionPool),
+            new InstructionTextFormatter(),
         );
     }
 
@@ -665,6 +773,8 @@ class AgentServiceTest extends FunctionalTestCase
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
             new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class)),
+            new AgentInstructionRepository($this->connectionPool),
+            new InstructionTextFormatter(),
         );
         $agentService->processTask($taskUid);
 
@@ -753,6 +863,8 @@ class AgentServiceTest extends FunctionalTestCase
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
             new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class)),
+            new AgentInstructionRepository($this->connectionPool),
+            new InstructionTextFormatter(),
         );
         $agentService->processTask($taskUid);
 
@@ -830,6 +942,8 @@ class AgentServiceTest extends FunctionalTestCase
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
             new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class)),
+            new AgentInstructionRepository($this->connectionPool),
+            new InstructionTextFormatter(),
         );
         $agentService->processTask($taskUid);
 

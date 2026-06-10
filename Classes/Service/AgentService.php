@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Hn\Agent\Service;
 
 use Doctrine\DBAL\ParameterType;
+use Hn\Agent\Domain\AgentInstructionRepository;
 use Hn\Agent\Domain\AgentTaskRepository;
 use Hn\Agent\Domain\TaskStatus;
 use Hn\McpServer\MCP\ToolRegistry;
@@ -35,6 +36,8 @@ class AgentService implements LoggerAwareInterface
         private readonly ConnectionPool $connectionPool,
         private readonly AgentTaskRepository $repository,
         private readonly AttachmentService $attachmentService,
+        private readonly AgentInstructionRepository $instructionRepository,
+        private readonly InstructionTextFormatter $instructionTextFormatter,
     ) {}
 
     /**
@@ -328,6 +331,7 @@ class AgentService implements LoggerAwareInterface
     {
         $config = $this->extensionConfiguration->get('agent');
         $systemPrompt = $config['systemPrompt'] ?? 'You are a helpful TYPO3 CMS assistant.';
+        $systemPrompt .= $this->buildInstructionsSection();
 
         $userMessage = ['role' => 'user', 'content' => $prompt];
         $attachmentRefs = $this->resolveAttachmentRefs($rawAttachments);
@@ -409,6 +413,58 @@ class AgentService implements LoggerAwareInterface
         $messages[] = $userMessage;
 
         return $messages;
+    }
+
+    /**
+     * Build the editor-maintained instructions block appended to the system
+     * prompt. Instructions are tx_agent_instruction records (tone of voice,
+     * how to handle certain content elements/records, …) following the
+     * SKILL.md progressive-disclosure idea:
+     *
+     *  - "always" instructions are inlined in full (global base rules).
+     *  - "on_demand" instructions are only indexed (name + "when to use"); the
+     *    agent loads the full body via the GetInstruction tool when relevant.
+     *
+     * Returns an empty string when there are no active instructions, so the
+     * system prompt is left untouched in that case. The block is baked into
+     * the stored system message at task-creation time — it therefore applies
+     * to newly started chats, not to ones already in progress.
+     */
+    private function buildInstructionsSection(): string
+    {
+        $always = $this->instructionRepository->findAlways();
+        $onDemand = $this->instructionRepository->findOnDemand();
+        if ($always === [] && $onDemand === []) {
+            return '';
+        }
+
+        $section = '';
+
+        if ($always !== []) {
+            $section .= "\n\n# Editorial guidelines\n"
+                . "The following guidance was maintained by the editorial team and must be "
+                . "followed for all texts and changes you produce:\n";
+            foreach ($always as $instruction) {
+                $name = trim($instruction['title']) !== '' ? trim($instruction['title']) : 'Guideline';
+                $section .= "\n## " . $name . "\n"
+                    . $this->instructionTextFormatter->toPromptText($instruction['instruction']) . "\n";
+            }
+        }
+
+        if ($onDemand !== []) {
+            $section .= "\n\n# On-demand instructions\n"
+                . "Detailed editorial guidelines are available on demand. Before producing the "
+                . "kind of content described below, call the `GetInstruction` tool with the "
+                . "relevant id(s) to load the full guideline:\n";
+            foreach ($onDemand as $instruction) {
+                $name = trim($instruction['title']) !== '' ? trim($instruction['title']) : 'Instruction';
+                $hint = trim($instruction['description']);
+                $section .= "- [#" . $instruction['uid'] . '] ' . $name
+                    . ($hint !== '' ? ' — ' . $hint : '') . "\n";
+            }
+        }
+
+        return $section;
     }
 
     /**
