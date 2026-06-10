@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace Hn\Agent\Tests\Functional\Service;
 
+use Hn\Agent\Service\Llm\MessageBagAdapter;
 use Hn\Agent\Service\LlmService;
 use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
-use TYPO3\CMS\Core\Http\RequestFactory;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
 
@@ -24,8 +24,8 @@ class LlmServiceTest extends FunctionalTestCase
     private function buildService(): LlmService
     {
         return new LlmService(
-            GeneralUtility::makeInstance(RequestFactory::class),
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
+            new MessageBagAdapter(),
         );
     }
 

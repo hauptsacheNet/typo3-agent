@@ -4,246 +4,131 @@ declare(strict_types=1);
 
 namespace Hn\Agent\Service;
 
-use GuzzleHttp\Exception\BadResponseException;
-use Psr\Http\Message\StreamInterface;
+use Hn\Agent\Service\Llm\MessageBagAdapter;
+use Symfony\AI\Platform\Bridge\Generic\Factory as GenericPlatformFactory;
+use Symfony\AI\Platform\PlatformInterface;
+use Symfony\AI\Platform\Result\Stream\Delta\TextDelta;
+use Symfony\AI\Platform\Result\Stream\Delta\ToolCallComplete;
+use Symfony\AI\Platform\Result\Stream\Delta\ToolCallStart;
+use Symfony\AI\Platform\Result\Stream\Delta\ToolInputDelta;
+use Symfony\Component\HttpClient\HttpClient;
 use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
-use TYPO3\CMS\Core\Http\RequestFactory;
 
+/**
+ * Talks to an OpenAI-compatible LLM API (OpenRouter by default) through the
+ * Symfony AI Platform component. The custom HTTP/SSE handling that used to live
+ * here is now provided by Symfony AI; this service only adapts between the
+ * project's OpenAI-format message arrays and the Platform's object model.
+ *
+ * The public interface (chatCompletion / chatCompletionStream and their array
+ * shapes) is unchanged, so AgentService and the persisted message format are
+ * untouched.
+ */
 class LlmService
 {
+    private ?PlatformInterface $platform = null;
+    private string $model = '';
+
     public function __construct(
-        private readonly RequestFactory $requestFactory,
         private readonly ExtensionConfiguration $extensionConfiguration,
+        private readonly MessageBagAdapter $messageBagAdapter,
     ) {}
 
     /**
-     * Send a chat completion request to the OpenAI-compatible LLM API.
+     * Send a chat completion request to the LLM.
      *
      * @param array $messages The messages array (OpenAI format)
      * @param array $tools    The tools array (OpenAI function calling format)
-     * @return array The assistant message from choices[0].message
-     * @throws \RuntimeException on HTTP or API errors
+     * @return array The assistant message (role + content + tool_calls)
+     * @throws \RuntimeException on configuration or API errors
      */
     public function chatCompletion(array $messages, array $tools = []): array
     {
-        $config = $this->getConfig();
-        $apiUrl = rtrim($config['apiUrl'], '/') . '/chat/completions';
+        $platform = $this->getPlatform();
+        $bag = $this->messageBagAdapter->toMessageBag($messages);
 
-        $body = [
-            'model' => $config['model'],
-            'messages' => $messages,
-        ];
-
-        if (!empty($tools)) {
-            $body['tools'] = $tools;
+        try {
+            $result = $platform->invoke($this->model, $bag, $this->buildOptions($tools, false))->getResult();
+        } catch (\Throwable $e) {
+            throw $this->wrapException($e);
         }
 
-        $response = $this->requestFactory->request($apiUrl, 'POST', [
-            'headers' => [
-                'Authorization' => 'Bearer ' . $config['apiKey'],
-                'Content-Type' => 'application/json',
-            ],
-            'json' => $body,
-            'connect_timeout' => 10,
-            'timeout' => 120,
-        ]);
-
-        $statusCode = $response->getStatusCode();
-        $responseBody = (string)$response->getBody();
-
-        if ($statusCode < 200 || $statusCode >= 300) {
-            throw new \RuntimeException(
-                'LLM API returned HTTP ' . $statusCode . ': ' . $responseBody
-            );
-        }
-
-        $data = json_decode($responseBody, true);
-        if (!is_array($data)) {
-            throw new \RuntimeException('LLM API returned invalid JSON: ' . $responseBody);
-        }
-
-        $message = $data['choices'][0]['message'] ?? null;
-        if (!is_array($message)) {
-            throw new \RuntimeException('LLM API response missing choices[0].message: ' . $responseBody);
-        }
-
-        return $message;
+        return $this->messageBagAdapter->resultToAssistantArray($result);
     }
 
     /**
-     * Streaming variant: sends the request with "stream": true and consumes
-     * the SSE response chunk-by-chunk. For each delta, the optional $onDelta
-     * callback is invoked. The fully aggregated assistant message is returned
-     * with the same shape as chatCompletion().
+     * Streaming variant: consumes the platform's delta stream chunk-by-chunk.
+     * For each delta the optional $onDelta callback is invoked. The fully
+     * aggregated assistant message is returned with the same shape as
+     * chatCompletion().
      *
      * $onDelta signature: (string $deltaType, array $payload): void where
      * $deltaType is one of 'content', 'tool_call', 'finish'.
      *
      * @param callable(string, array): void|null $onDelta
      * @return array Aggregated assistant message (role + content + tool_calls)
-     * @throws \RuntimeException on HTTP or API errors
+     * @throws \RuntimeException on configuration or API errors
      */
     public function chatCompletionStream(
         array $messages,
         array $tools = [],
         ?callable $onDelta = null,
     ): array {
-        $config = $this->getConfig();
-        $apiUrl = rtrim($config['apiUrl'], '/') . '/chat/completions';
-
-        $body = [
-            'model' => $config['model'],
-            'messages' => $messages,
-            'stream' => true,
-        ];
-
-        if (!empty($tools)) {
-            $body['tools'] = $tools;
-        }
+        $platform = $this->getPlatform();
+        $bag = $this->messageBagAdapter->toMessageBag($messages);
+        $onDelta ??= static function (string $deltaType, array $payload): void {};
 
         try {
-            $response = $this->requestFactory->request($apiUrl, 'POST', [
-                'headers' => [
-                    'Authorization' => 'Bearer ' . $config['apiKey'],
-                    'Content-Type' => 'application/json',
-                    'Accept' => 'text/event-stream',
-                ],
-                'json' => $body,
-                'stream' => true,
-                'connect_timeout' => 10,
-                'read_timeout' => 60,
-                'http_errors' => false,
-            ]);
-        } catch (BadResponseException $e) {
-            $errResp = $e->getResponse();
-            throw new \RuntimeException(
-                'LLM API returned HTTP ' . $errResp->getStatusCode() . ': ' . (string)$errResp->getBody(),
-                0,
-                $e,
-            );
+            $deferred = $platform->invoke($this->model, $bag, $this->buildOptions($tools, true));
+            return $this->aggregateStream($deferred->asStream(), $onDelta);
+        } catch (\Throwable $e) {
+            throw $this->wrapException($e);
         }
-
-        $statusCode = $response->getStatusCode();
-        if ($statusCode < 200 || $statusCode >= 300) {
-            throw new \RuntimeException(
-                'LLM API returned HTTP ' . $statusCode . ': ' . (string)$response->getBody()
-            );
-        }
-
-        return $this->parseSseStream(
-            $response->getBody(),
-            $onDelta ?? static function (string $deltaType, array $payload): void {},
-        );
     }
 
     /**
-     * Parse an OpenAI-compatible SSE stream, invoke $onDelta for each delta,
-     * and return the aggregated assistant message.
+     * Aggregate a stream of Symfony AI deltas into one assistant message,
+     * invoking $onDelta for each meaningful chunk. The OpenAI-compatible bridge
+     * emits incremental tool-call deltas (ToolCallStart + ToolInputDelta) plus a
+     * final ToolCallComplete, so the per-fragment 'tool_call' events the chat UI
+     * relies on are preserved. ToolCallComplete is the authoritative source for
+     * the aggregated tool_calls.
      *
-     * Visibility is protected so unit tests can exercise the parser directly
-     * via a test-only subclass, without needing live HTTP.
+     * Visibility is protected so unit tests can exercise the aggregator directly
+     * with fabricated deltas, without needing live HTTP.
      *
-     * @param StreamInterface $body
+     * @param iterable<object> $deltas
      * @param callable(string $deltaType, array $payload): void $onDelta
-     * @return array{role: string, content: string|null, tool_calls?: array}
+     * @return array{role: 'assistant', content: string|null, tool_calls?: array<int, array<string, mixed>>}
      */
-    protected function parseSseStream(StreamInterface $body, callable $onDelta): array
+    protected function aggregateStream(iterable $deltas, callable $onDelta): array
     {
-        $buffer = '';
         $contentParts = [];
-        /** @var array<int, array{id?: string, type: string, function: array{name?: string, arguments: string}}> $toolCalls */
-        $toolCalls = [];
-        $finishReason = null;
-        $done = false;
+        $finalToolCalls = null;
+        /** @var array<string, int> $indexById */
+        $indexById = [];
 
-        while (!$done && !$body->eof()) {
-            $chunk = $body->read(8192);
-            if ($chunk === '') {
-                // read() may return '' on a transient pause; loop again until eof()
-                continue;
+        foreach ($deltas as $delta) {
+            if ($delta instanceof TextDelta) {
+                $text = $delta->getText();
+                if ($text !== '') {
+                    $contentParts[] = $text;
+                    $onDelta('content', ['text' => $text]);
+                }
+            } elseif ($delta instanceof ToolCallStart) {
+                $id = $delta->getId();
+                $index = $indexById[$id] ??= \count($indexById);
+                $onDelta('tool_call', ['index' => $index, 'id' => $id, 'name' => $delta->getName()]);
+            } elseif ($delta instanceof ToolInputDelta) {
+                $id = $delta->getId();
+                $index = $indexById[$id] ??= \count($indexById);
+                $fragment = $delta->getPartialJson();
+                if ($fragment !== '') {
+                    $onDelta('tool_call', ['index' => $index, 'arguments' => $fragment]);
+                }
+            } elseif ($delta instanceof ToolCallComplete) {
+                $finalToolCalls = $delta->getToolCalls();
             }
-            $buffer .= $chunk;
-
-            // SSE blocks are separated by blank lines. A block may contain
-            // one or more "data: ..." lines (and optionally "event: ...").
-            while (($sepPos = $this->findBlockSeparator($buffer)) !== null) {
-                $block = substr($buffer, 0, $sepPos);
-                $buffer = substr($buffer, $sepPos + ($buffer[$sepPos] === "\r" ? 4 : 2));
-
-                $data = $this->extractDataFromBlock($block);
-                if ($data === null) {
-                    continue;
-                }
-                if ($data === '[DONE]') {
-                    $done = true;
-                    break;
-                }
-
-                $decoded = json_decode($data, true);
-                if (!is_array($decoded)) {
-                    continue;
-                }
-
-                $choice = $decoded['choices'][0] ?? null;
-                if (!is_array($choice)) {
-                    continue;
-                }
-
-                $delta = $choice['delta'] ?? [];
-
-                if (isset($delta['content']) && is_string($delta['content']) && $delta['content'] !== '') {
-                    $contentParts[] = $delta['content'];
-                    $onDelta('content', ['text' => $delta['content']]);
-                }
-
-                if (isset($delta['tool_calls']) && is_array($delta['tool_calls'])) {
-                    foreach ($delta['tool_calls'] as $tcDelta) {
-                        if (!is_array($tcDelta)) {
-                            continue;
-                        }
-                        $index = (int)($tcDelta['index'] ?? 0);
-
-                        if (!isset($toolCalls[$index])) {
-                            $toolCalls[$index] = [
-                                'type' => 'function',
-                                'function' => ['name' => '', 'arguments' => ''],
-                            ];
-                        }
-
-                        $payload = ['index' => $index];
-
-                        if (isset($tcDelta['id']) && is_string($tcDelta['id']) && $tcDelta['id'] !== '') {
-                            $toolCalls[$index]['id'] = $tcDelta['id'];
-                            $payload['id'] = $tcDelta['id'];
-                        }
-                        if (isset($tcDelta['type']) && is_string($tcDelta['type'])) {
-                            $toolCalls[$index]['type'] = $tcDelta['type'];
-                        }
-
-                        $fnDelta = $tcDelta['function'] ?? [];
-                        if (isset($fnDelta['name']) && is_string($fnDelta['name']) && $fnDelta['name'] !== '') {
-                            $toolCalls[$index]['function']['name'] = $fnDelta['name'];
-                            $payload['name'] = $fnDelta['name'];
-                        }
-                        if (isset($fnDelta['arguments']) && is_string($fnDelta['arguments']) && $fnDelta['arguments'] !== '') {
-                            $toolCalls[$index]['function']['arguments'] .= $fnDelta['arguments'];
-                            $payload['arguments'] = $fnDelta['arguments'];
-                        }
-
-                        if (count($payload) > 1) {
-                            $onDelta('tool_call', $payload);
-                        }
-                    }
-                }
-
-                if (isset($choice['finish_reason']) && is_string($choice['finish_reason']) && $choice['finish_reason'] !== '') {
-                    $finishReason = $choice['finish_reason'];
-                }
-            }
-        }
-
-        if ($finishReason !== null) {
-            $onDelta('finish', ['reason' => $finishReason]);
         }
 
         $message = [
@@ -251,62 +136,67 @@ class LlmService
             'content' => $contentParts === [] ? null : implode('', $contentParts),
         ];
 
-        if ($toolCalls !== []) {
-            // Re-index numerically and ensure required shape
-            ksort($toolCalls);
-            $message['tool_calls'] = array_values($toolCalls);
+        if ($finalToolCalls !== null && $finalToolCalls !== []) {
+            $message['tool_calls'] = array_map(
+                [$this->messageBagAdapter, 'toolCallToArray'],
+                $finalToolCalls,
+            );
         }
+
+        $onDelta('finish', ['reason' => isset($message['tool_calls']) ? 'tool_calls' : 'stop']);
 
         return $message;
     }
 
     /**
-     * Find the position of the next SSE block separator (\n\n or \r\n\r\n) in
-     * $buffer. Returns the offset of the first newline of the separator, or null.
+     * @param array<int, array<string, mixed>> $tools
+     * @return array<string, mixed>
      */
-    private function findBlockSeparator(string $buffer): ?int
+    private function buildOptions(array $tools, bool $stream): array
     {
-        $lf = strpos($buffer, "\n\n");
-        $crlf = strpos($buffer, "\r\n\r\n");
-
-        if ($lf === false && $crlf === false) {
-            return null;
+        $options = [];
+        if ($stream) {
+            $options['stream'] = true;
         }
-        if ($lf === false) {
-            return $crlf;
+        if ($tools !== []) {
+            $options['tools'] = $this->messageBagAdapter->toolsToObjects($tools);
         }
-        if ($crlf === false) {
-            return $lf;
-        }
-        return min($lf, $crlf);
+        return $options;
     }
 
     /**
-     * Given an SSE block (one or more lines, no trailing blank line), return
-     * the concatenated "data:" payload, or null if the block contains no data.
+     * Build (and memoize) the Platform from the extension configuration.
      *
-     * Per SSE spec multiple data: lines in one event are joined with \n.
+     * The generic OpenAI-compatible bridge is used for every endpoint so the
+     * same code path serves OpenRouter, OpenAI and any compatible API; the
+     * configured apiUrl becomes the base URL and "/chat/completions" the path
+     * (matching the previous direct-HTTP behaviour exactly).
      */
-    private function extractDataFromBlock(string $block): ?string
+    private function getPlatform(): PlatformInterface
     {
-        $dataLines = [];
-        foreach (preg_split('/\r\n|\n|\r/', $block) ?: [] as $line) {
-            if ($line === '' || str_starts_with($line, ':')) {
-                continue;
-            }
-            if (str_starts_with($line, 'data:')) {
-                // Per spec: strip a single leading space after the colon.
-                $payload = substr($line, 5);
-                if (str_starts_with($payload, ' ')) {
-                    $payload = substr($payload, 1);
-                }
-                $dataLines[] = $payload;
-            }
+        if ($this->platform !== null) {
+            return $this->platform;
         }
-        if ($dataLines === []) {
-            return null;
+
+        $config = $this->getConfig();
+        $this->model = $config['model'];
+
+        return $this->platform = GenericPlatformFactory::createPlatform(
+            baseUrl: rtrim($config['apiUrl'], '/'),
+            apiKey: $config['apiKey'],
+            httpClient: HttpClient::create(['timeout' => 600]),
+            supportsCompletions: true,
+            supportsEmbeddings: false,
+            completionsPath: '/chat/completions',
+        );
+    }
+
+    private function wrapException(\Throwable $e): \RuntimeException
+    {
+        if ($e instanceof \RuntimeException) {
+            return $e;
         }
-        return implode("\n", $dataLines);
+        return new \RuntimeException('LLM API error: ' . $e->getMessage(), 0, $e);
     }
 
     /**
