@@ -193,6 +193,44 @@ class ReadFileToolTest extends FunctionalTestCase
         self::assertStringStartsWith('image/', $images[0]->mimeType);
     }
 
+    public function testReadsXlsmAsText(): void
+    {
+        // Same OfficeOpenXML container as xlsx — the Xlsx reader is selected by
+        // the .xlsm extension, so macro-enabled workbooks read like xlsx.
+        $xlsmPath = $this->createXlsxFixture('.xlsm');
+        $tool = $this->buildSpreadsheetTool(
+            502,
+            'application/vnd.ms-excel.sheet.macroEnabled.12',
+            'xlsm',
+            'macros.xlsm',
+            '1:/uploads/macros.xlsm',
+            $xlsmPath,
+        );
+
+        $result = $tool->execute(['uid' => 502]);
+
+        self::assertFalse($result->isError);
+        self::assertInstanceOf(TextContent::class, $result->content[0]);
+        self::assertStringContainsString('macros.xlsm', $result->content[0]->text);
+        self::assertStringContainsString('Hallo', $result->content[0]->text);
+        self::assertStringContainsString('Welt', $result->content[0]->text);
+    }
+
+    public function testReadsTsvAsText(): void
+    {
+        $tsvPath = tempnam(sys_get_temp_dir(), 'tsvfix') . '.tsv';
+        file_put_contents($tsvPath, "Name\tWert\nAlpha\t1\nBeta\t2\n");
+
+        $tool = $this->buildSpreadsheetTool(602, 'text/tab-separated-values', 'tsv', 'data.tsv', '1:/uploads/data.tsv', $tsvPath);
+
+        $result = $tool->execute(['uid' => 602]);
+
+        self::assertFalse($result->isError);
+        self::assertInstanceOf(TextContent::class, $result->content[0]);
+        self::assertStringContainsString('Alpha', $result->content[0]->text);
+        self::assertStringContainsString('Beta', $result->content[0]->text);
+    }
+
     public function testReadsCsvAsText(): void
     {
         $csvPath = tempnam(sys_get_temp_dir(), 'csvfix') . '.csv';
@@ -211,7 +249,7 @@ class ReadFileToolTest extends FunctionalTestCase
         self::assertEmpty($images, 'CSV carries no embedded images');
     }
 
-    private function createXlsxFixture(): string
+    private function createXlsxFixture(string $suffix = '.xlsx'): string
     {
         $pngBytes = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkAAIAAAoAAv/lxKUAAAAASUVORK5CYII=');
         $pngPath = tempnam(sys_get_temp_dir(), 'xlsximg') . '.png';
@@ -230,7 +268,7 @@ class ReadFileToolTest extends FunctionalTestCase
         $drawing->setCoordinates('D1');
         $drawing->setWorksheet($sheet);
 
-        $xlsxPath = tempnam(sys_get_temp_dir(), 'xlsxfix') . '.xlsx';
+        $xlsxPath = tempnam(sys_get_temp_dir(), 'xlsxfix') . $suffix;
         IOFactory::createWriter($spreadsheet, 'Xlsx')->save($xlsxPath);
 
         return $xlsxPath;

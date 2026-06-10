@@ -30,12 +30,16 @@ class AttachmentService implements LoggerAwareInterface
     public const SUPPORTED_IMAGE_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
     public const SUPPORTED_DOCUMENT_MIME_TYPES = ['application/pdf'];
     public const SUPPORTED_SPREADSHEET_MIME_TYPES = [
-        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // xlsx
-        'application/vnd.ms-excel',                                          // xls
-        'application/vnd.oasis.opendocument.spreadsheet',                    // ods
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',    // xlsx
+        'application/vnd.ms-excel.sheet.macroEnabled.12',                       // xlsm
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.template', // xltx
+        'application/vnd.ms-excel.template.macroEnabled.12',                    // xltm
+        'application/vnd.ms-excel',                                             // xls
+        'application/vnd.oasis.opendocument.spreadsheet',                       // ods
         'text/csv',
+        'text/tab-separated-values',                                           // tsv
     ];
-    public const SUPPORTED_SPREADSHEET_EXTENSIONS = ['xlsx', 'xls', 'ods', 'csv'];
+    public const SUPPORTED_SPREADSHEET_EXTENSIONS = ['xlsx', 'xlsm', 'xltx', 'xltm', 'xls', 'ods', 'csv', 'tsv'];
     public const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
     public const MAX_DOCUMENT_BYTES = 30 * 1024 * 1024;
     public const MAX_SPREADSHEET_BYTES = 30 * 1024 * 1024;
