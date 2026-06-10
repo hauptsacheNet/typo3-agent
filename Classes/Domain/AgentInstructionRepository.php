@@ -21,8 +21,8 @@ use TYPO3\CMS\Core\Database\Query\Restriction\EndTimeRestriction;
  * on demand via the GetInstruction tool (mode "on_demand").
  *
  * `instruction` is returned as raw HTML (RTE body) — the chat panel renders it
- * via f:format.html; the conversion to plain prompt text is done by
- * \Hn\Agent\Service\InstructionTextFormatter, not here.
+ * via f:transform.html() -> f:sanitize.html(); the conversion to plain prompt
+ * text is done by \Hn\Agent\Service\InstructionTextFormatter, not here.
  */
 class AgentInstructionRepository
 {
