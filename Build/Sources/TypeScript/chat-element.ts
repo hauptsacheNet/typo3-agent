@@ -13,16 +13,21 @@ marked.setOptions({breaks: true, gfm: true});
 
 interface ChatMessage {
   role: 'user' | 'assistant' | 'system' | 'tool';
-  content?: string;
+  content?: string | ContentBlock[];
   attachments?: Attachment[];
   tool_calls?: ToolCall[];
   tool_call_id?: string;
 }
 
+type ContentBlock =
+  | {type: 'text'; text: string}
+  | {type: 'image_url'; image_url: {url: string}}
+  | {type: 'file'; file: {filename: string; file_data: string}};
+
 interface ToolCall {
   id?: string;
   function: {name: string; arguments: string};
-  result?: string;
+  result?: string | ContentBlock[];
 }
 
 interface ToolProgress {
@@ -381,11 +386,12 @@ export class ChatElement extends LitElement {
     const roleLabel = role === 'user' ? 'you' : role;
 
     if (role === 'assistant') {
+      const assistantText = msg.content !== undefined ? this.contentText(msg.content) : '';
       return html`
         <div class="rounded-4 bg-white border p-3 me-3">
           <div class="chat-msg-role fw-bold small opacity-75 mb-1 text-uppercase">${roleLabel}</div>
-          ${msg.content
-            ? html`<div class="chat-msg-content">${unsafeHTML(this.renderMarkdown(msg.content))}</div>`
+          ${assistantText
+            ? html`<div class="chat-msg-content">${unsafeHTML(this.renderMarkdown(assistantText))}</div>`
             : nothing}
           ${msg.tool_calls && msg.tool_calls.length > 0
             ? this.renderToolCallsGroup(msg.tool_calls)
@@ -397,11 +403,12 @@ export class ChatElement extends LitElement {
 
     // user, system, unknown
     const attachments = msg.attachments ?? [];
+    const userText = msg.content !== undefined ? this.contentText(msg.content) : '';
     return html`
       <div class="rounded-4 bg-success-subtle border p-3 ms-3 align-self-end">
         <div class="chat-msg-role fw-bold small opacity-75 mb-1 text-uppercase">${roleLabel}</div>
-        ${msg.content
-          ? html`<pre class="chat-msg-prewrap m-0">${msg.content}</pre>`
+        ${userText
+          ? html`<pre class="chat-msg-prewrap m-0">${userText}</pre>`
           : nothing}
         ${attachments.length > 0
           ? html`<div class="chat-attachments d-flex flex-wrap gap-2 ${msg.content ? 'mt-2' : ''}">
@@ -429,6 +436,8 @@ export class ChatElement extends LitElement {
   }
 
   private renderToolCall(tc: ToolCall): TemplateResult {
+    const resultText = tc.result !== undefined ? this.contentText(tc.result) : '';
+    const resultMedia = tc.result !== undefined ? this.contentMedia(tc.result) : [];
     return html`
       <details class="chat-toolcall p-2 rounded border bg-body font-monospace small">
         <summary>
@@ -444,12 +453,36 @@ export class ChatElement extends LitElement {
               ? html`
                 <div>
                   <strong>Result</strong><br/>
-                  <pre class="m-0">${tc.result}</pre>
+                  <pre class="m-0">${resultText}</pre>
+                  ${resultMedia.map(b => this.renderResultMedia(b))}
                 </div>`
               : nothing}
         </div>
       </details>
     `;
+  }
+
+  private renderResultMedia(block: ContentBlock): TemplateResult | typeof nothing {
+    if (block.type === 'image_url') {
+      return html`<img src=${block.image_url.url} alt="" class="mt-2 d-block" style="max-width:100%; max-height:240px;"/>`;
+    }
+    if (block.type === 'file') {
+      return html`<div class="mt-2"><typo3-backend-icon identifier="mimetypes-other-other" size="small"/> ${block.file.filename}</div>`;
+    }
+    return nothing;
+  }
+
+  private contentText(content: string | ContentBlock[]): string {
+    if (typeof content === 'string') return content;
+    return content
+      .filter((b): b is Extract<ContentBlock, {type: 'text'}> => b.type === 'text')
+      .map(b => b.text)
+      .join('\n');
+  }
+
+  private contentMedia(content: string | ContentBlock[]): ContentBlock[] {
+    if (typeof content === 'string') return [];
+    return content.filter(b => b.type !== 'text');
   }
 
   private renderStreamingBubble(): TemplateResult {
@@ -832,7 +865,7 @@ export class ChatElement extends LitElement {
    */
   private mergeToolResults(msgs: ChatMessage[]): ChatMessage[] {
     // Collect tool results keyed by tool_call_id
-    const resultMap = new Map<string, string>();
+    const resultMap = new Map<string, string | ContentBlock[]>();
     for (const msg of msgs) {
       if (msg.role === 'tool' && msg.tool_call_id && msg.content !== undefined) {
         resultMap.set(msg.tool_call_id, msg.content);

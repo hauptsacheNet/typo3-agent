@@ -243,20 +243,16 @@ class AgentService implements LoggerAwareInterface
                         $progress('change_tracked', $change);
                     }
 
-                    // Append tool result message. `_media` carries inline image
-                    // payloads (e.g. from ReadFile on a sys_file image) — kept
-                    // separate from the human-readable `content` so the UI can
-                    // render text as-is while serializeForLlm() rebuilds the
-                    // multimodal block array for the LLM.
-                    $toolMessage = [
+                    // Append tool result message. When the tool returned binary
+                    // payloads (e.g. ReadFile on a sys_file image), `content`
+                    // becomes a block array [text, image_url|file] — the same
+                    // shape the LLM consumes. The UI's tool-result renderer
+                    // extracts the text portion via a small helper.
+                    $messages[] = [
                         'role' => 'tool',
                         'tool_call_id' => $toolCallId,
-                        'content' => $toolResult['text'],
+                        'content' => $this->buildToolContent($toolResult['text'], $toolResult['media']),
                     ];
-                    if (!empty($toolResult['media'])) {
-                        $toolMessage['_media'] = $toolResult['media'];
-                    }
-                    $messages[] = $toolMessage;
 
                     if ($progress !== null) {
                         $progress('tool_result', [
@@ -813,11 +809,8 @@ class AgentService implements LoggerAwareInterface
      * inspect content. This keeps the file-access path uniform (always
      * through a tool) and keeps user messages small.
      *
-     * Tool messages may carry a `_media` field produced by the ToolConverter
-     * when the tool returned ImageContent (e.g. ReadFile on a sys_file).
-     * Those are converted into OpenAI/OpenRouter image_url/file content
-     * blocks so the LLM actually sees the bytes — the persisted `content`
-     * string stays untouched for the UI.
+     * Tool messages already carry their media inline in `content` as a block
+     * array (built by buildToolContent() at write time) — nothing to do here.
      *
      * @param array<int, array<string, mixed>> $messages
      * @return array<int, array<string, mixed>>
@@ -825,72 +818,8 @@ class AgentService implements LoggerAwareInterface
     private function serializeForLlm(array $messages): array
     {
         $out = [];
-        // Media from tool results (both images and documents) accumulate
-        // across a tool-call batch and get emitted as ONE follow-up user
-        // message right after the LAST tool message of that batch.
-        //
-        // OpenAI/OpenRouter strictly require all `tool` messages to follow
-        // their owning assistant turn contiguously — inserting any non-tool
-        // role between sibling tool results invalidates the sequence and
-        // OpenRouter returns 500. Putting blocks INSIDE `tool` content also
-        // turns out to be brittle through the OpenAI→Anthropic mapping (the
-        // tool_result block expects string-or-image-array on the Anthropic
-        // side and providers reject mixed content). The safest pattern that
-        // matches what already works for user attachments: text-only tool
-        // result, real media in a follow-up user-style message.
-        $pendingMediaBlocks = [];
-        $flushMedia = static function () use (&$out, &$pendingMediaBlocks): void {
-            if ($pendingMediaBlocks === []) {
-                return;
-            }
-            $out[] = [
-                'role' => 'user',
-                'content' => array_merge(
-                    [['type' => 'text', 'text' => 'Inhalt der über ReadFile abgerufenen Datei(en):']],
-                    $pendingMediaBlocks,
-                ),
-            ];
-            $pendingMediaBlocks = [];
-        };
-
         foreach ($messages as $message) {
             if (!is_array($message)) {
-                $flushMedia();
-                $out[] = $message;
-                continue;
-            }
-
-            $role = $message['role'] ?? '';
-
-            // Any non-tool message ends the current tool batch — flush
-            // accumulated media now so blocks land after all tool results
-            // but before the next turn.
-            if ($role !== 'tool') {
-                $flushMedia();
-            }
-
-            if ($role === 'tool' && !empty($message['_media']) && is_array($message['_media'])) {
-                foreach ($message['_media'] as $media) {
-                    if (!is_array($media)) {
-                        continue;
-                    }
-                    $mime = (string)($media['mime'] ?? 'application/octet-stream');
-                    $data = (string)($media['data'] ?? '');
-                    if ($data === '') {
-                        continue;
-                    }
-                    $dataUri = 'data:' . $mime . ';base64,' . $data;
-                    if (str_starts_with($mime, 'image/')) {
-                        $pendingMediaBlocks[] = ['type' => 'image_url', 'image_url' => ['url' => $dataUri]];
-                    } else {
-                        $filename = (string)($media['filename'] ?? 'attachment');
-                        $pendingMediaBlocks[] = ['type' => 'file', 'file' => ['filename' => $filename, 'file_data' => $dataUri]];
-                    }
-                }
-                unset($message['_media']);
-                // tool_result stays plain text — actual bytes ride in the
-                // upcoming follow-up user message instead.
-                $message['content'] = (string)($message['content'] ?? '');
                 $out[] = $message;
                 continue;
             }
@@ -917,10 +846,38 @@ class AgentService implements LoggerAwareInterface
             unset($message['attachments']);
             $out[] = $message;
         }
-
-        // Flush any media that came from the last batch in the conversation.
-        $flushMedia();
         return $out;
+    }
+
+    /**
+     * Combine a tool's text output and inline media into the persisted/LLM
+     * content shape: plain string when there is no media, otherwise a block
+     * array `[{type:text,...}, {type:image_url|file,...}, ...]`.
+     *
+     * @param list<array{mime: string, data: string, filename?: string}> $media
+     * @return string|list<array<string, mixed>>
+     */
+    private function buildToolContent(string $text, array $media): string|array
+    {
+        if ($media === []) {
+            return $text;
+        }
+        $blocks = [['type' => 'text', 'text' => $text]];
+        foreach ($media as $item) {
+            $mime = (string)($item['mime'] ?? 'application/octet-stream');
+            $data = (string)($item['data'] ?? '');
+            if ($data === '') {
+                continue;
+            }
+            $dataUri = 'data:' . $mime . ';base64,' . $data;
+            if (str_starts_with($mime, 'image/')) {
+                $blocks[] = ['type' => 'image_url', 'image_url' => ['url' => $dataUri]];
+            } else {
+                $filename = (string)($item['filename'] ?? 'attachment');
+                $blocks[] = ['type' => 'file', 'file' => ['filename' => $filename, 'file_data' => $dataUri]];
+            }
+        }
+        return $blocks;
     }
 
     /**

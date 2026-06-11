@@ -250,19 +250,21 @@ let ChatElement = class extends LitElement {
     if (role === "system") return nothing;
     const roleLabel = role === "user" ? "you" : role;
     if (role === "assistant") {
+      const assistantText = msg.content !== void 0 ? this.contentText(msg.content) : "";
       return html`
         <div class="rounded-4 bg-white border p-3 me-3">
           <div class="chat-msg-role fw-bold small opacity-75 mb-1 text-uppercase">${roleLabel}</div>
-          ${msg.content ? html`<div class="chat-msg-content">${unsafeHTML(this.renderMarkdown(msg.content))}</div>` : nothing}
+          ${assistantText ? html`<div class="chat-msg-content">${unsafeHTML(this.renderMarkdown(assistantText))}</div>` : nothing}
           ${msg.tool_calls && msg.tool_calls.length > 0 ? this.renderToolCallsGroup(msg.tool_calls) : nothing}
         </div>
       `;
     }
     const attachments = msg.attachments ?? [];
+    const userText = msg.content !== void 0 ? this.contentText(msg.content) : "";
     return html`
       <div class="rounded-4 bg-success-subtle border p-3 ms-3 align-self-end">
         <div class="chat-msg-role fw-bold small opacity-75 mb-1 text-uppercase">${roleLabel}</div>
-        ${msg.content ? html`<pre class="chat-msg-prewrap m-0">${msg.content}</pre>` : nothing}
+        ${userText ? html`<pre class="chat-msg-prewrap m-0">${userText}</pre>` : nothing}
         ${attachments.length > 0 ? html`<div class="chat-attachments d-flex flex-wrap gap-2 ${msg.content ? "mt-2" : ""}">
               ${attachments.map((a) => this.renderAttachmentChip(a))}
             </div>` : nothing}
@@ -285,6 +287,8 @@ let ChatElement = class extends LitElement {
     `;
   }
   renderToolCall(tc) {
+    const resultText = tc.result !== void 0 ? this.contentText(tc.result) : "";
+    const resultMedia = tc.result !== void 0 ? this.contentMedia(tc.result) : [];
     return html`
       <details class="chat-toolcall p-2 rounded border bg-body font-monospace small">
         <summary>
@@ -299,11 +303,29 @@ let ChatElement = class extends LitElement {
           ${tc.result !== void 0 ? html`
                 <div>
                   <strong>Result</strong><br/>
-                  <pre class="m-0">${tc.result}</pre>
+                  <pre class="m-0">${resultText}</pre>
+                  ${resultMedia.map((b) => this.renderResultMedia(b))}
                 </div>` : nothing}
         </div>
       </details>
     `;
+  }
+  renderResultMedia(block) {
+    if (block.type === "image_url") {
+      return html`<img src=${block.image_url.url} alt="" class="mt-2 d-block" style="max-width:100%; max-height:240px;"/>`;
+    }
+    if (block.type === "file") {
+      return html`<div class="mt-2"><typo3-backend-icon identifier="mimetypes-other-other" size="small"/> ${block.file.filename}</div>`;
+    }
+    return nothing;
+  }
+  contentText(content) {
+    if (typeof content === "string") return content;
+    return content.filter((b) => b.type === "text").map((b) => b.text).join("\n");
+  }
+  contentMedia(content) {
+    if (typeof content === "string") return [];
+    return content.filter((b) => b.type !== "text");
   }
   renderStreamingBubble() {
     return html`

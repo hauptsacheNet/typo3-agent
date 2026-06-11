@@ -728,15 +728,12 @@ class AgentServiceTest extends FunctionalTestCase
     }
 
     /**
-     * Tool messages may carry a `_media` field (set by AgentService::runLoop
-     * when the tool returned ImageContent). serializeForLlm() emits a
-     * text-only tool message followed by a synthetic user message carrying
-     * the image — putting the bytes inside `tool_result` content breaks
-     * OpenRouter's OpenAI→Anthropic mapping in some configurations, so we
-     * always route media through the user-message path that already works
-     * for chat attachments. The persisted `content` string stays untouched.
+     * When a tool returns ImageContent (e.g. ReadFile on a sys_file), the
+     * resulting tool message stores `content` directly as a block array
+     * [text, image_url]. Same shape is sent to the LLM (serializeForLlm
+     * is a no-op for tool messages) and persisted in the DB.
      */
-    public function testToolMessageWithMediaBecomesMultimodalBlockForLlm(): void
+    public function testToolMessageWithImageMediaStoresBlockArrayContent(): void
     {
         $existingMessages = [
             ['role' => 'system', 'content' => 'sys'],
@@ -747,9 +744,9 @@ class AgentServiceTest extends FunctionalTestCase
             [
                 'role' => 'tool',
                 'tool_call_id' => 'call_img',
-                'content' => "File: pixel.png\nMIME: image/png\nSize: 70 B\nUID: sys_file:42",
-                '_media' => [
-                    ['mime' => 'image/png', 'data' => 'AAAA'],
+                'content' => [
+                    ['type' => 'text', 'text' => "File: pixel.png\nMIME: image/png\nSize: 70 B\nUID: sys_file:42"],
+                    ['type' => 'image_url', 'image_url' => ['url' => 'data:image/png;base64,AAAA']],
                 ],
             ],
         ];
@@ -791,20 +788,15 @@ class AgentServiceTest extends FunctionalTestCase
         self::assertNotNull($toolIndex, 'Tool message reached LlmService');
 
         $toolMsg = $llmMessages[$toolIndex];
-        self::assertIsString($toolMsg['content'], 'tool_result stays text-only — media rides in follow-up user message');
-        self::assertStringContainsString('pixel.png', $toolMsg['content']);
-        self::assertArrayNotHasKey('_media', $toolMsg);
+        self::assertIsArray($toolMsg['content'], 'tool_result content reaches LLM as block array');
+        self::assertSame('text', $toolMsg['content'][0]['type']);
+        self::assertStringContainsString('pixel.png', $toolMsg['content'][0]['text']);
+        self::assertSame('image_url', $toolMsg['content'][1]['type']);
+        self::assertSame('data:image/png;base64,AAAA', $toolMsg['content'][1]['image_url']['url']);
+        self::assertArrayNotHasKey('_media', $toolMsg, 'No legacy split — content carries the media directly');
 
-        // Image lives in the synthetic user message that comes right after.
-        self::assertArrayHasKey($toolIndex + 1, $llmMessages);
-        $followUp = $llmMessages[$toolIndex + 1];
-        self::assertSame('user', $followUp['role']);
-        self::assertIsArray($followUp['content']);
-        self::assertSame('image_url', $followUp['content'][1]['type']);
-        self::assertSame('data:image/png;base64,AAAA', $followUp['content'][1]['image_url']['url']);
-
-        // Persisted record keeps the structured `_media` so reloading the
-        // chat after a page refresh still ships the image to the LLM.
+        // Persisted record carries the same block array — no transformation
+        // between storage and LLM call.
         $task = $this->getTask($taskUid);
         $persisted = $this->decodeMessages($task['messages']);
         $persistedTool = null;
@@ -815,18 +807,17 @@ class AgentServiceTest extends FunctionalTestCase
             }
         }
         self::assertNotNull($persistedTool);
-        self::assertIsString($persistedTool['content'], 'Persisted content stays a string for the UI');
-        self::assertArrayHasKey('_media', $persistedTool);
-        self::assertSame('AAAA', $persistedTool['_media'][0]['data']);
+        self::assertIsArray($persistedTool['content'], 'Persisted content is a block array');
+        self::assertSame('image_url', $persistedTool['content'][1]['type']);
+        self::assertSame('data:image/png;base64,AAAA', $persistedTool['content'][1]['image_url']['url']);
+        self::assertArrayNotHasKey('_media', $persistedTool);
     }
 
     /**
-     * PDFs and other non-image media can't live inside an Anthropic
-     * tool_result block — they're emitted as a follow-up user message
-     * directly after, where document blocks ARE legal. The tool message
-     * itself stays plain text for the LLM.
+     * PDFs follow the same inline path as images: the tool message content
+     * becomes a block array carrying text + a `file` block with the PDF bytes.
      */
-    public function testToolMessageWithPdfMediaSplitsIntoFollowUpUserMessage(): void
+    public function testToolMessageWithPdfMediaInlinesFileBlock(): void
     {
         $existingMessages = [
             ['role' => 'system', 'content' => 'sys'],
@@ -837,9 +828,9 @@ class AgentServiceTest extends FunctionalTestCase
             [
                 'role' => 'tool',
                 'tool_call_id' => 'call_pdf',
-                'content' => "File: doc.pdf\nMIME: application/pdf\nSize: 1.0 KiB\nUID: sys_file:48",
-                '_media' => [
-                    ['mime' => 'application/pdf', 'data' => 'BBBB', 'filename' => 'doc.pdf'],
+                'content' => [
+                    ['type' => 'text', 'text' => "File: doc.pdf\nMIME: application/pdf\nSize: 1.0 KiB\nUID: sys_file:48"],
+                    ['type' => 'file', 'file' => ['filename' => 'doc.pdf', 'file_data' => 'data:application/pdf;base64,BBBB']],
                 ],
             ],
         ];
@@ -880,29 +871,22 @@ class AgentServiceTest extends FunctionalTestCase
         self::assertNotNull($toolIndex);
 
         $toolMsg = $llmMessages[$toolIndex];
-        self::assertIsString($toolMsg['content'], 'tool_result keeps text-only when media is non-image');
-        self::assertStringContainsString('doc.pdf', $toolMsg['content']);
+        self::assertIsArray($toolMsg['content'], 'tool_result content becomes a block array with text + file');
+        self::assertSame('text', $toolMsg['content'][0]['type']);
+        self::assertStringContainsString('doc.pdf', $toolMsg['content'][0]['text']);
+        self::assertSame('file', $toolMsg['content'][1]['type']);
+        self::assertSame('doc.pdf', $toolMsg['content'][1]['file']['filename']);
+        self::assertSame('data:application/pdf;base64,BBBB', $toolMsg['content'][1]['file']['file_data']);
         self::assertArrayNotHasKey('_media', $toolMsg);
-
-        // Immediately followed by a synthetic user message carrying the file block.
-        self::assertArrayHasKey($toolIndex + 1, $llmMessages);
-        $followUp = $llmMessages[$toolIndex + 1];
-        self::assertSame('user', $followUp['role']);
-        self::assertIsArray($followUp['content']);
-        self::assertSame('text', $followUp['content'][0]['type']);
-        self::assertSame('file', $followUp['content'][1]['type']);
-        self::assertSame('doc.pdf', $followUp['content'][1]['file']['filename']);
-        self::assertSame('data:application/pdf;base64,BBBB', $followUp['content'][1]['file']['file_data']);
     }
 
     /**
      * Two consecutive ReadFile calls in one assistant turn produce two
-     * `tool` messages. The OpenAI/OpenRouter format requires all sibling
-     * tool messages to be emitted contiguously — the follow-up user message
-     * carrying the document blocks must come AFTER the last tool message,
-     * never between them. Without this guarantee OpenRouter returns 500.
+     * `tool` messages. Each carries its own media inline — the resulting
+     * message tail is `assistant(tool_calls), tool(a), tool(b)` with each
+     * tool message holding its own `file` block.
      */
-    public function testMultiplePdfToolResultsBatchedIntoSingleFollowUp(): void
+    public function testMultiplePdfToolResultsInlineMediaEach(): void
     {
         $existingMessages = [
             ['role' => 'system', 'content' => 'sys'],
@@ -913,13 +897,17 @@ class AgentServiceTest extends FunctionalTestCase
             ]],
             [
                 'role' => 'tool', 'tool_call_id' => 'call_a',
-                'content' => 'File: a.pdf',
-                '_media' => [['mime' => 'application/pdf', 'data' => 'AAAA', 'filename' => 'a.pdf']],
+                'content' => [
+                    ['type' => 'text', 'text' => 'File: a.pdf'],
+                    ['type' => 'file', 'file' => ['filename' => 'a.pdf', 'file_data' => 'data:application/pdf;base64,AAAA']],
+                ],
             ],
             [
                 'role' => 'tool', 'tool_call_id' => 'call_b',
-                'content' => 'File: b.pdf',
-                '_media' => [['mime' => 'application/pdf', 'data' => 'CCCC', 'filename' => 'b.pdf']],
+                'content' => [
+                    ['type' => 'text', 'text' => 'File: b.pdf'],
+                    ['type' => 'file', 'file' => ['filename' => 'b.pdf', 'file_data' => 'data:application/pdf;base64,CCCC']],
+                ],
             ],
         ];
 
@@ -950,20 +938,17 @@ class AgentServiceTest extends FunctionalTestCase
         $llmMessages = $capturedMessages[0];
 
         $roles = array_map(static fn(array $m): string => (string)($m['role'] ?? ''), $llmMessages);
-        // Expected tail: ..., assistant(tool_calls), tool(a), tool(b), user(documents)
-        $tail = array_slice($roles, -4);
-        self::assertSame(['assistant', 'tool', 'tool', 'user'], $tail, 'Tool messages stay contiguous, follow-up user comes after both');
+        $tail = array_slice($roles, -3);
+        self::assertSame(['assistant', 'tool', 'tool'], $tail, 'Tool messages stay contiguous, each carries its own inline media');
 
-        // The single follow-up message carries both file blocks.
-        $followUp = $llmMessages[array_key_last($llmMessages)];
-        self::assertSame('user', $followUp['role']);
-        self::assertIsArray($followUp['content']);
-        $fileBlocks = array_values(array_filter(
-            $followUp['content'],
-            static fn(array $b): bool => ($b['type'] ?? '') === 'file',
+        $toolMsgs = array_values(array_filter(
+            $llmMessages,
+            static fn(array $m): bool => ($m['role'] ?? '') === 'tool',
         ));
-        self::assertCount(2, $fileBlocks);
-        self::assertSame('a.pdf', $fileBlocks[0]['file']['filename']);
-        self::assertSame('b.pdf', $fileBlocks[1]['file']['filename']);
+        self::assertCount(2, $toolMsgs);
+        self::assertSame('a.pdf', $toolMsgs[0]['content'][1]['file']['filename']);
+        self::assertSame('data:application/pdf;base64,AAAA', $toolMsgs[0]['content'][1]['file']['file_data']);
+        self::assertSame('b.pdf', $toolMsgs[1]['content'][1]['file']['filename']);
+        self::assertSame('data:application/pdf;base64,CCCC', $toolMsgs[1]['content'][1]['file']['file_data']);
     }
 }
