@@ -20,7 +20,6 @@ use TYPO3\CMS\Core\Context\UserAspect;
 use TYPO3\CMS\Core\Context\WorkspaceAspect;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
-use TYPO3\CMS\Core\Resource\File;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
@@ -121,7 +120,7 @@ class AgentService implements LoggerAwareInterface
         // checks run against the task's user, not the request context — so this is done after the
         // BE_USER setup above. The refs are persisted alongside the user message; the markdown
         // block for the LLM is only built transiently in serializeForLlm() at call-site.
-        $attachmentRefs = $this->resolveAttachmentRefs($attachments);
+        $attachmentRefs = $this->attachmentService->normalizeRefs($attachments);
 
         $messages = $this->decodeMessages($task['messages'] ?? null) ?? [];
         $userMessageRecord = ['role' => 'user', 'content' => $userMessage];
@@ -330,7 +329,7 @@ class AgentService implements LoggerAwareInterface
         $systemPrompt .= $this->buildInstructionsSection();
 
         $userMessage = ['role' => 'user', 'content' => $prompt];
-        $attachmentRefs = $this->resolveAttachmentRefs($rawAttachments);
+        $attachmentRefs = $this->attachmentService->normalizeRefs($rawAttachments);
         if ($attachmentRefs !== []) {
             $userMessage['attachments'] = $attachmentRefs;
         }
@@ -758,59 +757,13 @@ class AgentService implements LoggerAwareInterface
     }
 
     /**
-     * Resolve raw attachment refs from the request to structured AttachmentRef
-     * arrays. Refs may carry `uid` (preferred) or `identifier` (combined
-     * storage:path). Each returned entry has at least `name`; resolvable ones
-     * also carry `uid`, `identifier`, `mime_type`. Unresolvable refs come
-     * through with `unresolvable => true` so the UI can still render a chip
-     * and the LLM still sees that something was attached.
-     *
-     * @param array<int, array{uid?: int|string, identifier?: string, name?: string}> $raw
-     * @return array<int, array{uid?: int, identifier?: string, name: string, mime_type?: string, unresolvable?: bool}>
-     */
-    private function resolveAttachmentRefs(array $raw): array
-    {
-        $refs = [];
-        foreach ($raw as $entry) {
-            if (!is_array($entry)) {
-                continue;
-            }
-            $file = $this->attachmentService->resolveFile($entry);
-            if ($file instanceof File) {
-                $refs[] = [
-                    'uid' => $file->getUid(),
-                    'identifier' => $file->getCombinedIdentifier(),
-                    'name' => $file->getName(),
-                    'mime_type' => $file->getMimeType() ?: 'application/octet-stream',
-                ];
-                continue;
-            }
-            $label = trim((string)($entry['name'] ?? ''));
-            if ($label === '') {
-                $label = trim((string)($entry['identifier'] ?? ''));
-            }
-            if ($label === '' && isset($entry['uid'])) {
-                $label = 'sys_file:' . (int)$entry['uid'];
-            }
-            $refs[] = [
-                'name' => $label !== '' ? $label : 'Unbenannte Datei',
-                'unresolvable' => true,
-            ];
-        }
-        return $refs;
-    }
-
-    /**
      * Project the persisted message array into the form the LLM client expects.
      *
-     * User attachments are surfaced as a metadata-only marker block
-     * (`sys_file:UID — path (mime)`). The LLM never sees the file bytes
-     * directly via this path — it has to call the `ReadFile` tool to actually
-     * inspect content. This keeps the file-access path uniform (always
-     * through a tool) and keeps user messages small.
-     *
-     * Tool messages already carry their media inline in `content` as a block
-     * array (built by buildToolContent() at write time) — nothing to do here.
+     * User attachments are surfaced as a metadata-only marker block via
+     * AttachmentService::mergeMarkersIntoContent — the LLM has to call
+     * `ReadFile` to actually inspect content. Tool messages already carry
+     * their media inline in `content` (built by buildToolContent() at write
+     * time), so nothing extra is needed for them.
      *
      * @param array<int, array<string, mixed>> $messages
      * @return array<int, array<string, mixed>>
@@ -819,30 +772,18 @@ class AgentService implements LoggerAwareInterface
     {
         $out = [];
         foreach ($messages as $message) {
-            if (!is_array($message)) {
-                $out[] = $message;
-                continue;
-            }
-
-            if (empty($message['attachments']) || !is_array($message['attachments'])) {
-                if (array_key_exists('attachments', $message)) {
+            if (!is_array($message) || empty($message['attachments']) || !is_array($message['attachments'])) {
+                if (is_array($message) && array_key_exists('attachments', $message)) {
                     unset($message['attachments']);
                 }
                 $out[] = $message;
                 continue;
             }
 
-            $markerLines = [];
-            foreach ($message['attachments'] as $ref) {
-                if (!is_array($ref)) {
-                    continue;
-                }
-                $markerLines[] = $this->buildAttachmentMarker($ref, $this->attachmentNoteFor($ref));
-            }
-
-            $userText = (string)($message['content'] ?? '');
-            $markerBlock = "---\nAngehängte Dateien (Inhalt via ReadFile abrufbar):\n" . implode("\n", $markerLines);
-            $message['content'] = $userText !== '' ? rtrim($userText) . "\n\n" . $markerBlock : $markerBlock;
+            $message['content'] = $this->attachmentService->mergeMarkersIntoContent(
+                (string)($message['content'] ?? ''),
+                $message['attachments'],
+            );
             unset($message['attachments']);
             $out[] = $message;
         }
@@ -880,79 +821,4 @@ class AgentService implements LoggerAwareInterface
         return $blocks;
     }
 
-    /**
-     * Produce the marker-line note for an attachment. Image/PDF inside the
-     * size limit need no note (LLM can call ReadFile to inspect). Oversize
-     * and unsupported get a hint so the LLM doesn't waste a tool call.
-     *
-     * @param array<string, mixed> $ref
-     */
-    private function attachmentNoteFor(array $ref): ?string
-    {
-        $info = $this->attachmentService->classify($ref);
-        return match ($info['kind']) {
-            'unresolvable' => 'Datei nicht auflösbar',
-            'unsupported' => 'Format nicht über ReadFile lesbar',
-            'oversize' => $info['reason'] . ' — Inhalt nicht abrufbar',
-            default => null,
-        };
-    }
-
-    /**
-     * UI pre-flight for one attachment. Cheap (metadata-only, no getContents()
-     * call) so the chat frontend can call it eagerly after each add.
-     *
-     * Runs under the *request* BE_USER's permissions, not the task's — which
-     * is what we want: the user only sees pre-flight info for files they can
-     * actually access.
-     *
-     * `readableByLlm` answers: can the LLM retrieve the file's bytes by
-     * calling the `ReadFile` tool? True for images / PDFs within size
-     * limits. False means the LLM can only see the marker metadata; the
-     * `reason` field then explains why (oversize, unsupported MIME, etc.).
-     *
-     * @param array<string, mixed> $ref
-     * @return array{uid: int, identifier: string, name: string, mime: string, size: int, readableByLlm: bool, reason: ?string}
-     */
-    public function previewAttachment(array $ref): array
-    {
-        $info = $this->attachmentService->classify($ref);
-        $file = $info['file'];
-        return [
-            'uid' => $file?->getUid() ?? (int)($ref['uid'] ?? 0),
-            'identifier' => $file?->getCombinedIdentifier() ?? (string)($ref['identifier'] ?? ''),
-            'name' => $file?->getName() ?? (string)($ref['name'] ?? ''),
-            'mime' => $info['mime'],
-            'size' => $info['size'],
-            'readableByLlm' => in_array($info['kind'], ['image', 'document'], true),
-            'reason' => $info['reason'],
-        ];
-    }
-
-    /**
-     * Build a single marker line for the text portion of a user message.
-     *
-     * @param array<string, mixed> $ref
-     */
-    private function buildAttachmentMarker(array $ref, ?string $note): string
-    {
-        if (!empty($ref['unresolvable'])) {
-            $label = trim((string)($ref['name'] ?? ''));
-            return '- ' . ($label !== '' ? $label : 'Unbenannte Datei') . ' (Datei nicht auflösbar)';
-        }
-
-        $uid = (int)($ref['uid'] ?? 0);
-        $identifier = (string)($ref['identifier'] ?? '');
-        $mime = (string)($ref['mime_type'] ?? 'application/octet-stream');
-        if ($mime === '') {
-            $mime = 'application/octet-stream';
-        }
-        $parens = $note !== null && $note !== '' ? $mime . ', ' . $note : $mime;
-        $head = $uid > 0 ? 'sys_file:' . $uid : ($identifier !== '' ? $identifier : (string)($ref['name'] ?? 'Unbenannte Datei'));
-        $path = $identifier !== '' ? ' — ' . $identifier : '';
-        if ($uid <= 0) {
-            $path = '';
-        }
-        return '- ' . $head . $path . ' (' . $parens . ')';
-    }
 }

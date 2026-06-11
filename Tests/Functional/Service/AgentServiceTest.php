@@ -640,10 +640,7 @@ class AgentServiceTest extends FunctionalTestCase
         $file = $this->buildFileMock(101, 'image/png', 2048, 'pixel.png', '1:/uploads/pixel.png', null);
         $resourceFactory = $this->buildResourceFactoryReturning(101, $file);
 
-        $capturedMessages = [];
-        $agentService = $this->buildAgentServiceCapturing($capturedMessages, $resourceFactory);
-
-        $preview = $agentService->previewAttachment(['uid' => 101]);
+        $preview = (new AttachmentService($resourceFactory))->preview(['uid' => 101]);
 
         self::assertSame(101, $preview['uid']);
         self::assertSame('image/png', $preview['mime']);
@@ -657,10 +654,7 @@ class AgentServiceTest extends FunctionalTestCase
         $file = $this->buildFileMock(303, 'image/png', 6 * 1024 * 1024, 'huge.png', '1:/uploads/huge.png', null);
         $resourceFactory = $this->buildResourceFactoryReturning(303, $file);
 
-        $capturedMessages = [];
-        $agentService = $this->buildAgentServiceCapturing($capturedMessages, $resourceFactory);
-
-        $preview = $agentService->previewAttachment(['uid' => 303]);
+        $preview = (new AttachmentService($resourceFactory))->preview(['uid' => 303]);
 
         self::assertFalse($preview['readableByLlm']);
         self::assertNotNull($preview['reason']);
@@ -673,10 +667,7 @@ class AgentServiceTest extends FunctionalTestCase
         $file = $this->buildFileMock(404, 'text/plain', 100, 'notes.txt', '1:/uploads/notes.txt', null);
         $resourceFactory = $this->buildResourceFactoryReturning(404, $file);
 
-        $capturedMessages = [];
-        $agentService = $this->buildAgentServiceCapturing($capturedMessages, $resourceFactory);
-
-        $preview = $agentService->previewAttachment(['uid' => 404]);
+        $preview = (new AttachmentService($resourceFactory))->preview(['uid' => 404]);
 
         self::assertFalse($preview['readableByLlm']);
         self::assertSame('Format nicht unterstützt', $preview['reason']);
@@ -684,14 +675,12 @@ class AgentServiceTest extends FunctionalTestCase
 
     public function testPreviewAttachmentReportsUnresolvable(): void
     {
-        $capturedMessages = [];
         // real ResourceFactory — uid 999999 will not resolve, falls into catch
-        $agentService = $this->buildAgentServiceCapturing(
-            $capturedMessages,
+        $attachmentService = new AttachmentService(
             GeneralUtility::makeInstance(ResourceFactory::class),
         );
 
-        $preview = $agentService->previewAttachment(['uid' => 999999]);
+        $preview = $attachmentService->preview(['uid' => 999999]);
 
         self::assertFalse($preview['readableByLlm']);
         self::assertSame('Datei nicht auflösbar', $preview['reason']);

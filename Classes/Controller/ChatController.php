@@ -11,6 +11,7 @@ use Hn\Agent\Domain\TaskStatus;
 use Hn\Agent\Http\SseStream;
 use Hn\Agent\Renderer\PromptRenderer;
 use Hn\Agent\Service\AgentService;
+use Hn\Agent\Service\AttachmentService;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use TYPO3\CMS\Backend\Attribute\AsController;
@@ -49,6 +50,7 @@ class ChatController
         private readonly IconFactory           $iconFactory,
         private readonly AgentTaskRepository   $repository,
         private readonly AgentService          $agentService,
+        private readonly AttachmentService     $attachmentService,
         protected readonly PageRenderer        $pageRenderer,
         private readonly PageRepository        $pageRepository,
         private readonly ConnectionPool        $connectionPool,
@@ -238,7 +240,7 @@ class ChatController
         if ($identifier !== '') {
             $ref['identifier'] = $identifier;
         }
-        return new JsonResponse($this->agentService->previewAttachment($ref));
+        return new JsonResponse($this->attachmentService->preview($ref));
     }
 
     public function newAction(ServerRequestInterface $request): ResponseInterface
