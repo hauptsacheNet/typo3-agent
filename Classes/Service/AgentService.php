@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Hn\Agent\Service;
 
-use Doctrine\DBAL\ParameterType;
 use Hn\Agent\Domain\AgentInstructionRepository;
 use Hn\Agent\Domain\AgentTaskRepository;
 use Hn\Agent\Domain\TaskStatus;
@@ -20,7 +19,6 @@ use TYPO3\CMS\Core\Context\UserAspect;
 use TYPO3\CMS\Core\Context\WorkspaceAspect;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
-use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 
 class AgentService implements LoggerAwareInterface
@@ -37,6 +35,7 @@ class AgentService implements LoggerAwareInterface
         private readonly AttachmentService $attachmentService,
         private readonly AgentInstructionRepository $instructionRepository,
         private readonly InstructionTextFormatter $instructionTextFormatter,
+        private readonly ChangeTracker $changeTracker,
     ) {}
 
     /**
@@ -237,7 +236,7 @@ class AgentService implements LoggerAwareInterface
                     );
 
                     // Track workspace changes from write operations
-                    $change = $this->trackChange($taskUid, $toolResult['text']);
+                    $change = $this->changeTracker->track($taskUid, $toolResult['text']);
                     if ($change !== null && $progress !== null) {
                         $progress('change_tracked', $change);
                     }
@@ -663,97 +662,6 @@ class AgentService implements LoggerAwareInterface
 
         $languageServiceFactory = GeneralUtility::makeInstance(LanguageServiceFactory::class);
         $GLOBALS['LANG'] = $languageServiceFactory->create('default');
-    }
-
-    /**
-     * Track a workspace change from a tool result.
-     *
-     * Parses the JSON result of a WriteTableTool call and stores the
-     * relationship between the task and the workspace version record.
-     */
-    private function trackChange(int $taskUid, string $toolResult): ?array
-    {
-        $data = json_decode($toolResult, true);
-        if (!is_array($data) || !isset($data['action'], $data['table'], $data['uid'])) {
-            return null;
-        }
-
-        $table = (string)$data['table'];
-        $uid = (int)$data['uid'];
-        $action = (string)$data['action'];
-        $workspaceId = (int)($GLOBALS['BE_USER']->workspace ?? 0);
-
-        if ($workspaceId === 0) {
-            // No workspace — changes went directly to live, nothing to track
-            return null;
-        }
-
-        if ($action === 'create' || $action === 'translate') {
-            // For new records, the returned UID is already the workspace record UID
-            // (NEW_PLACEHOLDER with t3ver_state=1)
-            $workspaceRecordUid = $uid;
-        } else {
-            // For update/delete, look up the workspace version of the live record
-            $wsVersion = BackendUtility::getWorkspaceVersionOfRecord($workspaceId, $table, $uid, 'uid');
-            if ($wsVersion === false) {
-                return null;
-            }
-            $workspaceRecordUid = (int)$wsVersion['uid'];
-        }
-
-        [$pageId, $workspacePageId] = $this->resolvePageIds($table, $uid, $workspaceRecordUid, $action);
-
-        $this->repository->addChange($taskUid, $table, $uid, $workspaceRecordUid, $pageId, $workspacePageId);
-
-        return [
-            'tablename' => $table,
-            'page_id' => $pageId,
-            'record_uid' => $uid,
-            'workspace_record_uid' => $workspaceRecordUid,
-            'workspace_page_id' => $workspacePageId,
-            'task_uid' => $taskUid,
-        ];
-    }
-
-    /**
-     * Resolve the page IDs for a tracked change.
-     *
-     * @return array{int, int} [pageId, workspacePageId]
-     */
-    private function resolvePageIds(string $table, int $recordUid, int $workspaceRecordUid, string $action): array
-    {
-        if ($table === 'pages') {
-            return [$recordUid, $workspaceRecordUid];
-        }
-
-        if ($action === 'create' || $action === 'translate') {
-            $pid = $this->getRecordPid($table, $recordUid);
-            return [$pid, $pid];
-        }
-
-        $pageId = $this->getRecordPid($table, $recordUid);
-        $workspacePageId = ($workspaceRecordUid !== $recordUid)
-            ? $this->getRecordPid($table, $workspaceRecordUid)
-            : $pageId;
-
-        return [$pageId, $workspacePageId];
-    }
-
-    /**
-     * Get the pid of a record by direct database lookup (bypasses workspace overlays).
-     */
-    private function getRecordPid(string $table, int $uid): int
-    {
-        $queryBuilder = $this->connectionPool->getQueryBuilderForTable($table);
-        $queryBuilder->getRestrictions()->removeAll();
-        $row = $queryBuilder
-            ->select('pid')
-            ->from($table)
-            ->where($queryBuilder->expr()->eq('uid', $queryBuilder->createNamedParameter($uid, ParameterType::INTEGER)))
-            ->executeQuery()
-            ->fetchAssociative();
-
-        return $row !== false ? (int)$row['pid'] : 0;
     }
 
     /**

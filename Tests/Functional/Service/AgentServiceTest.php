@@ -8,6 +8,7 @@ use Hn\Agent\Domain\AgentInstructionRepository;
 use Hn\Agent\Domain\AgentTaskRepository;
 use Hn\Agent\Service\AgentService;
 use Hn\Agent\Service\AttachmentService;
+use Hn\Agent\Service\ChangeTracker;
 use Hn\Agent\Service\InstructionTextFormatter;
 use Hn\Agent\Service\LlmService;
 use Hn\Agent\Service\ToolConverterService;
@@ -146,6 +147,7 @@ class AgentServiceTest extends FunctionalTestCase
             new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class)),
             new AgentInstructionRepository($this->connectionPool),
             new InstructionTextFormatter(),
+            new ChangeTracker($this->connectionPool, new AgentTaskRepository($this->connectionPool)),
         );
     }
 
@@ -352,6 +354,7 @@ class AgentServiceTest extends FunctionalTestCase
             new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class)),
             new AgentInstructionRepository($this->connectionPool),
             new InstructionTextFormatter(),
+            new ChangeTracker($this->connectionPool, new AgentTaskRepository($this->connectionPool)),
         );
 
         try {
@@ -423,6 +426,7 @@ class AgentServiceTest extends FunctionalTestCase
             new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class)),
             new AgentInstructionRepository($this->connectionPool),
             new InstructionTextFormatter(),
+            new ChangeTracker($this->connectionPool, new AgentTaskRepository($this->connectionPool)),
         );
 
         // Pass an unresolvable attachment (no such sys_file UID) — keeps the
@@ -494,6 +498,7 @@ class AgentServiceTest extends FunctionalTestCase
             new AttachmentService($resourceFactory),
             new AgentInstructionRepository($this->connectionPool),
             new InstructionTextFormatter(),
+            new ChangeTracker($this->connectionPool, new AgentTaskRepository($this->connectionPool)),
         );
     }
 
@@ -761,6 +766,7 @@ class AgentServiceTest extends FunctionalTestCase
             new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class)),
             new AgentInstructionRepository($this->connectionPool),
             new InstructionTextFormatter(),
+            new ChangeTracker($this->connectionPool, new AgentTaskRepository($this->connectionPool)),
         );
         $agentService->processTask($taskUid);
 
@@ -845,6 +851,7 @@ class AgentServiceTest extends FunctionalTestCase
             new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class)),
             new AgentInstructionRepository($this->connectionPool),
             new InstructionTextFormatter(),
+            new ChangeTracker($this->connectionPool, new AgentTaskRepository($this->connectionPool)),
         );
         $agentService->processTask($taskUid);
 
@@ -921,6 +928,7 @@ class AgentServiceTest extends FunctionalTestCase
             new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class)),
             new AgentInstructionRepository($this->connectionPool),
             new InstructionTextFormatter(),
+            new ChangeTracker($this->connectionPool, new AgentTaskRepository($this->connectionPool)),
         );
         $agentService->processTask($taskUid);
 
