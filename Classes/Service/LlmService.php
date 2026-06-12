@@ -5,12 +5,17 @@ declare(strict_types=1);
 namespace Hn\Agent\Service;
 
 use GuzzleHttp\Exception\BadResponseException;
+use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\StreamInterface;
+use Psr\Log\LoggerAwareInterface;
+use Psr\Log\LoggerAwareTrait;
 use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
 use TYPO3\CMS\Core\Http\RequestFactory;
 
-class LlmService
+class LlmService implements LoggerAwareInterface
 {
+    use LoggerAwareTrait;
+
     public function __construct(
         private readonly RequestFactory $requestFactory,
         private readonly ExtensionConfiguration $extensionConfiguration,
@@ -24,13 +29,13 @@ class LlmService
      * @return array The assistant message from choices[0].message
      * @throws \RuntimeException on HTTP or API errors
      */
-    public function chatCompletion(array $messages, array $tools = []): array
+    public function chatCompletion(array $messages, array $tools = [], ?string $modelOverride = null): array
     {
         $config = $this->getConfig();
         $apiUrl = rtrim($config['apiUrl'], '/') . '/chat/completions';
 
         $body = [
-            'model' => $config['model'],
+            'model' => $modelOverride ?? $config['model'],
             'messages' => $messages,
         ];
 
@@ -46,12 +51,14 @@ class LlmService
             'json' => $body,
             'connect_timeout' => 10,
             'timeout' => 120,
+            'http_errors' => false,
         ]);
 
         $statusCode = $response->getStatusCode();
         $responseBody = (string)$response->getBody();
 
         if ($statusCode < 200 || $statusCode >= 300) {
+            $this->logApiFailure($apiUrl, $statusCode, $response, $body, $responseBody);
             throw new \RuntimeException(
                 'LLM API returned HTTP ' . $statusCode . ': ' . $responseBody
             );
@@ -116,8 +123,10 @@ class LlmService
             ]);
         } catch (BadResponseException $e) {
             $errResp = $e->getResponse();
+            $errBody = (string)$errResp->getBody();
+            $this->logApiFailure($apiUrl, $errResp->getStatusCode(), $errResp, $body, $errBody);
             throw new \RuntimeException(
-                'LLM API returned HTTP ' . $errResp->getStatusCode() . ': ' . (string)$errResp->getBody(),
+                'LLM API returned HTTP ' . $errResp->getStatusCode() . ': ' . $errBody,
                 0,
                 $e,
             );
@@ -125,8 +134,10 @@ class LlmService
 
         $statusCode = $response->getStatusCode();
         if ($statusCode < 200 || $statusCode >= 300) {
+            $errBody = (string)$response->getBody();
+            $this->logApiFailure($apiUrl, $statusCode, $response, $body, $errBody);
             throw new \RuntimeException(
-                'LLM API returned HTTP ' . $statusCode . ': ' . (string)$response->getBody()
+                'LLM API returned HTTP ' . $statusCode . ': ' . $errBody
             );
         }
 
@@ -325,6 +336,182 @@ class LlmService
             'apiUrl' => (string)($config['apiUrl'] ?? ''),
             'apiKey' => (string)$apiKey,
             'model' => (string)($config['model'] ?? 'anthropic/claude-haiku-4-5'),
+        ];
+    }
+
+    /**
+     * Log full provider error detail next to a structured, base64-free
+     * request summary. OpenRouter returns the provider's real message nested
+     * in `error.metadata.raw` and is otherwise lost — the UI only sees the
+     * exception message. The response body is capped so file logs stay sane.
+     */
+    private function logApiFailure(
+        string $apiUrl,
+        int $statusCode,
+        ResponseInterface $response,
+        array $requestBody,
+        string $responseBody,
+    ): void {
+        if ($this->logger === null) {
+            return;
+        }
+        $this->logger->error('LLM API request failed', [
+            'url' => $apiUrl,
+            'status' => $statusCode,
+            'response_body' => substr($responseBody, 0, 8192),
+            'response_headers' => $this->extractRelevantHeaders($response),
+            'request' => $this->summarizeRequest($requestBody),
+            'request_body' => $this->encodeRequestBody($requestBody),
+        ]);
+    }
+
+    /**
+     * Full JSON-encoded request body, capped at 4 MiB so the file log doesn't
+     * blow up on 30 MiB PDFs (~40 MiB base64). Truncation is marked inline so
+     * a downstream reader sees that bytes are missing.
+     */
+    private function encodeRequestBody(array $body): string
+    {
+        $json = json_encode($body, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PARTIAL_OUTPUT_ON_ERROR);
+        if ($json === false) {
+            return '<json_encode failed: ' . json_last_error_msg() . '>';
+        }
+        $cap = 4 * 1024 * 1024;
+        if (strlen($json) > $cap) {
+            return substr($json, 0, $cap) . '...[truncated at ' . $cap . ' bytes; full length ' . strlen($json) . ']';
+        }
+        return $json;
+    }
+
+    /**
+     * @return array<string, list<string>>
+     */
+    private function extractRelevantHeaders(ResponseInterface $response): array
+    {
+        $out = [];
+        foreach ($response->getHeaders() as $name => $values) {
+            $lower = strtolower($name);
+            $relevant = $lower === 'x-request-id'
+                || str_starts_with($lower, 'x-or-')
+                || str_starts_with($lower, 'x-ratelimit-')
+                || $lower === 'openai-organization'
+                || $lower === 'cf-ray';
+            if ($relevant) {
+                $out[$name] = $values;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Reduce the outgoing request body to a base64-free shape suitable for
+     * a file log: per message its role + a compact content descriptor
+     * (text length, file/image mime + bytes), plus tool_calls names and
+     * the tools array length.
+     *
+     * @param array<string, mixed> $body
+     * @return array<string, mixed>
+     */
+    private function summarizeRequest(array $body): array
+    {
+        $messages = [];
+        foreach (($body['messages'] ?? []) as $index => $message) {
+            if (!is_array($message)) {
+                continue;
+            }
+            $summary = [
+                'index' => $index,
+                'role' => $message['role'] ?? '',
+                'content' => $this->summarizeContent($message['content'] ?? null),
+            ];
+            if (isset($message['tool_call_id'])) {
+                $summary['tool_call_id'] = (string)$message['tool_call_id'];
+            }
+            if (!empty($message['tool_calls']) && is_array($message['tool_calls'])) {
+                $summary['tool_calls'] = array_values(array_map(
+                    static fn ($tc): array => [
+                        'id' => (string)($tc['id'] ?? ''),
+                        'name' => (string)($tc['function']['name'] ?? ''),
+                        'arguments_len' => strlen((string)($tc['function']['arguments'] ?? '')),
+                    ],
+                    array_filter($message['tool_calls'], 'is_array'),
+                ));
+            }
+            $messages[] = $summary;
+        }
+
+        return [
+            'model' => $body['model'] ?? null,
+            'stream' => (bool)($body['stream'] ?? false),
+            'tools_count' => is_array($body['tools'] ?? null) ? count($body['tools']) : 0,
+            'messages' => $messages,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function summarizeContent(mixed $content): array
+    {
+        if ($content === null) {
+            return ['kind' => 'null'];
+        }
+        if (is_string($content)) {
+            return ['kind' => 'string', 'bytes' => strlen($content)];
+        }
+        if (!is_array($content)) {
+            return ['kind' => 'other', 'php_type' => get_debug_type($content)];
+        }
+        $blocks = [];
+        foreach ($content as $block) {
+            if (!is_array($block)) {
+                $blocks[] = ['type' => '?', 'php_type' => get_debug_type($block)];
+                continue;
+            }
+            $type = (string)($block['type'] ?? '?');
+            $entry = ['type' => $type];
+            if ($type === 'text') {
+                $entry['bytes'] = strlen((string)($block['text'] ?? ''));
+            } elseif ($type === 'image_url') {
+                $url = (string)($block['image_url']['url'] ?? '');
+                $entry += $this->describeDataUri($url);
+            } elseif ($type === 'file') {
+                $entry['filename'] = (string)($block['file']['filename'] ?? '');
+                $entry += $this->describeDataUri((string)($block['file']['file_data'] ?? ''));
+            }
+            $blocks[] = $entry;
+        }
+        return ['kind' => 'blocks', 'count' => count($blocks), 'blocks' => $blocks];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function describeDataUri(string $uri): array
+    {
+        if ($uri === '') {
+            return ['data' => 'empty'];
+        }
+        if (!str_starts_with($uri, 'data:')) {
+            return ['data' => 'url', 'bytes' => strlen($uri)];
+        }
+        $commaPos = strpos($uri, ',');
+        if ($commaPos === false) {
+            return ['data' => 'malformed_data_uri'];
+        }
+        $header = substr($uri, 5, $commaPos - 5);
+        $mime = $header;
+        $isBase64 = false;
+        if (str_ends_with($header, ';base64')) {
+            $mime = substr($header, 0, -7);
+            $isBase64 = true;
+        }
+        $payloadLen = strlen($uri) - $commaPos - 1;
+        $rawBytes = $isBase64 ? (int)floor($payloadLen * 3 / 4) : $payloadLen;
+        return [
+            'data' => $isBase64 ? 'base64' : 'inline',
+            'mime' => $mime,
+            'bytes' => $rawBytes,
         ];
     }
 }

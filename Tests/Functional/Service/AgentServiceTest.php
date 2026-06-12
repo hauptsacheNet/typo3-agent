@@ -144,7 +144,7 @@ class AgentServiceTest extends FunctionalTestCase
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
-            new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class)),
+            new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class), $this->connectionPool),
             new AgentInstructionRepository($this->connectionPool),
             new InstructionTextFormatter(),
             new ChangeTracker($this->connectionPool, new AgentTaskRepository($this->connectionPool)),
@@ -351,7 +351,7 @@ class AgentServiceTest extends FunctionalTestCase
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
-            new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class)),
+            new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class), $this->connectionPool),
             new AgentInstructionRepository($this->connectionPool),
             new InstructionTextFormatter(),
             new ChangeTracker($this->connectionPool, new AgentTaskRepository($this->connectionPool)),
@@ -423,7 +423,7 @@ class AgentServiceTest extends FunctionalTestCase
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
-            new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class)),
+            new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class), $this->connectionPool),
             new AgentInstructionRepository($this->connectionPool),
             new InstructionTextFormatter(),
             new ChangeTracker($this->connectionPool, new AgentTaskRepository($this->connectionPool)),
@@ -495,7 +495,7 @@ class AgentServiceTest extends FunctionalTestCase
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
-            new AttachmentService($resourceFactory),
+            new AttachmentService($resourceFactory, $this->connectionPool),
             new AgentInstructionRepository($this->connectionPool),
             new InstructionTextFormatter(),
             new ChangeTracker($this->connectionPool, new AgentTaskRepository($this->connectionPool)),
@@ -555,12 +555,12 @@ class AgentServiceTest extends FunctionalTestCase
         return null;
     }
 
-    public function testImageAttachmentStaysMarkerOnlyForReadFile(): void
+    public function testImageAttachmentStaysMarkerOnlyForViewImage(): void
     {
-        // The image is *not* embedded into the user message any more — the
-        // LLM has to call the ReadFile tool to actually see the bytes.
-        // content=null on the mock asserts that getContents() is never read
-        // during serialization (file bytes only flow through ReadFile).
+        // The image is *not* embedded into the user message — the LLM has
+        // to call the ViewImage tool to actually see the bytes. content=null
+        // on the mock asserts that getContents() is never read during
+        // serialization (file bytes only flow through ViewImage).
         $file = $this->buildFileMock(101, 'image/png', 2048, 'pixel.png', '1:/uploads/pixel.png', null);
         $resourceFactory = $this->buildResourceFactoryReturning(101, $file);
 
@@ -574,15 +574,18 @@ class AgentServiceTest extends FunctionalTestCase
         $userMsg = $this->findLlmUserMessage($capturedMessages[0], 'Was siehst du?');
         self::assertNotNull($userMsg, 'User message reached LlmService');
 
-        self::assertIsString($userMsg['content'], 'Content stays plain text — files reach the LLM only via ReadFile');
+        self::assertIsString($userMsg['content'], 'Content stays plain text — files reach the LLM only via ViewImage');
         self::assertStringContainsString('Was siehst du?', $userMsg['content']);
         self::assertStringContainsString('sys_file:101', $userMsg['content']);
         self::assertStringContainsString('image/png', $userMsg['content']);
-        self::assertStringContainsString('ReadFile', $userMsg['content']);
+        self::assertStringContainsString('ViewImage', $userMsg['content']);
     }
 
-    public function testPdfAttachmentStaysMarkerOnlyForReadFile(): void
+    public function testPdfAttachmentMarkedUnsupportedForLlm(): void
     {
+        // PDFs are not handled by any viewer tool — the marker tells the
+        // LLM to use GetFileInfo for metadata only. content=null asserts
+        // no bytes are ever read.
         $file = $this->buildFileMock(202, 'application/pdf', 4096, 'doc.pdf', '1:/uploads/doc.pdf', null);
         $resourceFactory = $this->buildResourceFactoryReturning(202, $file);
 
@@ -597,9 +600,11 @@ class AgentServiceTest extends FunctionalTestCase
         self::assertIsString($userMsg['content']);
         self::assertStringContainsString('sys_file:202', $userMsg['content']);
         self::assertStringContainsString('application/pdf', $userMsg['content']);
+        self::assertStringContainsString('Inhalt nicht direkt lesbar', $userMsg['content']);
+        self::assertStringContainsString('GetFileInfo', $userMsg['content']);
     }
 
-    public function testOversizedImageMarkerWarnsLlmNotToCallReadFile(): void
+    public function testOversizedImageMarkerWarnsLlmNotToCallViewImage(): void
     {
         // 6 MiB > 5 MiB image cap. content=null asserts getContents() is never invoked.
         $file = $this->buildFileMock(303, 'image/png', 6 * 1024 * 1024, 'huge.png', '1:/uploads/huge.png', null);
@@ -619,7 +624,7 @@ class AgentServiceTest extends FunctionalTestCase
         self::assertStringContainsString('nicht abrufbar', $userMsg['content']);
     }
 
-    public function testUnsupportedMimeMarkerWarnsLlmNotToCallReadFile(): void
+    public function testUnsupportedMimeMarkerPointsLlmToGetFileInfo(): void
     {
         // text/plain isn't on our allowlist — even though small, must stay marker-only.
         $file = $this->buildFileMock(404, 'text/plain', 100, 'notes.txt', '1:/uploads/notes.txt', null);
@@ -636,7 +641,8 @@ class AgentServiceTest extends FunctionalTestCase
         self::assertIsString($userMsg['content']);
         self::assertStringContainsString('sys_file:404', $userMsg['content']);
         self::assertStringContainsString('text/plain', $userMsg['content']);
-        self::assertStringContainsString('nicht über ReadFile lesbar', $userMsg['content']);
+        self::assertStringContainsString('Inhalt nicht direkt lesbar', $userMsg['content']);
+        self::assertStringContainsString('GetFileInfo', $userMsg['content']);
         self::assertStringNotContainsString('zu groß', $userMsg['content']);
     }
 
@@ -645,7 +651,7 @@ class AgentServiceTest extends FunctionalTestCase
         $file = $this->buildFileMock(101, 'image/png', 2048, 'pixel.png', '1:/uploads/pixel.png', null);
         $resourceFactory = $this->buildResourceFactoryReturning(101, $file);
 
-        $preview = (new AttachmentService($resourceFactory))->preview(['uid' => 101]);
+        $preview = (new AttachmentService($resourceFactory, $this->connectionPool))->preview(['uid' => 101]);
 
         self::assertSame(101, $preview['uid']);
         self::assertSame('image/png', $preview['mime']);
@@ -659,7 +665,7 @@ class AgentServiceTest extends FunctionalTestCase
         $file = $this->buildFileMock(303, 'image/png', 6 * 1024 * 1024, 'huge.png', '1:/uploads/huge.png', null);
         $resourceFactory = $this->buildResourceFactoryReturning(303, $file);
 
-        $preview = (new AttachmentService($resourceFactory))->preview(['uid' => 303]);
+        $preview = (new AttachmentService($resourceFactory, $this->connectionPool))->preview(['uid' => 303]);
 
         self::assertFalse($preview['readableByLlm']);
         self::assertNotNull($preview['reason']);
@@ -672,7 +678,7 @@ class AgentServiceTest extends FunctionalTestCase
         $file = $this->buildFileMock(404, 'text/plain', 100, 'notes.txt', '1:/uploads/notes.txt', null);
         $resourceFactory = $this->buildResourceFactoryReturning(404, $file);
 
-        $preview = (new AttachmentService($resourceFactory))->preview(['uid' => 404]);
+        $preview = (new AttachmentService($resourceFactory, $this->connectionPool))->preview(['uid' => 404]);
 
         self::assertFalse($preview['readableByLlm']);
         self::assertSame('Format nicht unterstützt', $preview['reason']);
@@ -683,6 +689,7 @@ class AgentServiceTest extends FunctionalTestCase
         // real ResourceFactory — uid 999999 will not resolve, falls into catch
         $attachmentService = new AttachmentService(
             GeneralUtility::makeInstance(ResourceFactory::class),
+            $this->connectionPool,
         );
 
         $preview = $attachmentService->preview(['uid' => 999999]);
@@ -722,7 +729,7 @@ class AgentServiceTest extends FunctionalTestCase
     }
 
     /**
-     * When a tool returns ImageContent (e.g. ReadFile on a sys_file), the
+     * When a tool returns ImageContent (e.g. ViewImage on a sys_file), the
      * resulting tool message stores `content` directly as a block array
      * [text, image_url]. Same shape is sent to the LLM (serializeForLlm
      * is a no-op for tool messages) and persisted in the DB.
@@ -733,7 +740,7 @@ class AgentServiceTest extends FunctionalTestCase
             ['role' => 'system', 'content' => 'sys'],
             ['role' => 'user', 'content' => 'show me'],
             ['role' => 'assistant', 'content' => null, 'tool_calls' => [
-                ['id' => 'call_img', 'type' => 'function', 'function' => ['name' => 'ReadFile', 'arguments' => '{"uid":42}']],
+                ['id' => 'call_img', 'type' => 'function', 'function' => ['name' => 'ViewImage', 'arguments' => '{"uid":42}']],
             ]],
             [
                 'role' => 'tool',
@@ -763,7 +770,7 @@ class AgentServiceTest extends FunctionalTestCase
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
-            new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class)),
+            new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class), $this->connectionPool),
             new AgentInstructionRepository($this->connectionPool),
             new InstructionTextFormatter(),
             new ChangeTracker($this->connectionPool, new AgentTaskRepository($this->connectionPool)),
@@ -818,7 +825,7 @@ class AgentServiceTest extends FunctionalTestCase
             ['role' => 'system', 'content' => 'sys'],
             ['role' => 'user', 'content' => 'show pdf'],
             ['role' => 'assistant', 'content' => null, 'tool_calls' => [
-                ['id' => 'call_pdf', 'type' => 'function', 'function' => ['name' => 'ReadFile', 'arguments' => '{"uid":48}']],
+                ['id' => 'call_pdf', 'type' => 'function', 'function' => ['name' => 'ViewImage', 'arguments' => '{"uid":48}']],
             ]],
             [
                 'role' => 'tool',
@@ -848,7 +855,7 @@ class AgentServiceTest extends FunctionalTestCase
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
-            new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class)),
+            new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class), $this->connectionPool),
             new AgentInstructionRepository($this->connectionPool),
             new InstructionTextFormatter(),
             new ChangeTracker($this->connectionPool, new AgentTaskRepository($this->connectionPool)),
@@ -877,7 +884,7 @@ class AgentServiceTest extends FunctionalTestCase
     }
 
     /**
-     * Two consecutive ReadFile calls in one assistant turn produce two
+     * Two consecutive ViewImage calls in one assistant turn produce two
      * `tool` messages. Each carries its own media inline — the resulting
      * message tail is `assistant(tool_calls), tool(a), tool(b)` with each
      * tool message holding its own `file` block.
@@ -888,8 +895,8 @@ class AgentServiceTest extends FunctionalTestCase
             ['role' => 'system', 'content' => 'sys'],
             ['role' => 'user', 'content' => 'show both'],
             ['role' => 'assistant', 'content' => null, 'tool_calls' => [
-                ['id' => 'call_a', 'type' => 'function', 'function' => ['name' => 'ReadFile', 'arguments' => '{"uid":1}']],
-                ['id' => 'call_b', 'type' => 'function', 'function' => ['name' => 'ReadFile', 'arguments' => '{"uid":2}']],
+                ['id' => 'call_a', 'type' => 'function', 'function' => ['name' => 'ViewImage', 'arguments' => '{"uid":1}']],
+                ['id' => 'call_b', 'type' => 'function', 'function' => ['name' => 'ViewImage', 'arguments' => '{"uid":2}']],
             ]],
             [
                 'role' => 'tool', 'tool_call_id' => 'call_a',
@@ -925,7 +932,7 @@ class AgentServiceTest extends FunctionalTestCase
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
-            new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class)),
+            new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class), $this->connectionPool),
             new AgentInstructionRepository($this->connectionPool),
             new InstructionTextFormatter(),
             new ChangeTracker($this->connectionPool, new AgentTaskRepository($this->connectionPool)),

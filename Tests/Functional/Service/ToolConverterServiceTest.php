@@ -68,9 +68,11 @@ class ToolConverterServiceTest extends FunctionalTestCase
         self::assertContains('Search', $toolNames);
         self::assertContains('ReadTable', $toolNames);
         self::assertContains('ListTables', $toolNames);
-        // ReadFile lives in the agent package and registers itself via the
-        // mcp.tool autoconfigure tag — must show up alongside vendor tools.
-        self::assertContains('ReadFile', $toolNames);
+        // GetFileInfo + ViewImage live in the agent package and register
+        // themselves via the mcp.tool autoconfigure tag — both must show
+        // up alongside vendor tools.
+        self::assertContains('GetFileInfo', $toolNames);
+        self::assertContains('ViewImage', $toolNames);
     }
 
     public function testExecuteToolCallSuccess(): void
