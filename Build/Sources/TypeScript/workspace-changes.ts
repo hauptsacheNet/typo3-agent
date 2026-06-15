@@ -31,6 +31,7 @@ function init(): void {
       this.generateRemotePayload('getWorkspaceInfos', settings),
     ).then(async (response: any) => {
       this.renderWorkspaceInfos((await response.resolve())[0].result);
+      updateDrawerBadge();
     });
   };
 
@@ -38,6 +39,28 @@ function init(): void {
   document.addEventListener('agent:record-changed', () => {
     backend.getWorkspaceInfos();
   });
+
+  // 4. Badge im Drawer-Header an die Anzahl der gerenderten Records koppeln.
+  //    renderWorkspaceInfos kann asynchron sein — MutationObserver hält das
+  //    Badge auch dann konsistent, wenn das Custom-Element später Rows nachzieht.
+  const observer = new MutationObserver(() => updateDrawerBadge());
+  const contents = document.getElementById('workspace-contents');
+  if (contents) {
+    observer.observe(contents, { childList: true, subtree: true });
+  }
+}
+
+function updateDrawerBadge(): void {
+  const wrapper = document.querySelector<HTMLElement>('.hn-workspace-drawer__count');
+  const value = document.querySelector<HTMLElement>('.hn-workspace-drawer__count-value');
+  if (!wrapper || !value) {
+    return;
+  }
+  const rows = document.querySelectorAll(
+    '#workspace-contents typo3-workspaces-record-table tbody tr',
+  ).length;
+  value.textContent = String(rows);
+  wrapper.classList.toggle('hidden', rows === 0);
 }
 
 init();

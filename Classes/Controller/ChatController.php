@@ -179,6 +179,20 @@ class ChatController
             if ($record !== null) {
                 $contextLabel = BackendUtility::getRecordTitle($contextTable, $record);
                 $contextTableLabel = $GLOBALS['LANG']->sL($GLOBALS['TCA'][$contextTable]['ctrl']['title'] ?? '') ?: $contextTable;
+
+                $permsClause = $GLOBALS['BE_USER']->getPagePermsClause(1);
+                $pageUidForHeader = $contextTable === 'pages'
+                    ? $contextUid
+                    : (int)($record['pid'] ?? 0);
+                $pageInfo = $pageUidForHeader > 0
+                    ? BackendUtility::readPageAccess($pageUidForHeader, $permsClause)
+                    : false;
+                if (is_array($pageInfo)) {
+                    if ($contextTable !== 'pages') {
+                        $pageInfo['_additional_info'] = sprintf('· %s: %s [%d]', $contextTableLabel, $contextLabel, $contextUid);
+                    }
+                    $view->getDocHeaderComponent()->setMetaInformation($pageInfo);
+                }
             }
         }
 

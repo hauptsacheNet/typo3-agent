@@ -7,29 +7,10 @@
     <f:asset.module identifier="@hn/agent/workspace-changes.js"/>
     <f:asset.css identifier="hn-agent-chat" href="EXT:agent/Resources/Public/Css/agent-chat.css"/>
 
-    <div style="width: 100%; height: 100%; overflow: hidden; display: grid; grid-template-rows: auto  minmax(0, 1fr)">
+    <div style="position: relative; width: 100%; height: 100%; overflow: hidden; display: grid; grid-template-rows: auto minmax(0, 1fr); padding-bottom: 2.5rem">
 
         <div>
-
             <h1>{task.title}</h1>
-
-            <p class="text-muted">
-                <f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:workspace.label"/>:
-                {taskWorkspace.title}
-            </p>
-
-            <f:if condition="{contextLabel}">
-                <p class="text-muted">
-                    <f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:context.label"
-                                 arguments="{0: contextTableLabel}"/>
-                    :
-                    <f:if condition="{returnUrl}">
-                        <f:then><a href="{returnUrl}">{contextLabel} (UID: {contextUid})</a></f:then>
-                        <f:else>{contextLabel} (UID: {contextUid})</f:else>
-                    </f:if>
-                </p>
-            </f:if>
-
         </div>
         <hn-agent-chat
                 send-uri="{sendUri}"
@@ -46,38 +27,61 @@
                 file-browser-uri="{fileBrowserUri}"
                 preflight-uri="{preflightUri}"
         ></hn-agent-chat>
-
-        <div id="workspace-panel" class="mt-4" style="max-height: 50vh; overflow-y: auto">
-            <div id="workspace-content-wrapper" data-task-uid="{task.uid}">
-                <h2>Workspace changes</h2>
-                <div class="row workspace-actions multi-record-selection-actions-wrapper gx-0 hidden">
-                    <div class="col-auto">
-                        <div class="row row-cols-auto align-items-center gx-2 t3js-multi-record-selection-actions hidden">
-                            <div class="col">
-                                <strong><f:translate key="LLL:EXT:core/Resources/Private/Language/locallang_core.xlf:labels.selection"/></strong>
-                            </div>
-                            <div class="col">
-                                <select name="selection-action" class="form-select form-select-sm">
-                                    <option value=""><f:translate key="LLL:EXT:workspaces/Resources/Private/Language/locallang.xlf:chooseSelectionAction" /></option>
-                                    <option value="publish"><f:translate key="LLL:EXT:workspaces/Resources/Private/Language/locallang.xlf:label_doaction_publish" /></option>
-                                    <option value="discard"><f:translate key="LLL:EXT:workspaces/Resources/Private/Language/locallang.xlf:label_doaction_discard" /></option>
-                                </select>
+    </div>
+    <details id="workspace-drawer" class="hn-workspace-drawer">
+        <summary class="hn-workspace-drawer__header">
+            <span class="hn-workspace-drawer__title">
+                Workspace changes<span class="hn-workspace-drawer__count hidden"> (<span class="hn-workspace-drawer__count-value">0</span>)</span>
+            </span>
+            <span class="hn-workspace-drawer__toggle" aria-hidden="true">
+                <typo3-backend-icon identifier="actions-chevron-up" size="small"></typo3-backend-icon>
+            </span>
+        </summary>
+        <div class="hn-workspace-drawer__body">
+            <div id="workspace-panel">
+                <div id="workspace-content-wrapper" data-task-uid="{task.uid}">
+                    <div class="row workspace-actions multi-record-selection-actions-wrapper gx-0 hidden">
+                        <div class="col-auto">
+                            <div class="row row-cols-auto align-items-center gx-2 t3js-multi-record-selection-actions hidden">
+                                <div class="col">
+                                    <strong>
+                                        <f:translate
+                                                key="LLL:EXT:core/Resources/Private/Language/locallang_core.xlf:labels.selection"/>
+                                    </strong>
+                                </div>
+                                <div class="col">
+                                    <select name="selection-action" class="form-select form-select-sm">
+                                        <option value="">
+                                            <f:translate
+                                                    key="LLL:EXT:workspaces/Resources/Private/Language/locallang.xlf:chooseSelectionAction"/>
+                                        </option>
+                                        <option value="publish">
+                                            <f:translate
+                                                    key="LLL:EXT:workspaces/Resources/Private/Language/locallang.xlf:label_doaction_publish"/>
+                                        </option>
+                                        <option value="discard">
+                                            <f:translate
+                                                    key="LLL:EXT:workspaces/Resources/Private/Language/locallang.xlf:label_doaction_discard"/>
+                                        </option>
+                                    </select>
+                                </div>
                             </div>
                         </div>
                     </div>
+                    <div id="workspace-contents" style="display: none">
+                        <typo3-workspaces-record-table></typo3-workspaces-record-table>
+                    </div>
+                    <div id="workspace-contents-empty">
+                        <f:be.infobox
+                                message="{f:translate(key:'LLL:EXT:workspaces/Resources/Private/Language/locallang.xlf:noResults')}"
+                                state="{f:constant(name: 'TYPO3\CMS\Fluid\ViewHelpers\Be\InfoboxViewHelper::STATE_NOTICE')}"
+                        />
+                    </div>
+                    <nav id="workspace-pagination" class="mt-3"></nav>
                 </div>
-                <div id="workspace-contents" style="display: none">
-                    <typo3-workspaces-record-table></typo3-workspaces-record-table>
-                </div>
-                <div id="workspace-contents-empty">
-                    <f:be.infobox
-                            message="{f:translate(key:'LLL:EXT:workspaces/Resources/Private/Language/locallang.xlf:noResults')}"
-                            state="{f:constant(name: 'TYPO3\CMS\Fluid\ViewHelpers\Be\InfoboxViewHelper::STATE_NOTICE')}"
-                    />
-                </div>
-                <nav id="workspace-pagination" class="mt-3"></nav>
             </div>
         </div>
-    </div>
+    </details>
+
 </f:section>
 </html>
