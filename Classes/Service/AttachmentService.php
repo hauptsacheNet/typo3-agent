@@ -35,7 +35,38 @@ class AttachmentService implements LoggerAwareInterface
     use LoggerAwareTrait;
 
     public const SUPPORTED_IMAGE_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+    public const SUPPORTED_PDF_MIME_TYPES = ['application/pdf'];
+    public const SUPPORTED_SPREADSHEET_MIME_TYPES = [
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'application/vnd.oasis.opendocument.spreadsheet',
+        'application/vnd.ms-excel',
+        'text/csv',
+    ];
+    public const SUPPORTED_DOCUMENT_MIME_TYPES = [
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/vnd.oasis.opendocument.text',
+        'application/rtf',
+        'text/rtf',
+        'text/plain',
+        'text/markdown',
+        'text/html',
+    ];
+    public const SUPPORTED_PRESENTATION_MIME_TYPES = [
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        'application/vnd.oasis.opendocument.presentation',
+    ];
+
     public const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+    public const MAX_PDF_BYTES = 50 * 1024 * 1024;
+    public const MAX_OFFICE_BYTES = 25 * 1024 * 1024;
+
+    private const TOOL_FOR_KIND = [
+        'image' => 'ViewImage',
+        'pdf' => 'ReadPdfText (Text) oder ViewPdfPage (Seite als Bild)',
+        'spreadsheet' => 'ReadSpreadsheet',
+        'document' => 'ReadDocument',
+        'presentation' => 'ReadPresentation',
+    ];
 
     public function __construct(
         private readonly ResourceFactory $resourceFactory,
@@ -47,7 +78,7 @@ class AttachmentService implements LoggerAwareInterface
      * the file contents. Reads only FAL metadata.
      *
      * @param array<string, mixed> $ref
-     * @return array{kind: 'image'|'unsupported'|'oversize'|'unresolvable', mime: string, size: int, file: ?File, reason: ?string}
+     * @return array{kind: 'image'|'pdf'|'spreadsheet'|'document'|'presentation'|'unsupported'|'oversize'|'unresolvable', mime: string, size: int, file: ?File, reason: ?string}
      */
     public function classify(array $ref): array
     {
@@ -63,21 +94,45 @@ class AttachmentService implements LoggerAwareInterface
         $mime = strtolower((string)$file->getMimeType());
         $size = (int)$file->getSize();
 
-        if (!in_array($mime, self::SUPPORTED_IMAGE_MIME_TYPES, true)) {
+        [$kind, $maxBytes] = $this->familyFor($mime);
+        if ($kind === null) {
             return ['kind' => 'unsupported', 'mime' => $mime, 'size' => $size, 'file' => $file, 'reason' => 'Format nicht unterstützt'];
         }
 
-        if ($size > self::MAX_IMAGE_BYTES) {
+        if ($size > $maxBytes) {
             return [
                 'kind' => 'oversize',
                 'mime' => $mime,
                 'size' => $size,
                 'file' => $file,
-                'reason' => sprintf('zu groß (%s > %s)', $this->formatBytes($size), $this->formatBytes(self::MAX_IMAGE_BYTES)),
+                'reason' => sprintf('zu groß (%s > %s)', $this->formatBytes($size), $this->formatBytes($maxBytes)),
             ];
         }
 
-        return ['kind' => 'image', 'mime' => $mime, 'size' => $size, 'file' => $file, 'reason' => null];
+        return ['kind' => $kind, 'mime' => $mime, 'size' => $size, 'file' => $file, 'reason' => null];
+    }
+
+    /**
+     * @return array{0: ?string, 1: int} Tuple of kind (or null when unsupported) and the per-family byte cap.
+     */
+    private function familyFor(string $mime): array
+    {
+        if (in_array($mime, self::SUPPORTED_IMAGE_MIME_TYPES, true)) {
+            return ['image', self::MAX_IMAGE_BYTES];
+        }
+        if (in_array($mime, self::SUPPORTED_PDF_MIME_TYPES, true)) {
+            return ['pdf', self::MAX_PDF_BYTES];
+        }
+        if (in_array($mime, self::SUPPORTED_SPREADSHEET_MIME_TYPES, true)) {
+            return ['spreadsheet', self::MAX_OFFICE_BYTES];
+        }
+        if (in_array($mime, self::SUPPORTED_DOCUMENT_MIME_TYPES, true)) {
+            return ['document', self::MAX_OFFICE_BYTES];
+        }
+        if (in_array($mime, self::SUPPORTED_PRESENTATION_MIME_TYPES, true)) {
+            return ['presentation', self::MAX_OFFICE_BYTES];
+        }
+        return [null, 0];
     }
 
     /**
@@ -167,25 +222,29 @@ class AttachmentService implements LoggerAwareInterface
      * call) so the chat frontend can call it eagerly after each add.
      *
      * `readableByLlm` answers: can the LLM retrieve the file's bytes via
-     * a viewer tool? Today: true only for images within the size cap
-     * (handled by ViewImage). Other MIME types are limited to metadata
+     * a viewer tool? True for images (ViewImage), PDFs (ReadPdfText /
+     * ViewPdfPage), spreadsheets (ReadSpreadsheet), text documents
+     * (ReadDocument) and presentations (ReadPresentation) within their
+     * respective size caps. Other MIME types are limited to metadata
      * via GetFileInfo and report `readableByLlm: false` with a `reason`.
      *
      * @param array<string, mixed> $ref
-     * @return array{uid: int, identifier: string, name: string, mime: string, size: int, readableByLlm: bool, reason: ?string}
+     * @return array{uid: int, identifier: string, name: string, mime: string, size: int, readableByLlm: bool, reason: ?string, via: ?string}
      */
     public function preview(array $ref): array
     {
         $info = $this->classify($ref);
         $file = $info['file'];
+        $readable = in_array($info['kind'], ['image', 'pdf', 'spreadsheet', 'document', 'presentation'], true);
         return [
             'uid' => $file?->getUid() ?? (int)($ref['uid'] ?? 0),
             'identifier' => $file?->getCombinedIdentifier() ?? (string)($ref['identifier'] ?? ''),
             'name' => $file?->getName() ?? (string)($ref['name'] ?? ''),
             'mime' => $info['mime'],
             'size' => $info['size'],
-            'readableByLlm' => $info['kind'] === 'image',
+            'readableByLlm' => $readable,
             'reason' => $info['reason'],
+            'via' => self::TOOL_FOR_KIND[$info['kind']] ?? null,
         ];
     }
 
@@ -209,7 +268,10 @@ class AttachmentService implements LoggerAwareInterface
             }
             $markerLines[] = $this->buildMarker($ref, $this->noteFor($ref));
         }
-        $markerBlock = "---\nAngehängte Dateien (Bilder via ViewImage abrufbar, Metadaten via GetFileInfo):\n" . implode("\n", $markerLines);
+        $markerBlock = "---\nAngehängte Dateien — passendes Lese-Tool je Format aufrufen "
+            . "(Bilder: ViewImage; PDFs: ReadPdfText für Text bzw. ViewPdfPage für eine Seite als Bild; "
+            . "Spreadsheets: ReadSpreadsheet; Word/ODT/RTF/TXT/MD/HTML: ReadDocument; "
+            . "Präsentationen: ReadPresentation; Metadaten: GetFileInfo):\n" . implode("\n", $markerLines);
         return $userText !== '' ? rtrim($userText) . "\n\n" . $markerBlock : $markerBlock;
     }
 
@@ -223,6 +285,10 @@ class AttachmentService implements LoggerAwareInterface
             'unresolvable' => 'Datei nicht auflösbar',
             'unsupported' => 'Inhalt nicht direkt lesbar — nur Metadaten via GetFileInfo',
             'oversize' => $info['reason'] . ' — Inhalt nicht abrufbar',
+            'pdf' => 'abrufbar via ReadPdfText oder ViewPdfPage',
+            'spreadsheet' => 'abrufbar via ReadSpreadsheet',
+            'document' => 'abrufbar via ReadDocument',
+            'presentation' => 'abrufbar via ReadPresentation',
             default => null,
         };
     }

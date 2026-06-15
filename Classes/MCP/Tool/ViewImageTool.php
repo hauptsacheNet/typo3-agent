@@ -82,19 +82,7 @@ class ViewImageTool extends AbstractTool
         $file = $info['file'];
         $head = $resolutionNote !== null ? $resolutionNote . "\n" : '';
 
-        if ($info['kind'] === 'unsupported') {
-            return new CallToolResult(
-                [new TextContent(sprintf(
-                    "%ssys_file:%d has MIME %s. ViewImage only handles PNG/JPEG/WEBP/GIF — call GetFileInfo for metadata of other file types.",
-                    $head,
-                    $file->getUid(),
-                    $info['mime'] !== '' ? $info['mime'] : 'application/octet-stream',
-                ))],
-                true,
-            );
-        }
-
-        if ($info['kind'] === 'oversize') {
+        if ($info['kind'] === 'oversize' && in_array($info['mime'], AttachmentService::SUPPORTED_IMAGE_MIME_TYPES, true)) {
             return new CallToolResult(
                 [new TextContent(sprintf(
                     "%ssys_file:%d (%s) is %s — image inspection is capped at %s. Use GetFileInfo for metadata.",
@@ -103,6 +91,26 @@ class ViewImageTool extends AbstractTool
                     $info['mime'],
                     $this->attachmentService->formatBytes($info['size']),
                     $this->attachmentService->formatBytes(AttachmentService::MAX_IMAGE_BYTES),
+                ))],
+                true,
+            );
+        }
+
+        if ($info['kind'] !== 'image') {
+            $hint = match ($info['kind']) {
+                'pdf' => 'Use ReadPdfText for the text or ViewPdfPage to render a page as image.',
+                'spreadsheet' => 'Use ReadSpreadsheet to read cells.',
+                'document' => 'Use ReadDocument to read the text.',
+                'presentation' => 'Use ReadPresentation to read slides.',
+                default => 'Call GetFileInfo for metadata of other file types.',
+            };
+            return new CallToolResult(
+                [new TextContent(sprintf(
+                    "%ssys_file:%d has MIME %s. ViewImage only handles PNG/JPEG/WEBP/GIF — %s",
+                    $head,
+                    $file->getUid(),
+                    $info['mime'] !== '' ? $info['mime'] : 'application/octet-stream',
+                    $hint,
                 ))],
                 true,
             );
