@@ -136,6 +136,7 @@ hn-agent-chat .chat-attachment-warn {
     flex-direction: column;
     box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.05);
     min-height: 0;
+    overflow: scroll;
 }
 
 .hn-workspace-drawer__header {
