@@ -16,6 +16,7 @@ import DOMPurify from "dompurify";
 import DragUploader from "@typo3/backend/drag-uploader.js";
 import Modal from "@typo3/backend/modal.js";
 import { MessageUtility } from "@typo3/backend/utility/message-utility.js";
+import "./thinking-indicator.js";
 marked.setOptions({ breaks: true, gfm: true });
 let ChatElement = class extends LitElement {
   constructor() {
@@ -42,7 +43,6 @@ let ChatElement = class extends LitElement {
     this.thinking = false;
     this.streamingBuffer = "";
     this.isStreaming = false;
-    this.activeTools = /* @__PURE__ */ new Map();
     this.attachments = [];
     this.elementBrowserListener = (e) => {
       if (!MessageUtility.verifyOrigin(e.origin)) return;
@@ -106,7 +106,6 @@ let ChatElement = class extends LitElement {
       <div class="chat-container message-fade">
         <div class="chat-messages d-flex flex-column gap-3 overflow-auto mx-3 pb-3">
           ${this.messages.map((msg) => this.renderMessage(msg))}
-          ${this.renderActiveTools()}
           ${this.isStreaming ? this.renderStreamingBubble() : nothing}
           ${this.thinking && !this.isStreaming ? this.renderThinkingIndicator() : nothing}
         </div>
@@ -277,11 +276,13 @@ let ChatElement = class extends LitElement {
   renderToolCallsGroup(tcs) {
     const count = tcs.length;
     const noun = count === 1 ? "Tool Call" : "Tool Calls";
+    const running = tcs.some((tc) => tc.result === void 0);
     return html`
-      <details class="chat-toolcalls mt-2 p-2 rounded border bg-body-tertiary small">
+      <details class="chat-toolcalls mt-2 p-2 rounded border bg-body-tertiary small" ?open=${running}>
         <summary class="d-flex align-items-center gap-2">
           <typo3-backend-icon identifier="actions-cog" size="small"></typo3-backend-icon>
           <span><strong>${count}</strong> ${noun}</span>
+          ${running ? html`<thinking-indicator class="ms-1"></thinking-indicator>` : nothing}
         </summary>
         <div class="d-flex flex-column gap-2 mt-2">
           ${tcs.map((tc) => this.renderToolCall(tc))}
@@ -290,10 +291,11 @@ let ChatElement = class extends LitElement {
     `;
   }
   renderToolCall(tc) {
-    const resultText = tc.result !== void 0 ? this.contentText(tc.result) : "";
-    const resultMedia = tc.result !== void 0 ? this.contentMedia(tc.result) : [];
+    const hasResult = tc.result !== void 0;
+    const resultText = hasResult ? this.contentText(tc.result) : "";
+    const resultMedia = hasResult ? this.contentMedia(tc.result) : [];
     return html`
-      <details class="chat-toolcall p-2 rounded border bg-body font-monospace small">
+      <details class="chat-toolcall p-2 rounded border bg-body font-monospace small" ?open=${!hasResult}>
         <summary>
           ${tc.function?.name ?? "unknown"}
         </summary>
@@ -303,12 +305,15 @@ let ChatElement = class extends LitElement {
             <strong>Args</strong><br/>
             <code>${tc.function?.arguments ?? ""}</code>
           </div>
-          ${tc.result !== void 0 ? html`
+          ${hasResult ? html`
                 <div>
                   <strong>Result</strong><br/>
                   <pre class="m-0">${resultText}</pre>
                   ${resultMedia.map((b) => this.renderResultMedia(b))}
-                </div>` : nothing}
+                </div>` : html`
+                <div class="chat-toolcall-running text-muted">
+                  <thinking-indicator label="Executing"></thinking-indicator>
+                </div>`}
         </div>
       </details>
     `;
@@ -335,7 +340,7 @@ let ChatElement = class extends LitElement {
       <div class="rounded-4 bg-white border p-3">
         <div class="chat-msg-role fw-bold small opacity-75 mb-1 text-uppercase">assistant</div>
         <div class="chat-msg-content">
-          ${unsafeHTML(this.renderMarkdown(this.streamingBuffer))}
+          ${unsafeHTML(this.renderMarkdown(this.streamingBuffer))}<thinking-indicator></thinking-indicator>
         </div>
       </div>
     `;
@@ -343,19 +348,8 @@ let ChatElement = class extends LitElement {
   renderThinkingIndicator() {
     return html`
       <div class="p-3 align-self-start">
-        <div class="fst-italic">Thinking\u2026</div>
+        <thinking-indicator label="Thinking"></thinking-indicator>
       </div>
-    `;
-  }
-  renderActiveTools() {
-    if (this.activeTools.size === 0) return nothing;
-    return html`
-      ${[...this.activeTools.entries()].map(([id, p]) => html`
-        <div class="chat-msg chat-msg-tool rounded bg-light font-monospace small" data-tool-call-id=${id}>
-          <div class="chat-msg-role fw-bold small opacity-75 mb-1 text-uppercase">tool</div>
-          <div class="chat-tool-status">\u2699\uFE0F Executing: ${p.toolName}\u2026</div>
-        </div>
-      `)}
     `;
   }
   // -- Markdown --------------------------------------------------------------
@@ -578,21 +572,14 @@ let ChatElement = class extends LitElement {
         }
         break;
       }
-      case "tool_start": {
-        const toolName = data.tool_name;
-        const toolCallId = data.tool_call_id;
-        const next = new Map(this.activeTools);
-        next.set(toolCallId, { toolName });
-        this.activeTools = next;
+      case "tool_start":
         break;
-      }
       case "tool_result": {
         const toolCallId = data.tool_call_id;
         const content = data.content;
         this.messages = this.messages.map((msg) => {
           if (msg.role !== "assistant" || !msg.tool_calls) return msg;
-          const match = msg.tool_calls.some((tc) => tc.id === toolCallId);
-          if (!match) return msg;
+          if (!msg.tool_calls.some((tc) => tc.id === toolCallId)) return msg;
           return {
             ...msg,
             tool_calls: msg.tool_calls.map(
@@ -600,9 +587,6 @@ let ChatElement = class extends LitElement {
             )
           };
         });
-        const next = new Map(this.activeTools);
-        next.delete(toolCallId);
-        this.activeTools = next;
         break;
       }
       case "change_tracked": {
@@ -614,7 +598,6 @@ let ChatElement = class extends LitElement {
       case "done":
         this.thinking = false;
         this.isStreaming = false;
-        this.activeTools = /* @__PURE__ */ new Map();
         if (Array.isArray(data.messages)) {
           this.messages = this.mergeToolResults(data.messages);
         }
@@ -756,9 +739,6 @@ __decorateClass([
 __decorateClass([
   state()
 ], ChatElement.prototype, "isStreaming", 2);
-__decorateClass([
-  state()
-], ChatElement.prototype, "activeTools", 2);
 __decorateClass([
   state()
 ], ChatElement.prototype, "attachments", 2);
