@@ -1,7 +1,7 @@
 import {html, LitElement, nothing, type TemplateResult} from 'lit';
 import {customElement, property, query, state} from 'lit/decorators.js';
 import {unsafeHTML} from 'lit/directives/unsafe-html.js';
-import '@typo3/backend/drag-uploader.js';
+import DragUploader from '@typo3/backend/drag-uploader.js';
 import Modal from '@typo3/backend/modal.js';
 import {MessageUtility} from '@typo3/backend/utility/message-utility.js';
 
@@ -40,6 +40,7 @@ export class NewTaskElement extends LitElement {
   @state() private attachments: Attachment[] = [];
 
   @query('.chat-upload-trigger') private uploadTriggerEl?: HTMLElement;
+  @query('.chat-upload-zone') private uploadZoneEl?: HTMLElement;
 
   private get isLive(): boolean {
     // workspaceId === 0 means Live workspace (or attribute not set at all).
@@ -70,7 +71,12 @@ export class NewTaskElement extends LitElement {
   };
 
   override firstUpdated(): void {
-    // DragUploader auto-inits via MutationObserver on `.t3js-drag-uploader`.
+    // Manual single-instance init — see chat-element.ts for the rationale
+    // (auto-discovery race between MutationObserver and DocumentService.ready
+    // can produce duplicate DragUploader instances on the same element).
+    if (this.uploadZoneEl) {
+      new DragUploader(this.uploadZoneEl);
+    }
     this.uploadTriggerEl?.addEventListener('uploadSuccess', this.uploadSuccessListener);
   }
 
@@ -173,7 +179,7 @@ export class NewTaskElement extends LitElement {
     return html`
       <div style="margin-bottom: calc(var(--typo3-spacing) * 2);">
         <div
-            class="t3js-drag-uploader chat-upload-zone"
+            class="chat-upload-zone"
             data-target-folder=${this.defaultUploadFolder}
             data-max-file-size="0"
             data-dropzone-target=".chat-upload-anchor"

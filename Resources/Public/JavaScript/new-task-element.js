@@ -11,7 +11,7 @@ var __decorateClass = (decorators, target, key, kind) => {
 import { html, LitElement, nothing } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import "@typo3/backend/drag-uploader.js";
+import DragUploader from "@typo3/backend/drag-uploader.js";
 import Modal from "@typo3/backend/modal.js";
 import { MessageUtility } from "@typo3/backend/utility/message-utility.js";
 let NewTaskElement = class extends LitElement {
@@ -59,6 +59,9 @@ let NewTaskElement = class extends LitElement {
     return this.workspaceId <= 0;
   }
   firstUpdated() {
+    if (this.uploadZoneEl) {
+      new DragUploader(this.uploadZoneEl);
+    }
     this.uploadTriggerEl?.addEventListener("uploadSuccess", this.uploadSuccessListener);
   }
   disconnectedCallback() {
@@ -143,7 +146,7 @@ let NewTaskElement = class extends LitElement {
     return html`
       <div style="margin-bottom: calc(var(--typo3-spacing) * 2);">
         <div
-            class="t3js-drag-uploader chat-upload-zone"
+            class="chat-upload-zone"
             data-target-folder=${this.defaultUploadFolder}
             data-max-file-size="0"
             data-dropzone-target=".chat-upload-anchor"
@@ -303,6 +306,9 @@ __decorateClass([
 __decorateClass([
   query(".chat-upload-trigger")
 ], NewTaskElement.prototype, "uploadTriggerEl", 2);
+__decorateClass([
+  query(".chat-upload-zone")
+], NewTaskElement.prototype, "uploadZoneEl", 2);
 NewTaskElement = __decorateClass([
   customElement("hn-agent-new-task")
 ], NewTaskElement);

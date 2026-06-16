@@ -3,7 +3,7 @@ import {customElement, property, query, state} from 'lit/decorators.js';
 import {unsafeHTML} from 'lit/directives/unsafe-html.js';
 import {marked} from 'marked';
 import DOMPurify from 'dompurify';
-import '@typo3/backend/drag-uploader.js';
+import DragUploader from '@typo3/backend/drag-uploader.js';
 import Modal from '@typo3/backend/modal.js';
 import {MessageUtility} from '@typo3/backend/utility/message-utility.js';
 
@@ -135,6 +135,7 @@ export class ChatElement extends LitElement {
   // element (not the wrapper, and not bubbling) — so we have to listen on
   // the trigger button itself.
   @query('.chat-upload-trigger') private uploadTriggerEl?: HTMLElement;
+  @query('.chat-upload-zone') private uploadZoneEl?: HTMLElement;
 
   private elementBrowserListener = (e: MessageEvent): void => {
     if (!MessageUtility.verifyOrigin(e.origin)) return;
@@ -170,7 +171,16 @@ export class ChatElement extends LitElement {
 
     this.scrollToBottom();
 
-    // DragUploader auto-inits via MutationObserver on `.t3js-drag-uploader`.
+    // Manual single-instance init. The auto-discovery in DragUploader.init()
+    // races (MutationObserver + DocumentService.ready both pick up the same
+    // .t3js-drag-uploader element when Lit's render microtask interleaves with
+    // the ready() promise resolution), producing duplicate dropzones and
+    // double file-picker pops. Instantiating ourselves — without the
+    // `t3js-drag-uploader` marker class in the template — sidesteps both
+    // paths.
+    if (this.uploadZoneEl) {
+      new DragUploader(this.uploadZoneEl);
+    }
     this.uploadTriggerEl?.addEventListener('uploadSuccess', this.uploadSuccessListener);
 
     if ((this.autoStart === '1' || this.autoStart === 'true') && this.streamUri && !this.isWorkspaceMismatch()) {
@@ -211,7 +221,7 @@ export class ChatElement extends LitElement {
         </div>
 
         <div
-            class="t3js-drag-uploader chat-upload-zone"
+            class="chat-upload-zone"
             data-target-folder=${this.defaultUploadFolder}
             data-max-file-size="0"
             data-dropzone-target=".chat-upload-anchor"

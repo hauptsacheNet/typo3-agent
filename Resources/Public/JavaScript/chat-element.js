@@ -13,7 +13,7 @@ import { customElement, property, query, state } from "lit/decorators.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
-import "@typo3/backend/drag-uploader.js";
+import DragUploader from "@typo3/backend/drag-uploader.js";
 import Modal from "@typo3/backend/modal.js";
 import { MessageUtility } from "@typo3/backend/utility/message-utility.js";
 marked.setOptions({ breaks: true, gfm: true });
@@ -75,6 +75,9 @@ let ChatElement = class extends LitElement {
     this.messages = this.mergeToolResults(this.initialMessages);
     this.changes = [...this.initialChanges];
     this.scrollToBottom();
+    if (this.uploadZoneEl) {
+      new DragUploader(this.uploadZoneEl);
+    }
     this.uploadTriggerEl?.addEventListener("uploadSuccess", this.uploadSuccessListener);
     if ((this.autoStart === "1" || this.autoStart === "true") && this.streamUri && !this.isWorkspaceMismatch()) {
       this.doAutoStart();
@@ -109,7 +112,7 @@ let ChatElement = class extends LitElement {
         </div>
 
         <div
-            class="t3js-drag-uploader chat-upload-zone"
+            class="chat-upload-zone"
             data-target-folder=${this.defaultUploadFolder}
             data-max-file-size="0"
             data-dropzone-target=".chat-upload-anchor"
@@ -765,6 +768,9 @@ __decorateClass([
 __decorateClass([
   query(".chat-upload-trigger")
 ], ChatElement.prototype, "uploadTriggerEl", 2);
+__decorateClass([
+  query(".chat-upload-zone")
+], ChatElement.prototype, "uploadZoneEl", 2);
 ChatElement = __decorateClass([
   customElement("hn-agent-chat")
 ], ChatElement);
