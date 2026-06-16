@@ -7,7 +7,7 @@
     <f:asset.module identifier="@hn/agent/workspace-changes.js"/>
     <f:asset.css identifier="hn-agent-chat" href="EXT:agent/Resources/Public/Css/agent-chat.css"/>
 
-    <div style="position: relative; width: 100%; height: 100%; overflow: hidden; display: grid; grid-template-rows: minmax(0, 1fr); padding-bottom: 2.5rem">
+    <div style="position:absolute; inset: 0; overflow: hidden; display: grid; grid-template-rows: minmax(0, 1fr) auto; gap: 1rem;">
 
         <hn-agent-chat
                 send-uri="{sendUri}"
@@ -24,8 +24,8 @@
                 file-browser-uri="{fileBrowserUri}"
                 preflight-uri="{preflightUri}"
         ></hn-agent-chat>
-    </div>
-    <details id="workspace-drawer" class="hn-workspace-drawer">
+
+        <details id="workspace-drawer" class="hn-workspace-drawer">
         <summary class="hn-workspace-drawer__header">
             <span class="hn-workspace-drawer__title">
                 Workspace changes<span class="hn-workspace-drawer__count hidden"> (<span class="hn-workspace-drawer__count-value">0</span>)</span>
@@ -78,7 +78,8 @@
                 </div>
             </div>
         </div>
-    </details>
+        </details>
+    </div>
 
 </f:section>
 </html>

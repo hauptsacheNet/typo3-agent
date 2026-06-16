@@ -103,8 +103,8 @@ let ChatElement = class extends LitElement {
     const uploadEnabled = !!this.defaultUploadFolder;
     const pickEnabled = !!this.fileBrowserUri;
     return html`
-      <div class="chat-container message-fade">
-        <div class="chat-messages d-flex flex-column gap-3 overflow-auto mx-3 pb-3">
+      <div class="chat-container message-fade mx-4">
+        <div class="chat-messages d-flex flex-column gap-3 overflow-auto mx-3 pb-3 pt-4">
           ${this.messages.map((msg) => this.renderMessage(msg))}
           ${this.isStreaming ? this.renderStreamingBubble() : nothing}
           ${this.thinking && !this.isStreaming ? this.renderThinkingIndicator() : nothing}
