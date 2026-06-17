@@ -58,8 +58,9 @@ class ViewImageToolTest extends FunctionalTestCase
 
     public function testReturnsErrorForPdf(): void
     {
-        // Non-image MIME → isError with a hint pointing to GetFileInfo.
-        // content=null asserts getContents() is never called.
+        // Non-image MIME → isError pointing the LLM to the right viewer tool
+        // (ReadPdfText / ViewPdfPage for PDF). content=null asserts
+        // getContents() is never called.
         $tool = $this->buildTool(202, 'application/pdf', 4096, 'doc.pdf', '1:/uploads/doc.pdf', null);
 
         $result = $tool->execute(['uid' => 202]);
@@ -69,17 +70,20 @@ class ViewImageToolTest extends FunctionalTestCase
         $text = $result->content[0];
         self::assertInstanceOf(TextContent::class, $text);
         self::assertStringContainsString('application/pdf', $text->text);
-        self::assertStringContainsString('GetFileInfo', $text->text);
+        self::assertStringContainsString('ReadPdfText', $text->text);
+        self::assertStringContainsString('ViewPdfPage', $text->text);
     }
 
     public function testReturnsErrorForUnsupportedMime(): void
     {
-        $tool = $this->buildTool(404, 'text/plain', 100, 'notes.txt', '1:/uploads/notes.txt', null);
+        // application/zip is not on any viewer-tool allowlist — the hint
+        // falls through to GetFileInfo.
+        $tool = $this->buildTool(404, 'application/zip', 100, 'archive.zip', '1:/uploads/archive.zip', null);
 
         $result = $tool->execute(['uid' => 404]);
 
         self::assertTrue($result->isError);
-        self::assertStringContainsString('text/plain', $result->content[0]->text);
+        self::assertStringContainsString('application/zip', $result->content[0]->text);
         self::assertStringContainsString('GetFileInfo', $result->content[0]->text);
     }
 
@@ -142,7 +146,7 @@ class ViewImageToolTest extends FunctionalTestCase
         }
 
         $factory = $this->getMockBuilder(ResourceFactory::class)->disableOriginalConstructor()->getMock();
-        $factory->method('getFileObject')->with($uid)->willReturn($file);
+        $factory->expects(self::atLeastOnce())->method('getFileObject')->with($uid)->willReturn($file);
 
         return new ViewImageTool(
             new AttachmentService($factory, GeneralUtility::makeInstance(ConnectionPool::class)),

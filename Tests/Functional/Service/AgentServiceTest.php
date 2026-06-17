@@ -387,18 +387,20 @@ class AgentServiceTest extends FunctionalTestCase
         $task = $this->getTask($taskUid);
         $messages = $this->decodeMessages($task['messages']);
 
-        // Expected shape after buildMessages() — context turn precedes user prompt:
-        // [0] system, [1] assistant(narration content + GetPage tool_call),
-        // [2] tool(GetPage result), [3] user(prompt), [4] assistant(final mock response)
-        self::assertSame('assistant', $messages[1]['role']);
-        self::assertIsString($messages[1]['content']);
-        self::assertStringContainsString('Arbeitskontext', $messages[1]['content']);
-        self::assertStringContainsString('#1', $messages[1]['content']);
-        self::assertNotEmpty($messages[1]['tool_calls']);
-        self::assertSame('GetPage', $messages[1]['tool_calls'][0]['function']['name']);
-        self::assertSame('tool', $messages[2]['role']);
-        self::assertSame('user', $messages[3]['role']);
-        self::assertSame('Describe this page', $messages[3]['content']);
+        // Expected shape after buildMessages() — user prompt precedes the
+        // synthetic context turn so the chat UI renders them in that order:
+        // [0] system, [1] user(prompt), [2] assistant(narration content +
+        // GetPage tool_call), [3] tool(GetPage result),
+        // [4] assistant(final mock response)
+        self::assertSame('user', $messages[1]['role']);
+        self::assertSame('Describe this page', $messages[1]['content']);
+        self::assertSame('assistant', $messages[2]['role']);
+        self::assertIsString($messages[2]['content']);
+        self::assertStringContainsString('Arbeitskontext', $messages[2]['content']);
+        self::assertStringContainsString('#1', $messages[2]['content']);
+        self::assertNotEmpty($messages[2]['tool_calls']);
+        self::assertSame('GetPage', $messages[2]['tool_calls'][0]['function']['name']);
+        self::assertSame('tool', $messages[3]['role']);
     }
 
     public function testContinueChatPersistsAttachmentsStructuredAndSerializesForLlm(): void
@@ -526,7 +528,7 @@ class AgentServiceTest extends FunctionalTestCase
     private function buildResourceFactoryReturning(int $uid, File $file): ResourceFactory
     {
         $factory = $this->getMockBuilder(ResourceFactory::class)->disableOriginalConstructor()->getMock();
-        $factory->method('getFileObject')->with($uid)->willReturn($file);
+        $factory->expects(self::atLeastOnce())->method('getFileObject')->with($uid)->willReturn($file);
         return $factory;
     }
 
@@ -581,11 +583,10 @@ class AgentServiceTest extends FunctionalTestCase
         self::assertStringContainsString('ViewImage', $userMsg['content']);
     }
 
-    public function testPdfAttachmentMarkedUnsupportedForLlm(): void
+    public function testPdfAttachmentMarkerPointsLlmToReadPdfText(): void
     {
-        // PDFs are not handled by any viewer tool — the marker tells the
-        // LLM to use GetFileInfo for metadata only. content=null asserts
-        // no bytes are ever read.
+        // PDFs are read via ReadPdfText (text) or ViewPdfPage (page as image).
+        // content=null asserts no bytes are ever read at marker time.
         $file = $this->buildFileMock(202, 'application/pdf', 4096, 'doc.pdf', '1:/uploads/doc.pdf', null);
         $resourceFactory = $this->buildResourceFactoryReturning(202, $file);
 
@@ -600,8 +601,8 @@ class AgentServiceTest extends FunctionalTestCase
         self::assertIsString($userMsg['content']);
         self::assertStringContainsString('sys_file:202', $userMsg['content']);
         self::assertStringContainsString('application/pdf', $userMsg['content']);
-        self::assertStringContainsString('Inhalt nicht direkt lesbar', $userMsg['content']);
-        self::assertStringContainsString('GetFileInfo', $userMsg['content']);
+        self::assertStringContainsString('ReadPdfText', $userMsg['content']);
+        self::assertStringContainsString('ViewPdfPage', $userMsg['content']);
     }
 
     public function testOversizedImageMarkerWarnsLlmNotToCallViewImage(): void
@@ -626,8 +627,9 @@ class AgentServiceTest extends FunctionalTestCase
 
     public function testUnsupportedMimeMarkerPointsLlmToGetFileInfo(): void
     {
-        // text/plain isn't on our allowlist — even though small, must stay marker-only.
-        $file = $this->buildFileMock(404, 'text/plain', 100, 'notes.txt', '1:/uploads/notes.txt', null);
+        // application/zip isn't on any viewer-tool allowlist — even though
+        // small, the marker must stay metadata-only via GetFileInfo.
+        $file = $this->buildFileMock(404, 'application/zip', 100, 'archive.zip', '1:/uploads/archive.zip', null);
         $resourceFactory = $this->buildResourceFactoryReturning(404, $file);
 
         $capturedMessages = [];
@@ -640,7 +642,7 @@ class AgentServiceTest extends FunctionalTestCase
         self::assertNotNull($userMsg);
         self::assertIsString($userMsg['content']);
         self::assertStringContainsString('sys_file:404', $userMsg['content']);
-        self::assertStringContainsString('text/plain', $userMsg['content']);
+        self::assertStringContainsString('application/zip', $userMsg['content']);
         self::assertStringContainsString('Inhalt nicht direkt lesbar', $userMsg['content']);
         self::assertStringContainsString('GetFileInfo', $userMsg['content']);
         self::assertStringNotContainsString('zu groß', $userMsg['content']);
@@ -675,7 +677,7 @@ class AgentServiceTest extends FunctionalTestCase
 
     public function testPreviewAttachmentReportsUnsupportedMime(): void
     {
-        $file = $this->buildFileMock(404, 'text/plain', 100, 'notes.txt', '1:/uploads/notes.txt', null);
+        $file = $this->buildFileMock(404, 'application/zip', 100, 'archive.zip', '1:/uploads/archive.zip', null);
         $resourceFactory = $this->buildResourceFactoryReturning(404, $file);
 
         $preview = (new AttachmentService($resourceFactory, $this->connectionPool))->preview(['uid' => 404]);
@@ -721,10 +723,8 @@ class AgentServiceTest extends FunctionalTestCase
         self::assertSame('Hello', $calls[0][1]['message']['content']);
 
         self::assertSame('llm_start', $calls[1][0]);
-        self::assertSame(0, $calls[1][1]['iteration']);
 
         self::assertSame('assistant_message', $calls[2][0]);
-        self::assertSame(0, $calls[2][1]['iteration']);
         self::assertSame('Done.', $calls[2][1]['message']['content']);
     }
 

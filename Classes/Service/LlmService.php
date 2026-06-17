@@ -43,6 +43,8 @@ class LlmService implements LoggerAwareInterface
             $body['tools'] = $tools;
         }
 
+        $this->applyReasoning($body, $config);
+
         $response = $this->requestFactory->request($apiUrl, 'POST', [
             'headers' => [
                 'Authorization' => 'Bearer ' . $config['apiKey'],
@@ -108,6 +110,8 @@ class LlmService implements LoggerAwareInterface
             $body['tools'] = $tools;
         }
 
+        $this->applyReasoning($body, $config);
+
         try {
             $response = $this->requestFactory->request($apiUrl, 'POST', [
                 'headers' => [
@@ -162,6 +166,10 @@ class LlmService implements LoggerAwareInterface
     {
         $buffer = '';
         $contentParts = [];
+        $reasoningParts = [];
+        /** @var array<int, array<string, mixed>> $reasoningDetails Keyed by index — merged block per index */
+        $reasoningDetails = [];
+        $nextReasoningIndex = 0;
         /** @var array<int, array{id?: string, type: string, function: array{name?: string, arguments: string}}> $toolCalls */
         $toolCalls = [];
         $finishReason = null;
@@ -205,6 +213,45 @@ class LlmService implements LoggerAwareInterface
                 if (isset($delta['content']) && is_string($delta['content']) && $delta['content'] !== '') {
                     $contentParts[] = $delta['content'];
                     $onDelta('content', ['text' => $delta['content']]);
+                }
+
+                if (isset($delta['reasoning']) && is_string($delta['reasoning']) && $delta['reasoning'] !== '') {
+                    $reasoningParts[] = $delta['reasoning'];
+                    $onDelta('reasoning', ['text' => $delta['reasoning']]);
+                }
+
+                if (isset($delta['reasoning_details']) && is_array($delta['reasoning_details'])) {
+                    foreach ($delta['reasoning_details'] as $detail) {
+                        if (!is_array($detail)) {
+                            continue;
+                        }
+                        // Identify the block: explicit `index` when provided, otherwise
+                        // assume continuation of the current block (Anthropic typically
+                        // streams a single thinking block per turn).
+                        if (array_key_exists('index', $detail) && is_int($detail['index'])) {
+                            $idx = $detail['index'];
+                        } elseif ($reasoningDetails !== []) {
+                            $idx = array_key_last($reasoningDetails);
+                        } else {
+                            $idx = $nextReasoningIndex;
+                        }
+                        if (!isset($reasoningDetails[$idx])) {
+                            $reasoningDetails[$idx] = [];
+                            $nextReasoningIndex = $idx + 1;
+                        }
+                        foreach ($detail as $key => $value) {
+                            if ($key === 'index') {
+                                continue;
+                            }
+                            // text/summary are streamed incrementally → concatenate.
+                            // signature/id/type/format/data arrive complete → overwrite.
+                            if (($key === 'text' || $key === 'summary') && is_string($value)) {
+                                $reasoningDetails[$idx][$key] = ($reasoningDetails[$idx][$key] ?? '') . $value;
+                            } else {
+                                $reasoningDetails[$idx][$key] = $value;
+                            }
+                        }
+                    }
                 }
 
                 if (isset($delta['tool_calls']) && is_array($delta['tool_calls'])) {
@@ -261,6 +308,14 @@ class LlmService implements LoggerAwareInterface
             'role' => 'assistant',
             'content' => $contentParts === [] ? null : implode('', $contentParts),
         ];
+
+        if ($reasoningParts !== []) {
+            $message['reasoning'] = implode('', $reasoningParts);
+        }
+        if ($reasoningDetails !== []) {
+            ksort($reasoningDetails);
+            $message['reasoning_details'] = array_values($reasoningDetails);
+        }
 
         if ($toolCalls !== []) {
             // Re-index numerically and ensure required shape
@@ -321,9 +376,29 @@ class LlmService implements LoggerAwareInterface
     }
 
     /**
+     * Inject OpenRouter's `reasoning` parameter into the request body when an
+     * effort level is configured. Off / empty leaves the body unchanged so
+     * provider defaults apply.
+     *
+     * @param array<string, mixed> $body
+     * @param array{reasoningEffort: string} $config
+     */
+    private function applyReasoning(array &$body, array $config): void
+    {
+        $effort = strtolower(trim($config['reasoningEffort'] ?? ''));
+        if ($effort === '' || $effort === 'off') {
+            return;
+        }
+        if (!in_array($effort, ['low', 'medium', 'high'], true)) {
+            return;
+        }
+        $body['reasoning'] = ['effort' => $effort];
+    }
+
+    /**
      * Resolve and validate extension configuration. Fills defaults.
      *
-     * @return array{apiUrl: string, apiKey: string, model: string}
+     * @return array{apiUrl: string, apiKey: string, model: string, reasoningEffort: string}
      */
     private function getConfig(): array
     {
@@ -336,6 +411,7 @@ class LlmService implements LoggerAwareInterface
             'apiUrl' => (string)($config['apiUrl'] ?? ''),
             'apiKey' => (string)$apiKey,
             'model' => (string)($config['model'] ?? 'anthropic/claude-haiku-4-5'),
+            'reasoningEffort' => (string)($config['reasoningEffort'] ?? 'off'),
         ];
     }
 

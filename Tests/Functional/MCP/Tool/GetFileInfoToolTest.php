@@ -121,7 +121,7 @@ class GetFileInfoToolTest extends FunctionalTestCase
         $file->expects(self::never())->method('getContents');
 
         $factory = $this->getMockBuilder(ResourceFactory::class)->disableOriginalConstructor()->getMock();
-        $factory->method('getFileObject')->with($uid)->willReturn($file);
+        $factory->expects(self::atLeastOnce())->method('getFileObject')->with($uid)->willReturn($file);
 
         return new GetFileInfoTool(
             new AttachmentService($factory, GeneralUtility::makeInstance(ConnectionPool::class)),

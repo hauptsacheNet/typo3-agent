@@ -18,6 +18,8 @@ interface ChatMessage {
   attachments?: Attachment[];
   tool_calls?: ToolCall[];
   tool_call_id?: string;
+  reasoning?: string;
+  reasoning_details?: unknown[];
 }
 
 type ContentBlock =
@@ -123,6 +125,7 @@ export class ChatElement extends LitElement {
   @state() private errorMessage = '';
   @state() private thinking = false;
   @state() private streamingBuffer = '';
+  @state() private reasoningBuffer = '';
   @state() private isStreaming = false;
   @state() private attachments: Attachment[] = [];
 
@@ -391,10 +394,13 @@ export class ChatElement extends LitElement {
     const roleLabel = role === 'user' ? 'you' : role;
 
     if (role === 'assistant') {
-      const assistantText = msg.content !== undefined ? this.contentText(msg.content) : '';
+      const assistantText = msg.content != null ? this.contentText(msg.content) : '';
       return html`
         <div class="rounded-4 bg-white border p-3 me-3">
           <div class="chat-msg-role fw-bold small opacity-75 mb-1 text-uppercase">${roleLabel}</div>
+          ${msg.reasoning
+            ? this.renderReasoningBlock(msg.reasoning)
+            : nothing}
           ${assistantText
             ? html`<div class="chat-msg-content">${unsafeHTML(this.renderMarkdown(assistantText))}</div>`
             : nothing}
@@ -408,7 +414,7 @@ export class ChatElement extends LitElement {
 
     // user, system, unknown
     const attachments = msg.attachments ?? [];
-    const userText = msg.content !== undefined ? this.contentText(msg.content) : '';
+    const userText = msg.content != null ? this.contentText(msg.content) : '';
     return html`
       <div class="rounded-4 bg-success-subtle border p-3 ms-3 align-self-end">
         <div class="chat-msg-role fw-bold small opacity-75 mb-1 text-uppercase">${roleLabel}</div>
@@ -429,7 +435,7 @@ export class ChatElement extends LitElement {
     const noun = count === 1 ? 'Tool Call' : 'Tool Calls';
     const running = tcs.some(tc => tc.result === undefined);
     return html`
-      <details class="chat-toolcalls mt-2 p-2 rounded border bg-body-tertiary small" ?open=${running}>
+      <details class="chat-toolcalls mt-2 p-2 rounded border bg-body-tertiary small">
         <summary class="d-flex align-items-center gap-2">
           <typo3-backend-icon identifier="actions-cog" size="small"></typo3-backend-icon>
           <span><strong>${count}</strong> ${noun}</span>
@@ -449,7 +455,7 @@ export class ChatElement extends LitElement {
     const resultText = hasResult ? this.contentText(tc.result!) : '';
     const resultMedia = hasResult ? this.contentMedia(tc.result!) : [];
     return html`
-      <details class="chat-toolcall p-2 rounded border bg-body font-monospace small" ?open=${!hasResult}>
+      <details class="chat-toolcall p-2 rounded border bg-body font-monospace small">
         <summary>
           ${tc.function?.name ?? 'unknown'}
         </summary>
@@ -485,7 +491,8 @@ export class ChatElement extends LitElement {
     return nothing;
   }
 
-  private contentText(content: string | ContentBlock[]): string {
+  private contentText(content: string | ContentBlock[] | null | undefined): string {
+    if (content == null) return '';
     if (typeof content === 'string') return content;
     return content
       .filter((b): b is Extract<ContentBlock, {type: 'text'}> => b.type === 'text')
@@ -493,8 +500,8 @@ export class ChatElement extends LitElement {
       .join('\n');
   }
 
-  private contentMedia(content: string | ContentBlock[]): ContentBlock[] {
-    if (typeof content === 'string') return [];
+  private contentMedia(content: string | ContentBlock[] | null | undefined): ContentBlock[] {
+    if (content == null || typeof content === 'string') return [];
     return content.filter(b => b.type !== 'text');
   }
 
@@ -502,10 +509,25 @@ export class ChatElement extends LitElement {
     return html`
       <div class="rounded-4 bg-white border p-3">
         <div class="chat-msg-role fw-bold small opacity-75 mb-1 text-uppercase">assistant</div>
+        ${this.reasoningBuffer
+          ? this.renderReasoningBlock(this.reasoningBuffer)
+          : nothing}
         <div class="chat-msg-content">
           ${unsafeHTML(this.renderMarkdown(this.streamingBuffer))}<thinking-indicator></thinking-indicator>
         </div>
       </div>
+    `;
+  }
+
+  private renderReasoningBlock(reasoning: string): TemplateResult {
+    return html`
+      <details class="chat-reasoning mb-2 p-2 rounded border bg-body-tertiary small text-muted">
+        <summary class="d-flex align-items-center gap-2">
+          <typo3-backend-icon identifier="actions-lightbulb-on" size="small"></typo3-backend-icon>
+          <span>Reasoning</span>
+        </summary>
+        <div class="mt-2">${unsafeHTML(this.renderMarkdown(reasoning))}</div>
+      </details>
     `;
   }
 
@@ -757,6 +779,12 @@ export class ChatElement extends LitElement {
         this.streamingBuffer += (data.text as string) || '';
         break;
 
+      case 'reasoning_delta':
+        this.thinking = false;
+        this.isStreaming = true;
+        this.reasoningBuffer += (data.text as string) || '';
+        break;
+
       case 'tool_call_delta':
         this.thinking = false;
         break;
@@ -781,14 +809,21 @@ export class ChatElement extends LitElement {
             // Replace streaming bubble with finalized message including tool_calls
             this.messages = [...this.messages, msg!];
           } else {
-            // Finalize with server content (trusted) or streamed buffer
+            // Finalize with server content (trusted) or streamed buffer; preserve
+            // reasoning from the server message, falling back to the streamed
+            // reasoning buffer if the server didn't ship a `reasoning` field.
             this.messages = [...this.messages, {
               role: 'assistant',
               content: msg?.content || this.streamingBuffer,
+              ...(msg?.reasoning || this.reasoningBuffer
+                ? {reasoning: msg?.reasoning || this.reasoningBuffer}
+                : {}),
+              ...(msg?.reasoning_details ? {reasoning_details: msg.reasoning_details} : {}),
             }];
           }
           this.isStreaming = false;
           this.streamingBuffer = '';
+          this.reasoningBuffer = '';
         } else if (msg) {
           this.messages = [...this.messages, msg];
         }
@@ -827,6 +862,8 @@ export class ChatElement extends LitElement {
       case 'done':
         this.thinking = false;
         this.isStreaming = false;
+        this.streamingBuffer = '';
+        this.reasoningBuffer = '';
         // Replace optimistic messages with the persisted server state so the
         // user sees the canonical form (e.g. resolved attachment block) instead
         // of the locally-composed preview.

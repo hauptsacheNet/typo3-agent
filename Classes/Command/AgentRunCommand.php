@@ -55,12 +55,13 @@ class AgentRunCommand extends Command
     {
         $output->writeln('Processing task #' . $taskUid . '...');
 
-        $progress = function (string $event, array $data) use ($output) {
+        $iteration = 0;
+        $progress = function (string $event, array $data) use ($output, &$iteration) {
             match ($event) {
-                'llm_start' => $output->writeln(sprintf('  Iteration %d: calling LLM...', $data['iteration'] + 1)),
+                'llm_start' => $output->writeln(sprintf('  Iteration %d: calling LLM...', ++$iteration)),
                 'assistant_message' => $output->writeln(sprintf(
                     '  Iteration %d: tool_calls=[%s]',
-                    $data['iteration'] + 1,
+                    $iteration,
                     !empty($data['message']['tool_calls'])
                         ? implode(', ', array_map(fn($tc) => $tc['function']['name'] ?? '?', $data['message']['tool_calls']))
                         : 'none'
@@ -93,9 +94,10 @@ class AgentRunCommand extends Command
         $output->writeln('Found ' . count($tasks) . ' pending task(s).');
         $hasFailure = false;
 
-        $progress = function (string $event, array $data) use ($output) {
+        $iteration = 0;
+        $progress = function (string $event, array $data) use ($output, &$iteration) {
             match ($event) {
-                'llm_start' => $output->write(sprintf('  Iteration %d: ', $data['iteration'] + 1)),
+                'llm_start' => $output->write(sprintf('  Iteration %d: ', ++$iteration)),
                 'content_delta' => $output->write($data['text'] ?? ''),
                 'tool_call_delta' => isset($data['name'])
                     ? $output->write(sprintf('<comment>[%s]</comment>', $data['name']))

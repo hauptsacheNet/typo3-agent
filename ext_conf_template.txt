@@ -12,3 +12,6 @@ systemPrompt = You are a helpful TYPO3 CMS assistant. You have access to tools t
 
 # cat=basic/agent/050; type=int+; label=Max Iterations: Safety limit for the agent loop
 maxIterations = 20
+
+# cat=basic/agent/060; type=options[off,low,medium,high]; label=Reasoning Effort: Stärke des Reasonings (off = deaktiviert)
+reasoningEffort = medium

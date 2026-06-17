@@ -160,7 +160,7 @@ class AgentService implements LoggerAwareInterface
 
             for ($iteration = 0; $iteration < $maxIterations; $iteration++) {
                 if ($progress !== null) {
-                    $progress('llm_start', ['iteration' => $iteration]);
+                    $progress('llm_start', []);
                 }
 
                 // Per-delta callback for streaming LLM chunks. Rewrites raw SSE
@@ -170,16 +170,21 @@ class AgentService implements LoggerAwareInterface
                 // end of an iteration for downstream consumers.
                 $onDelta = $progress === null
                     ? null
-                    : static function (string $deltaType, array $payload) use ($progress, $iteration): void {
+                    : static function (string $deltaType, array $payload) use ($progress): void {
                         if ($deltaType === 'content') {
                             $progress('content_delta', [
-                                'iteration' => $iteration,
+                                'text' => $payload['text'] ?? '',
+                            ]);
+                            return;
+                        }
+                        if ($deltaType === 'reasoning') {
+                            $progress('reasoning_delta', [
                                 'text' => $payload['text'] ?? '',
                             ]);
                             return;
                         }
                         if ($deltaType === 'tool_call') {
-                            $progress('tool_call_delta', ['iteration' => $iteration] + $payload);
+                            $progress('tool_call_delta', $payload);
                         }
                     };
 
@@ -202,7 +207,6 @@ class AgentService implements LoggerAwareInterface
 
                 if ($progress !== null) {
                     $progress('assistant_message', [
-                        'iteration' => $iteration,
                         'message' => $assistantMessage,
                     ]);
                 }
@@ -222,7 +226,6 @@ class AgentService implements LoggerAwareInterface
 
                     if ($progress !== null) {
                         $progress('tool_start', [
-                            'iteration' => $iteration,
                             'tool_call_id' => $toolCallId,
                             'tool_name' => $toolName,
                             'arguments' => $toolArguments,
@@ -254,7 +257,6 @@ class AgentService implements LoggerAwareInterface
 
                     if ($progress !== null) {
                         $progress('tool_result', [
-                            'iteration' => $iteration,
                             'tool_call_id' => $toolCallId,
                             'tool_name' => $toolName,
                             'content' => $toolResult['text'],
@@ -336,6 +338,8 @@ class AgentService implements LoggerAwareInterface
             ['role' => 'system', 'content' => $systemPrompt],
         ];
 
+        $messages[] = $userMessage;
+
         // Build context tool calls to inject as a simulated assistant turn
         // BEFORE the user prompt. From the LLM's perspective the agent has
         // already loaded the working context (page/record the user is on) as
@@ -404,7 +408,7 @@ class AgentService implements LoggerAwareInterface
             array_push($messages, ...$toolResults);
         }
 
-        $messages[] = $userMessage;
+
 
         return $messages;
     }
@@ -463,55 +467,53 @@ class AgentService implements LoggerAwareInterface
 
     /**
      * Emit progress events for the synthetic turns produced by
-     * buildInitialMessages() so the chat UI can render them in the same order
-     * they will appear after a reload. For a fresh task the persisted order is
-     *   [system, (assistant_narration, tool, ...), user]
-     * which means the UI must see the synthetic context block (if any) BEFORE
-     * the user prompt — the `user_message` event at the end materializes the
-     * user turn appended last.
-     *
-     * iteration=-1 marks these as pre-loop (not part of any LLM iteration).
+     * buildInitialMessages() in the same order they sit in the persisted
+     * messages array — the chat UI then renders Live-Stream and Reload-View
+     * identically. System messages are skipped (hidden in the UI anyway);
+     * tool_results are emitted in their natural position and correlated to
+     * their tool_call client-side by `tool_call_id`.
      *
      * @param callable(string, array): void $progress
      */
     private function emitInitialContextEvents(array $messages, callable $progress): void
     {
-        $toolResultsByCallId = [];
-        foreach ($messages as $msg) {
-            if (($msg['role'] ?? '') === 'tool' && isset($msg['tool_call_id'])) {
-                $toolResultsByCallId[(string)$msg['tool_call_id']] = (string)($msg['content'] ?? '');
-            }
-        }
-
+        $toolNameByCallId = [];
         foreach ($messages as $msg) {
             if (($msg['role'] ?? '') !== 'assistant' || empty($msg['tool_calls'])) {
                 continue;
             }
-            $progress('assistant_message', ['iteration' => -1, 'message' => $msg]);
             foreach ($msg['tool_calls'] as $toolCall) {
-                $toolCallId = (string)($toolCall['id'] ?? '');
-                $toolName = (string)($toolCall['function']['name'] ?? '');
-                $progress('tool_start', [
-                    'iteration' => -1,
-                    'tool_call_id' => $toolCallId,
-                    'tool_name' => $toolName,
-                    'arguments' => $toolCall['function']['arguments'] ?? '{}',
-                ]);
-                if (isset($toolResultsByCallId[$toolCallId])) {
-                    $progress('tool_result', [
-                        'iteration' => -1,
-                        'tool_call_id' => $toolCallId,
-                        'tool_name' => $toolName,
-                        'content' => $toolResultsByCallId[$toolCallId],
-                    ]);
-                }
+                $toolNameByCallId[(string)($toolCall['id'] ?? '')] = (string)($toolCall['function']['name'] ?? '');
             }
         }
 
         foreach ($messages as $msg) {
-            if (($msg['role'] ?? '') === 'user') {
+            $role = $msg['role'] ?? '';
+            if ($role === 'system') {
+                continue;
+            }
+            if ($role === 'user') {
                 $progress('user_message', ['message' => $msg]);
-                break;
+                continue;
+            }
+            if ($role === 'assistant') {
+                $progress('assistant_message', ['message' => $msg]);
+                foreach ($msg['tool_calls'] ?? [] as $toolCall) {
+                    $progress('tool_start', [
+                        'tool_call_id' => (string)($toolCall['id'] ?? ''),
+                        'tool_name' => (string)($toolCall['function']['name'] ?? ''),
+                        'arguments' => $toolCall['function']['arguments'] ?? '{}',
+                    ]);
+                }
+                continue;
+            }
+            if ($role === 'tool') {
+                $toolCallId = (string)($msg['tool_call_id'] ?? '');
+                $progress('tool_result', [
+                    'tool_call_id' => $toolCallId,
+                    'tool_name' => $toolNameByCallId[$toolCallId] ?? '',
+                    'content' => (string)($msg['content'] ?? ''),
+                ]);
             }
         }
     }

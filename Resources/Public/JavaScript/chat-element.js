@@ -42,6 +42,7 @@ let ChatElement = class extends LitElement {
     this.errorMessage = "";
     this.thinking = false;
     this.streamingBuffer = "";
+    this.reasoningBuffer = "";
     this.isStreaming = false;
     this.attachments = [];
     this.elementBrowserListener = (e) => {
@@ -252,17 +253,18 @@ let ChatElement = class extends LitElement {
     if (role === "system") return nothing;
     const roleLabel = role === "user" ? "you" : role;
     if (role === "assistant") {
-      const assistantText = msg.content !== void 0 ? this.contentText(msg.content) : "";
+      const assistantText = msg.content != null ? this.contentText(msg.content) : "";
       return html`
         <div class="rounded-4 bg-white border p-3 me-3">
           <div class="chat-msg-role fw-bold small opacity-75 mb-1 text-uppercase">${roleLabel}</div>
+          ${msg.reasoning ? this.renderReasoningBlock(msg.reasoning) : nothing}
           ${assistantText ? html`<div class="chat-msg-content">${unsafeHTML(this.renderMarkdown(assistantText))}</div>` : nothing}
           ${msg.tool_calls && msg.tool_calls.length > 0 ? this.renderToolCallsGroup(msg.tool_calls) : nothing}
         </div>
       `;
     }
     const attachments = msg.attachments ?? [];
-    const userText = msg.content !== void 0 ? this.contentText(msg.content) : "";
+    const userText = msg.content != null ? this.contentText(msg.content) : "";
     return html`
       <div class="rounded-4 bg-success-subtle border p-3 ms-3 align-self-end">
         <div class="chat-msg-role fw-bold small opacity-75 mb-1 text-uppercase">${roleLabel}</div>
@@ -278,7 +280,7 @@ let ChatElement = class extends LitElement {
     const noun = count === 1 ? "Tool Call" : "Tool Calls";
     const running = tcs.some((tc) => tc.result === void 0);
     return html`
-      <details class="chat-toolcalls mt-2 p-2 rounded border bg-body-tertiary small" ?open=${running}>
+      <details class="chat-toolcalls mt-2 p-2 rounded border bg-body-tertiary small">
         <summary class="d-flex align-items-center gap-2">
           <typo3-backend-icon identifier="actions-cog" size="small"></typo3-backend-icon>
           <span><strong>${count}</strong> ${noun}</span>
@@ -295,7 +297,7 @@ let ChatElement = class extends LitElement {
     const resultText = hasResult ? this.contentText(tc.result) : "";
     const resultMedia = hasResult ? this.contentMedia(tc.result) : [];
     return html`
-      <details class="chat-toolcall p-2 rounded border bg-body font-monospace small" ?open=${!hasResult}>
+      <details class="chat-toolcall p-2 rounded border bg-body font-monospace small">
         <summary>
           ${tc.function?.name ?? "unknown"}
         </summary>
@@ -328,21 +330,34 @@ let ChatElement = class extends LitElement {
     return nothing;
   }
   contentText(content) {
+    if (content == null) return "";
     if (typeof content === "string") return content;
     return content.filter((b) => b.type === "text").map((b) => b.text).join("\n");
   }
   contentMedia(content) {
-    if (typeof content === "string") return [];
+    if (content == null || typeof content === "string") return [];
     return content.filter((b) => b.type !== "text");
   }
   renderStreamingBubble() {
     return html`
       <div class="rounded-4 bg-white border p-3">
         <div class="chat-msg-role fw-bold small opacity-75 mb-1 text-uppercase">assistant</div>
+        ${this.reasoningBuffer ? this.renderReasoningBlock(this.reasoningBuffer) : nothing}
         <div class="chat-msg-content">
           ${unsafeHTML(this.renderMarkdown(this.streamingBuffer))}<thinking-indicator></thinking-indicator>
         </div>
       </div>
+    `;
+  }
+  renderReasoningBlock(reasoning) {
+    return html`
+      <details class="chat-reasoning mb-2 p-2 rounded border bg-body-tertiary small text-muted">
+        <summary class="d-flex align-items-center gap-2">
+          <typo3-backend-icon identifier="actions-lightbulb-on" size="small"></typo3-backend-icon>
+          <span>Reasoning</span>
+        </summary>
+        <div class="mt-2">${unsafeHTML(this.renderMarkdown(reasoning))}</div>
+      </details>
     `;
   }
   renderThinkingIndicator() {
@@ -543,6 +558,11 @@ let ChatElement = class extends LitElement {
         this.isStreaming = true;
         this.streamingBuffer += data.text || "";
         break;
+      case "reasoning_delta":
+        this.thinking = false;
+        this.isStreaming = true;
+        this.reasoningBuffer += data.text || "";
+        break;
       case "tool_call_delta":
         this.thinking = false;
         break;
@@ -562,11 +582,14 @@ let ChatElement = class extends LitElement {
           } else {
             this.messages = [...this.messages, {
               role: "assistant",
-              content: msg?.content || this.streamingBuffer
+              content: msg?.content || this.streamingBuffer,
+              ...msg?.reasoning || this.reasoningBuffer ? { reasoning: msg?.reasoning || this.reasoningBuffer } : {},
+              ...msg?.reasoning_details ? { reasoning_details: msg.reasoning_details } : {}
             }];
           }
           this.isStreaming = false;
           this.streamingBuffer = "";
+          this.reasoningBuffer = "";
         } else if (msg) {
           this.messages = [...this.messages, msg];
         }
@@ -598,6 +621,8 @@ let ChatElement = class extends LitElement {
       case "done":
         this.thinking = false;
         this.isStreaming = false;
+        this.streamingBuffer = "";
+        this.reasoningBuffer = "";
         if (Array.isArray(data.messages)) {
           this.messages = this.mergeToolResults(data.messages);
         }
@@ -736,6 +761,9 @@ __decorateClass([
 __decorateClass([
   state()
 ], ChatElement.prototype, "streamingBuffer", 2);
+__decorateClass([
+  state()
+], ChatElement.prototype, "reasoningBuffer", 2);
 __decorateClass([
   state()
 ], ChatElement.prototype, "isStreaming", 2);
