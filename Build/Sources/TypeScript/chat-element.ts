@@ -128,6 +128,7 @@ export class ChatElement extends LitElement {
   @state() private reasoningBuffer = '';
   @state() private isStreaming = false;
   @state() private attachments: Attachment[] = [];
+  @state() private lastSubmission: {message: string; attachments: Attachment[]} | null = null;
 
   @query('textarea') private inputEl!: HTMLTextAreaElement;
   // DragUploader dispatches `uploadSuccess` on its `data-dropzone-trigger`
@@ -212,6 +213,26 @@ export class ChatElement extends LitElement {
     const pickEnabled = !!this.fileBrowserUri;
     return html`
       <div class="chat-container message-fade mx-4">
+        ${this.errorMessage
+            ? html`
+              <div class="chat-error-banner alert alert-danger d-flex align-items-center gap-2 m-3 mb-0 sticky-top" role="alert">
+                <span class="flex-grow-1">${this.errorMessage}</span>
+                ${this.lastSubmission !== null
+                    ? html`
+                      <button type="button"
+                              class="btn btn-sm btn-outline-danger"
+                              ?disabled=${this.loading}
+                              @click=${this.onRetry}>
+                        <typo3-backend-icon identifier="actions-refresh" size="small"/>
+                        Erneut versuchen
+                      </button>`
+                    : nothing}
+                <button type="button"
+                        class="btn-close"
+                        aria-label="Schließen"
+                        @click=${this.onDismissError}></button>
+              </div>`
+            : nothing}
         <div class="chat-messages d-flex flex-column gap-3 overflow-auto mx-3 pb-3 pt-4">
           ${this.messages.map(msg => this.renderMessage(msg))}
           ${this.isStreaming ? this.renderStreamingBubble() : nothing}
@@ -229,7 +250,6 @@ export class ChatElement extends LitElement {
           
 
           ${mismatch ? this.renderWorkspaceMismatch() : nothing}
-
 
           <form class="position-relative rounded-4 border bg-white overflow-hidden d-flex flex-column gap-3 p-3 " @submit=${this.onSubmit}>
             <textarea
@@ -260,10 +280,7 @@ export class ChatElement extends LitElement {
             </div>
           </form>
 
-          ${this.errorMessage
-              ? html`
-                <div class="alert alert-danger">${this.errorMessage}</div>`
-              : nothing}
+         
         </div>
 
       </div>
@@ -367,12 +384,13 @@ export class ChatElement extends LitElement {
     // accessibility, but the explicit click handler is what actually fires —
     // the BE module iframe otherwise eats the navigation.
     return html`
-      <div class="alert alert-warning d-flex align-items-center justify-content-between mx-3 mb-2 gap-3">
+      <div class="alert alert-warning d-flex flex-column align-items-start justify-content-between mb-3 gap-3">
         <div>${message}</div>
         <a href=${this.switchWorkspaceUri}
            target="_top"
-           class="btn btn-warning ${this.switchWorkspaceUri ? '' : 'disabled'}"
+           class="btn btn-warning text-decoration-none ${this.switchWorkspaceUri ? '' : 'disabled'}"
            @click=${this.onSwitchClick}>
+          <typo3-backend-icon identifier="apps-toolbar-menu-workspace" size="small"></typo3-backend-icon>
           ${buttonLabel}
         </a>
       </div>
@@ -555,6 +573,7 @@ export class ChatElement extends LitElement {
     if (!message && attachments.length === 0) return;
 
     this.errorMessage = '';
+    this.lastSubmission = {message, attachments};
     const optimistic: ChatMessage = {role: 'user', content: message};
     if (attachments.length > 0) optimistic.attachments = attachments;
     this.messages = [...this.messages, optimistic];
@@ -567,6 +586,22 @@ export class ChatElement extends LitElement {
     } else {
       this.sendBlocking(message, attachments).then(() => this.finishSend());
     }
+  }
+
+  private onDismissError(): void {
+    this.errorMessage = '';
+    this.lastSubmission = null;
+  }
+
+  private onRetry(): void {
+    if (!this.lastSubmission || this.loading) return;
+    const {message, attachments} = this.lastSubmission;
+    this.errorMessage = '';
+    this.loading = true;
+    const promise = this.streamUri
+        ? this.sendStreaming(message, attachments)
+        : this.sendBlocking(message, attachments);
+    promise.then(() => this.finishSend());
   }
 
   private addAttachment(att: Attachment): void {
@@ -637,6 +672,9 @@ export class ChatElement extends LitElement {
 
   private finishSend(): void {
     this.loading = false;
+    if (this.errorMessage === '') {
+      this.lastSubmission = null;
+    }
     this.inputEl?.focus();
   }
 
@@ -658,6 +696,7 @@ export class ChatElement extends LitElement {
     // turns so live and reload renderings stay identical (the persisted order
     // is [system, assistant_context?, tool*, user, ...]).
     this.loading = true;
+    this.lastSubmission = {message: '', attachments: []};
     await this.sendStreaming('');
     this.finishSend();
   }
