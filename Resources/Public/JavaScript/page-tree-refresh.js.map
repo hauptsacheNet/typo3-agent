@@ -1,0 +1,7 @@
+{
+  "version": 3,
+  "sources": ["../../../Build/Sources/TypeScript/page-tree-refresh.ts"],
+  "sourcesContent": ["interface TrackedChange {\n  tablename: string;\n}\n\n// The page-tree-element listens on `document` in the frame it lives in, which\n// can be either the top frame or the current one depending on the backend\n// layout. Dispatching on both is cheap and idempotent and avoids guessing the\n// wrong frame.\nfunction refreshPageTree(): void {\n  console.log(\"refreshing page tree\");\n  const evt = (): CustomEvent => new CustomEvent('typo3:pagetree:refresh');\n  try {\n    window.top?.document.dispatchEvent(evt());\n  } catch {\n    // cross-origin top frame \u2014 ignore, fall through to local dispatch\n  }\n  if (window.top !== window) {\n    document.dispatchEvent(evt());\n  }\n}\n\ndocument.addEventListener('agent:record-changed', (e: Event) => {\n  const change = (e as CustomEvent<TrackedChange>).detail;\n  if (change?.tablename === 'pages') {\n    refreshPageTree();\n  }\n});\n"],
+  "mappings": "AAQA,SAAS,kBAAwB;AAC/B,UAAQ,IAAI,sBAAsB;AAClC,QAAM,MAAM,MAAmB,IAAI,YAAY,wBAAwB;AACvE,MAAI;AACF,WAAO,KAAK,SAAS,cAAc,IAAI,CAAC;AAAA,EAC1C,QAAQ;AAAA,EAER;AACA,MAAI,OAAO,QAAQ,QAAQ;AACzB,aAAS,cAAc,IAAI,CAAC;AAAA,EAC9B;AACF;AAEA,SAAS,iBAAiB,wBAAwB,CAAC,MAAa;AAC9D,QAAM,SAAU,EAAiC;AACjD,MAAI,QAAQ,cAAc,SAAS;AACjC,oBAAgB;AAAA,EAClB;AACF,CAAC;",
+  "names": []
+}

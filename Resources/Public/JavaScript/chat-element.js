@@ -592,7 +592,7 @@ let ChatElement = class extends LitElement {
       case "change_tracked": {
         const change = data;
         this.changes = [...this.changes, change];
-        document.dispatchEvent(new CustomEvent("agent:record-changed"));
+        document.dispatchEvent(new CustomEvent("agent:record-changed", { detail: change }));
         break;
       }
       case "done":
