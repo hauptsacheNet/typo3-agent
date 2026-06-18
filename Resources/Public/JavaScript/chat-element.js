@@ -76,7 +76,6 @@ let ChatElement = class extends LitElement {
   firstUpdated() {
     this.messages = this.mergeToolResults(this.initialMessages);
     this.changes = [...this.initialChanges];
-    this.scrollToBottom();
     if (this.uploadZoneEl) {
       new DragUploader(this.uploadZoneEl);
     }
@@ -93,9 +92,6 @@ let ChatElement = class extends LitElement {
   isWorkspaceMismatch() {
     if (!this.taskWorkspaceId) return false;
     return this.taskWorkspaceId !== this.activeWorkspaceId;
-  }
-  updated() {
-    this.scrollToBottom();
   }
   // -- Render ----------------------------------------------------------------
   render() {
@@ -122,11 +118,17 @@ let ChatElement = class extends LitElement {
                         aria-label="Schließen"
                         @click=${this.onDismissError}></button>
               </div>` : nothing}
-        
-        <div class="chat-messages d-flex flex-column gap-3 overflow-auto mx-3 pb-3 pt-4">
-          ${this.messages.map((msg) => this.renderMessage(msg))}
-          ${this.isStreaming ? this.renderStreamingBubble() : nothing}
-          ${this.thinking && !this.isStreaming ? this.renderThinkingIndicator() : nothing}
+        <div class="chat-messages overflow-auto mx-3 py-4">
+          ${this.computeTurns().map((turn, i, all) => {
+      const isLast = i === all.length - 1;
+      return html`
+              <div class="chat-turn d-flex flex-column gap-3 ${isLast ? "chat-turn-latest" : "pb-3"}">
+                ${turn.map((msg) => this.renderMessage(msg))}
+                ${isLast && this.isStreaming ? this.renderStreamingBubble() : nothing}
+                ${isLast && this.thinking && !this.isStreaming ? this.renderThinkingIndicator() : nothing}
+              </div>
+            `;
+    })}
         </div>
 
         <div
@@ -280,7 +282,7 @@ let ChatElement = class extends LitElement {
     const attachments = msg.attachments ?? [];
     const userText = msg.content != null ? this.contentText(msg.content) : "";
     return html`
-      <div class="rounded-4 bg-success-subtle border p-3 ms-3 align-self-end">
+      <div class="chat-msg-user rounded-4 bg-success-subtle border p-3 ms-3 align-self-end">
         <div class="chat-msg-role fw-bold small opacity-75 mb-1 text-uppercase">${roleLabel}</div>
         ${userText ? html`<pre class="chat-msg-prewrap m-0">${userText}</pre>` : nothing}
         ${attachments.length > 0 ? html`<div class="chat-attachments d-flex flex-wrap gap-2 ${msg.content ? "mt-2" : ""}">
@@ -400,6 +402,7 @@ let ChatElement = class extends LitElement {
     this.inputValue = "";
     this.attachments = [];
     this.loading = true;
+    this.scrollLatestUserMessageToTop();
     if (this.streamUri) {
       this.sendStreaming(message, attachments).then(() => this.finishSend());
     } else {
@@ -601,6 +604,7 @@ let ChatElement = class extends LitElement {
         const msg = data.message;
         if (msg) {
           this.messages = [...this.messages, msg];
+          this.scrollLatestUserMessageToTop();
         }
         break;
       }
@@ -698,11 +702,29 @@ let ChatElement = class extends LitElement {
     }
     return merged;
   }
-  scrollToBottom() {
-    const el = this.renderRoot.querySelector(".chat-messages");
-    if (el) {
-      el.scrollTop = el.scrollHeight;
+  computeTurns() {
+    const turns = [];
+    for (const msg of this.messages) {
+      if (msg.role === "system") continue;
+      if (msg.role === "user" || turns.length === 0) {
+        turns.push([msg]);
+      } else {
+        turns[turns.length - 1].push(msg);
+      }
     }
+    return turns;
+  }
+  scrollLatestUserMessageToTop() {
+    void this.updateComplete.then(() => {
+      const container = this.renderRoot.querySelector(".chat-messages");
+      if (!container) return;
+      const userBubbles = container.querySelectorAll(".chat-msg-user");
+      const latest = userBubbles[userBubbles.length - 1];
+      if (!latest) return;
+      const containerTop = container.getBoundingClientRect().top;
+      const latestTop = latest.getBoundingClientRect().top;
+      container.scrollTo({ top: container.scrollTop + latestTop - containerTop, behavior: "smooth" });
+    });
   }
 };
 __decorateClass([

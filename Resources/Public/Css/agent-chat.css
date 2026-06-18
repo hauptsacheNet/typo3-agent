@@ -37,6 +37,10 @@ hn-agent-chat .chat-msg-prewrap {
     overflow-wrap: anywhere;
 }
 
+hn-agent-chat .chat-turn-latest {
+    min-height: 100%;
+}
+
 hn-agent-chat .chat-upload-zone {
     position: relative;
 }
