@@ -10,4 +10,5 @@ enum TaskStatus: int
     case InProgress = 1;
     case Ended = 2;
     case Failed = 3;
+    case Cancelled = 4;
 }

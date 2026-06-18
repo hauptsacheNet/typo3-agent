@@ -7,6 +7,7 @@ namespace Hn\Agent\Service;
 use Hn\Agent\Domain\AgentInstructionRepository;
 use Hn\Agent\Domain\AgentTaskRepository;
 use Hn\Agent\Domain\TaskStatus;
+use Hn\Agent\Http\ClientDisconnectedException;
 use Hn\McpServer\MCP\ToolRegistry;
 use Hn\McpServer\Service\WorkspaceContextService;
 use Psr\Log\LoggerAwareInterface;
@@ -86,7 +87,15 @@ class AgentService implements LoggerAwareInterface
         // runLoop and would otherwise only become visible to the UI after a
         // page reload — stream them explicitly so the chat renders them live.
         if ($isFreshTask && $progress !== null) {
-            $this->emitInitialContextEvents($messages, $progress);
+            try {
+                $this->emitInitialContextEvents($messages, $progress);
+            } catch (ClientDisconnectedException $e) {
+                // Disconnect during the synthetic-context emit, before runLoop
+                // ever started. Mark Cancelled but keep the initial messages so
+                // the chat can be resumed from the persisted context.
+                $this->repository->saveState($taskUid, $messages, TaskStatus::Cancelled);
+                return;
+            }
         }
 
         $this->runLoop($taskUid, $messages, $progress);
@@ -283,6 +292,13 @@ class AgentService implements LoggerAwareInterface
                 $this->repository->saveState($taskUid, $messages, TaskStatus::Ended, $result);
             }
 
+            return $messages;
+        } catch (ClientDisconnectedException $e) {
+            // User aborted the SSE stream. Persist whatever was generated so
+            // far so the chat stays resumable, mark Cancelled, and swallow the
+            // exception — the connection is gone, propagating would only
+            // trigger another doomed $send up the chain.
+            $this->repository->saveState($taskUid, $messages, TaskStatus::Cancelled);
             return $messages;
         } catch (\Throwable $e) {
             // Preserve progress on failure

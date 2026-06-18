@@ -130,6 +130,12 @@ export class ChatElement extends LitElement {
   @state() private attachments: Attachment[] = [];
   @state() private lastSubmission: {message: string; attachments: Attachment[]} | null = null;
 
+  // Active SSE fetch's AbortController while a stream is in flight, null otherwise.
+  // The Stop button calls .abort() on it; the reader loop in sendStreaming sees the
+  // AbortError and exits cleanly. PHP-side, the disconnect is picked up by
+  // SseStream's connection_aborted() check on the next flush.
+  private abortController: AbortController | null = null;
+
   @query('textarea') private inputEl!: HTMLTextAreaElement;
   // DragUploader dispatches `uploadSuccess` on its `data-dropzone-trigger`
   // element (not the wrapper, and not bubbling) — so we have to listen on
@@ -153,6 +159,16 @@ export class ChatElement extends LitElement {
     } else {
       this.addAttachment({identifier: raw, name: data.label || raw});
     }
+  };
+
+  private onKeydownGlobal = (e: KeyboardEvent): void => {
+    if (e.key !== 'Escape') return;
+    // Already handled by another consumer (e.g. an open TYPO3 modal) — don't
+    // also tear down the stream in that case.
+    if (e.defaultPrevented) return;
+    if (!this.loading || this.abortController === null) return;
+    e.preventDefault();
+    this.onStop();
   };
 
   private uploadSuccessListener = (e: Event): void => {
@@ -180,16 +196,20 @@ export class ChatElement extends LitElement {
       new DragUploader(this.uploadZoneEl);
     }
     this.uploadTriggerEl?.addEventListener('uploadSuccess', this.uploadSuccessListener);
+    document.addEventListener('keydown', this.onKeydownGlobal);
 
     if ((this.autoStart === '1' || this.autoStart === 'true') && this.streamUri && !this.isWorkspaceMismatch()) {
       this.doAutoStart();
     }
+
+    this.inputEl?.focus();
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     this.uploadTriggerEl?.removeEventListener('uploadSuccess', this.uploadSuccessListener);
     window.removeEventListener('message', this.elementBrowserListener);
+    document.removeEventListener('keydown', this.onKeydownGlobal);
   }
 
   private isWorkspaceMismatch(): boolean {
@@ -259,7 +279,6 @@ export class ChatElement extends LitElement {
                 rows="2"
                 placeholder="Type a follow-up message\u2026"
                 .value=${this.inputValue}
-                ?disabled=${inputDisabled}
                 @input=${this.onInput}
                 @keydown=${this.onKeydown}
             ></textarea>
@@ -272,11 +291,21 @@ export class ChatElement extends LitElement {
             <div class="w-100 d-flex flex-row">
               ${this.renderAttachmentsBar(uploadEnabled, pickEnabled, inputDisabled)}
               <div class="ms-auto">
-                <button type="submit" class="btn btn-sm" ?disabled=${!canSubmit}>
-                  <typo3-backend-icon
-                      identifier="actions-arrow-down-start-alt"
-                      size="small"/>
-                </button>
+                ${this.loading
+                  ? html`
+                    <button type="button"
+                            class="btn btn-sm"
+                            title="Antwort abbrechen"
+                            ?disabled=${this.abortController === null}
+                            @click=${this.onStop}>
+                      <typo3-backend-icon identifier="actions-close" size="small"/>
+                    </button>`
+                  : html`
+                    <button type="submit" class="btn btn-sm" ?disabled=${!canSubmit}>
+                      <typo3-backend-icon
+                          identifier="actions-arrow-down-start-alt"
+                          size="small"/>
+                    </button>`}
               </div>
             </div>
           </form>
@@ -582,6 +611,7 @@ export class ChatElement extends LitElement {
     this.attachments = [];
     this.loading = true;
     this.scrollLatestUserMessageToTop();
+    this.inputEl?.focus();
 
     if (this.streamUri) {
       this.sendStreaming(message, attachments).then(() => this.finishSend());
@@ -593,6 +623,29 @@ export class ChatElement extends LitElement {
   private onDismissError(): void {
     this.errorMessage = '';
     this.lastSubmission = null;
+  }
+
+  private onStop(): void {
+    // Promote any in-flight streaming bubble into a real assistant message
+    // BEFORE aborting. Otherwise the partial content vanishes the moment
+    // isStreaming flips to false — the user would see nothing until reload.
+    // The server-side persisted copy may end up slightly more complete (the
+    // last token batch can arrive between flush and connection_aborted), but
+    // a page reload reconciles to the canonical version.
+    if (this.isStreaming && (this.streamingBuffer !== '' || this.reasoningBuffer !== '')) {
+      this.messages = [...this.messages, {
+        role: 'assistant',
+        content: this.streamingBuffer,
+        ...(this.reasoningBuffer ? {reasoning: this.reasoningBuffer} : {}),
+      }];
+      this.streamingBuffer = '';
+      this.reasoningBuffer = '';
+      this.isStreaming = false;
+    }
+    this.abortController?.abort();
+    // Force re-render so the stop button switches to disabled state while the
+    // fetch tears down.
+    this.requestUpdate();
   }
 
   private onRetry(): void {
@@ -668,6 +721,9 @@ export class ChatElement extends LitElement {
   private onKeydown(e: KeyboardEvent): void {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
+      if (this.loading || this.isWorkspaceMismatch()) {
+        return;
+      }
       (e.target as HTMLTextAreaElement).closest('form')?.requestSubmit();
     }
   }
@@ -737,6 +793,7 @@ export class ChatElement extends LitElement {
   // -- Network: streaming (SSE) ----------------------------------------------
 
   private async sendStreaming(message: string, attachments: Attachment[] = []): Promise<void> {
+    this.abortController = new AbortController();
     try {
       this.thinking = true;
       const formData = new FormData();
@@ -746,6 +803,7 @@ export class ChatElement extends LitElement {
       const response = await fetch(this.streamUri, {
         method: 'POST',
         body: formData,
+        signal: this.abortController.signal,
       });
 
       if (!response.ok) {
@@ -773,7 +831,14 @@ export class ChatElement extends LitElement {
     } catch (err) {
       this.thinking = false;
       this.isStreaming = false;
-      this.errorMessage = (err as Error).message || String(err);
+      // AbortError is the user clicking Stop — not a failure. The streaming
+      // bubble (if any) stays visible; finishSend() will flip loading off and
+      // a reload would reveal the task as Cancelled with partial messages.
+      if ((err as Error).name !== 'AbortError') {
+        this.errorMessage = (err as Error).message || String(err);
+      }
+    } finally {
+      this.abortController = null;
     }
   }
 

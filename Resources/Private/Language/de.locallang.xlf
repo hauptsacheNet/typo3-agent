@@ -55,6 +55,10 @@
                 <source>Failed</source>
                 <target>Fehlgeschlagen</target>
             </trans-unit>
+            <trans-unit id="status.cancelled" resname="status.cancelled">
+                <source>Cancelled</source>
+                <target>Abgebrochen</target>
+            </trans-unit>
             <trans-unit id="placeholder.page" resname="placeholder.page">
                 <source>Describe what you'd like to create or change on page "%s", e.g. fix typos, add a new content element…</source>
                 <target>Beschreibe, was du auf der Seite "%s" erstellen oder ändern möchtest, z.B. Rechtschreibfehler korrigieren, neues Content-Element anlegen…</target>

@@ -8,6 +8,7 @@ use Doctrine\DBAL\ParameterType;
 use Hn\Agent\Domain\AgentInstructionRepository;
 use Hn\Agent\Domain\AgentTaskRepository;
 use Hn\Agent\Domain\TaskStatus;
+use Hn\Agent\Http\ClientDisconnectedException;
 use Hn\Agent\Http\SseStream;
 use Hn\Agent\Renderer\PromptRenderer;
 use Hn\Agent\Service\AgentService;
@@ -484,6 +485,10 @@ class ChatController
                 try {
                     $agentService->processTask($taskUid, $send);
                     $send('done', ['status' => 2]);
+                } catch (ClientDisconnectedException $e) {
+                    // Connection gone — AgentService already persisted Cancelled.
+                    // Don't try to $send anything: it would fail and resurface
+                    // as a generic error in this same catch.
                 } catch (\Throwable $e) {
                     $send('error', ['error' => $e->getMessage(), 'status' => 3]);
                 }
@@ -494,6 +499,8 @@ class ChatController
             try {
                 $messages = $agentService->continueChat($taskUid, $message, $send, $attachments);
                 $send('done', ['status' => 2, 'messages' => $messages]);
+            } catch (ClientDisconnectedException $e) {
+                // see above
             } catch (\Throwable $e) {
                 $send('error', ['error' => $e->getMessage(), 'status' => 3]);
             }

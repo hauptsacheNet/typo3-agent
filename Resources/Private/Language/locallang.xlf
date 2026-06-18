@@ -45,6 +45,9 @@
             <trans-unit id="status.failed" resname="status.failed">
                 <source>Failed</source>
             </trans-unit>
+            <trans-unit id="status.cancelled" resname="status.cancelled">
+                <source>Cancelled</source>
+            </trans-unit>
             <trans-unit id="placeholder.page" resname="placeholder.page">
                 <source>Describe what you'd like to create or change on page "%s", e.g. fix typos, add a new content element…</source>
             </trans-unit>

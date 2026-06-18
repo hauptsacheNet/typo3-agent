@@ -46,6 +46,11 @@ let ChatElement = class extends LitElement {
     this.isStreaming = false;
     this.attachments = [];
     this.lastSubmission = null;
+    // Active SSE fetch's AbortController while a stream is in flight, null otherwise.
+    // The Stop button calls .abort() on it; the reader loop in sendStreaming sees the
+    // AbortError and exits cleanly. PHP-side, the disconnect is picked up by
+    // SseStream's connection_aborted() check on the next flush.
+    this.abortController = null;
     this.elementBrowserListener = (e) => {
       if (!MessageUtility.verifyOrigin(e.origin)) return;
       const data = e.data;
@@ -59,6 +64,13 @@ let ChatElement = class extends LitElement {
       } else {
         this.addAttachment({ identifier: raw, name: data.label || raw });
       }
+    };
+    this.onKeydownGlobal = (e) => {
+      if (e.key !== "Escape") return;
+      if (e.defaultPrevented) return;
+      if (!this.loading || this.abortController === null) return;
+      e.preventDefault();
+      this.onStop();
     };
     this.uploadSuccessListener = (e) => {
       const detail = e.detail;
@@ -80,14 +92,17 @@ let ChatElement = class extends LitElement {
       new DragUploader(this.uploadZoneEl);
     }
     this.uploadTriggerEl?.addEventListener("uploadSuccess", this.uploadSuccessListener);
+    document.addEventListener("keydown", this.onKeydownGlobal);
     if ((this.autoStart === "1" || this.autoStart === "true") && this.streamUri && !this.isWorkspaceMismatch()) {
       this.doAutoStart();
     }
+    this.inputEl?.focus();
   }
   disconnectedCallback() {
     super.disconnectedCallback();
     this.uploadTriggerEl?.removeEventListener("uploadSuccess", this.uploadSuccessListener);
     window.removeEventListener("message", this.elementBrowserListener);
+    document.removeEventListener("keydown", this.onKeydownGlobal);
   }
   isWorkspaceMismatch() {
     if (!this.taskWorkspaceId) return false;
@@ -138,9 +153,11 @@ let ChatElement = class extends LitElement {
             data-dropzone-target=".chat-upload-anchor"
             data-dropzone-trigger=".chat-upload-trigger"
             data-default-action="rename">
+
           
+
           ${mismatch ? this.renderWorkspaceMismatch() : nothing}
-          
+
           <form class="position-relative rounded-4 border bg-white overflow-hidden d-flex flex-column gap-3 p-3 " @submit=${this.onSubmit}>
             <textarea
                 name="message"
@@ -148,7 +165,6 @@ let ChatElement = class extends LitElement {
                 rows="2"
                 placeholder="Type a follow-up message\u2026"
                 .value=${this.inputValue}
-                ?disabled=${inputDisabled}
                 @input=${this.onInput}
                 @keydown=${this.onKeydown}
             ></textarea>
@@ -159,15 +175,24 @@ let ChatElement = class extends LitElement {
             <div class="w-100 d-flex flex-row">
               ${this.renderAttachmentsBar(uploadEnabled, pickEnabled, inputDisabled)}
               <div class="ms-auto">
-                <button type="submit" class="btn btn-sm" ?disabled=${!canSubmit}>
-                  <typo3-backend-icon
-                      identifier="actions-arrow-down-start-alt"
-                      size="small"/>
-                </button>
+                ${this.loading ? html`
+                    <button type="button"
+                            class="btn btn-sm"
+                            title="Antwort abbrechen"
+                            ?disabled=${this.abortController === null}
+                            @click=${this.onStop}>
+                      <typo3-backend-icon identifier="actions-close" size="small"/>
+                    </button>` : html`
+                    <button type="submit" class="btn btn-sm" ?disabled=${!canSubmit}>
+                      <typo3-backend-icon
+                          identifier="actions-arrow-down-start-alt"
+                          size="small"/>
+                    </button>`}
               </div>
             </div>
           </form>
-          
+
+         
         </div>
 
       </div>
@@ -403,6 +428,7 @@ let ChatElement = class extends LitElement {
     this.attachments = [];
     this.loading = true;
     this.scrollLatestUserMessageToTop();
+    this.inputEl?.focus();
     if (this.streamUri) {
       this.sendStreaming(message, attachments).then(() => this.finishSend());
     } else {
@@ -412,6 +438,20 @@ let ChatElement = class extends LitElement {
   onDismissError() {
     this.errorMessage = "";
     this.lastSubmission = null;
+  }
+  onStop() {
+    if (this.isStreaming && (this.streamingBuffer !== "" || this.reasoningBuffer !== "")) {
+      this.messages = [...this.messages, {
+        role: "assistant",
+        content: this.streamingBuffer,
+        ...this.reasoningBuffer ? { reasoning: this.reasoningBuffer } : {}
+      }];
+      this.streamingBuffer = "";
+      this.reasoningBuffer = "";
+      this.isStreaming = false;
+    }
+    this.abortController?.abort();
+    this.requestUpdate();
   }
   onRetry() {
     if (!this.lastSubmission || this.loading) return;
@@ -471,6 +511,9 @@ let ChatElement = class extends LitElement {
   onKeydown(e) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
+      if (this.loading || this.isWorkspaceMismatch()) {
+        return;
+      }
       e.target.closest("form")?.requestSubmit();
     }
   }
@@ -524,6 +567,7 @@ let ChatElement = class extends LitElement {
   }
   // -- Network: streaming (SSE) ----------------------------------------------
   async sendStreaming(message, attachments = []) {
+    this.abortController = new AbortController();
     try {
       this.thinking = true;
       const formData = new FormData();
@@ -531,7 +575,8 @@ let ChatElement = class extends LitElement {
       this.appendAttachments(formData, attachments);
       const response = await fetch(this.streamUri, {
         method: "POST",
-        body: formData
+        body: formData,
+        signal: this.abortController.signal
       });
       if (!response.ok) {
         this.errorMessage = `Request failed (${response.status})`;
@@ -553,7 +598,11 @@ let ChatElement = class extends LitElement {
     } catch (err) {
       this.thinking = false;
       this.isStreaming = false;
-      this.errorMessage = err.message || String(err);
+      if (err.name !== "AbortError") {
+        this.errorMessage = err.message || String(err);
+      }
+    } finally {
+      this.abortController = null;
     }
   }
   // -- SSE parsing -----------------------------------------------------------

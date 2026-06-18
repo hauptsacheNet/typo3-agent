@@ -33,6 +33,12 @@ class SseStream implements SelfEmittableStreamInterface
             ob_end_flush();
         }
 
+        // Keep PHP alive past a client disconnect so we can detect it via
+        // connection_aborted() after the next echo+flush and run our cleanup
+        // path (persist partial state + mark Cancelled) instead of being
+        // killed mid-execution by the SAPI.
+        ignore_user_abort(true);
+
         $send = static function (string $event, array $data): void {
             $serverEvent = new ServerEvent(
                 data: json_encode($data, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR),
@@ -41,8 +47,13 @@ class SseStream implements SelfEmittableStreamInterface
             foreach ($serverEvent as $part) {
                 echo $part;
             }
-            ob_flush();
+            if (ob_get_level() > 0) {
+                ob_flush();
+            }
             flush();
+            if (connection_aborted() === 1) {
+                throw new ClientDisconnectedException('SSE client disconnected');
+            }
         };
 
         ($this->emitter)($send);
