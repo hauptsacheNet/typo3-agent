@@ -1,6 +1,6 @@
 hn-agent-chat .chat-container {
     display: grid;
-    grid-template-rows: auto 1fr;
+    grid-template-rows: 1fr auto;
     height: 100%;
     overflow: hidden;
 }
