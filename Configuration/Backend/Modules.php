@@ -31,6 +31,10 @@ return [
                 'target' => ChatController::class . '::streamMessageAction',
                 'methods' => ['POST'],
             ],
+            'cancelMessage' => [
+                'target' => ChatController::class . '::cancelMessageAction',
+                'methods' => ['POST'],
+            ],
             'switchWorkspace' => [
                 'target' => ChatController::class . '::switchWorkspaceAction',
             ],

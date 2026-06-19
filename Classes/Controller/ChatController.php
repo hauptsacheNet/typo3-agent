@@ -8,7 +8,6 @@ use Doctrine\DBAL\ParameterType;
 use Hn\Agent\Domain\AgentInstructionRepository;
 use Hn\Agent\Domain\AgentTaskRepository;
 use Hn\Agent\Domain\TaskStatus;
-use Hn\Agent\Http\ClientDisconnectedException;
 use Hn\Agent\Http\SseStream;
 use Hn\Agent\Renderer\PromptRenderer;
 use Hn\Agent\Service\AgentService;
@@ -224,6 +223,10 @@ class ChatController
                 'id' => $pageId,
             ]),
             'streamUri' => (string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat.streamMessage', [
+                'task' => $taskUid,
+                'id' => $pageId,
+            ]),
+            'cancelUri' => (string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat.cancelMessage', [
                 'task' => $taskUid,
                 'id' => $pageId,
             ]),
@@ -485,10 +488,6 @@ class ChatController
                 try {
                     $agentService->processTask($taskUid, $send);
                     $send('done', ['status' => 2]);
-                } catch (ClientDisconnectedException $e) {
-                    // Connection gone — AgentService already persisted Cancelled.
-                    // Don't try to $send anything: it would fail and resurface
-                    // as a generic error in this same catch.
                 } catch (\Throwable $e) {
                     $send('error', ['error' => $e->getMessage(), 'status' => 3]);
                 }
@@ -499,12 +498,29 @@ class ChatController
             try {
                 $messages = $agentService->continueChat($taskUid, $message, $send, $attachments);
                 $send('done', ['status' => 2, 'messages' => $messages]);
-            } catch (ClientDisconnectedException $e) {
-                // see above
             } catch (\Throwable $e) {
                 $send('error', ['error' => $e->getMessage(), 'status' => 3]);
             }
         });
+    }
+
+    /**
+     * Atomically transition an in-progress chat task to Cancelled. The
+     * agent loop sees the new status at its next iteration and exits
+     * without overwriting it. No-op (still 200) when the task is no
+     * longer running — fire-and-forget from the client.
+     */
+    public function cancelMessageAction(ServerRequestInterface $request): ResponseInterface
+    {
+        $body = (array)$request->getParsedBody();
+        $taskUid = (int)($body['task'] ?? $request->getQueryParams()['task'] ?? 0);
+        if ($taskUid <= 0) {
+            return new JsonResponse(['ok' => false, 'error' => 'Invalid task'], 400);
+        }
+        $userId = (int)($GLOBALS['BE_USER']->user['uid'] ?? 0);
+        $isAdmin = (bool)($GLOBALS['BE_USER']->user['admin'] ?? false);
+        $cancelled = $this->repository->requestCancel($taskUid, $userId, $isAdmin);
+        return new JsonResponse(['ok' => true, 'cancelled' => $cancelled]);
     }
 
     /**

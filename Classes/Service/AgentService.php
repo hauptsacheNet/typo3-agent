@@ -7,7 +7,6 @@ namespace Hn\Agent\Service;
 use Hn\Agent\Domain\AgentInstructionRepository;
 use Hn\Agent\Domain\AgentTaskRepository;
 use Hn\Agent\Domain\TaskStatus;
-use Hn\Agent\Http\ClientDisconnectedException;
 use Hn\McpServer\MCP\ToolRegistry;
 use Hn\McpServer\Service\WorkspaceContextService;
 use Psr\Log\LoggerAwareInterface;
@@ -87,15 +86,7 @@ class AgentService implements LoggerAwareInterface
         // runLoop and would otherwise only become visible to the UI after a
         // page reload — stream them explicitly so the chat renders them live.
         if ($isFreshTask && $progress !== null) {
-            try {
-                $this->emitInitialContextEvents($messages, $progress);
-            } catch (ClientDisconnectedException $e) {
-                // Disconnect during the synthetic-context emit, before runLoop
-                // ever started. Mark Cancelled but keep the initial messages so
-                // the chat can be resumed from the persisted context.
-                $this->repository->saveState($taskUid, $messages, TaskStatus::Cancelled);
-                return;
-            }
+            $this->emitInitialContextEvents($messages, $progress);
         }
 
         $this->runLoop($taskUid, $messages, $progress);
@@ -168,6 +159,16 @@ class AgentService implements LoggerAwareInterface
             $reachedLimit = false;
 
             for ($iteration = 0; $iteration < $maxIterations; $iteration++) {
+                // Cooperative cancellation point. The cancel endpoint flips
+                // status from InProgress to Cancelled with an atomic UPDATE;
+                // we see that on the next iteration and bail without writing
+                // a terminal saveState (which would overwrite the Cancelled
+                // status the cancel endpoint just set).
+                $current = $this->repository->findByUid($taskUid);
+                if ($current === false || (int)$current['status'] !== TaskStatus::InProgress->value) {
+                    return $messages;
+                }
+
                 if ($progress !== null) {
                     $progress('llm_start', []);
                 }
@@ -211,8 +212,8 @@ class AgentService implements LoggerAwareInterface
                 // Append assistant message
                 $messages[] = $assistantMessage;
 
-                // Save checkpoint
-                $this->repository->saveState($taskUid, $messages, TaskStatus::InProgress);
+                // Save checkpoint (messages only — status is owned by claim/cancel/final-save).
+                $this->repository->saveMessages($taskUid, $messages);
 
                 if ($progress !== null) {
                     $progress('assistant_message', [
@@ -273,8 +274,8 @@ class AgentService implements LoggerAwareInterface
                     }
                 }
 
-                // Save checkpoint after tool execution
-                $this->repository->saveState($taskUid, $messages, TaskStatus::InProgress);
+                // Save checkpoint after tool execution (messages only).
+                $this->repository->saveMessages($taskUid, $messages);
 
                 if ($iteration === $maxIterations - 1) {
                     $reachedLimit = true;
@@ -287,22 +288,17 @@ class AgentService implements LoggerAwareInterface
             if ($reachedLimit) {
                 $result = '[Agent stopped: reached maximum of ' . $maxIterations . ' iterations]'
                     . ($result !== '' ? "\n\n" . $result : '');
-                $this->repository->saveState($taskUid, $messages, TaskStatus::Failed, $result);
+                $this->repository->finalize($taskUid, $messages, TaskStatus::Failed, $result);
             } else {
-                $this->repository->saveState($taskUid, $messages, TaskStatus::Ended, $result);
+                $this->repository->finalize($taskUid, $messages, TaskStatus::Ended, $result);
             }
 
             return $messages;
-        } catch (ClientDisconnectedException $e) {
-            // User aborted the SSE stream. Persist whatever was generated so
-            // far so the chat stays resumable, mark Cancelled, and swallow the
-            // exception — the connection is gone, propagating would only
-            // trigger another doomed $send up the chain.
-            $this->repository->saveState($taskUid, $messages, TaskStatus::Cancelled);
-            return $messages;
         } catch (\Throwable $e) {
-            // Preserve progress on failure
-            $this->repository->saveState($taskUid, $messages, TaskStatus::Failed, 'Error: ' . $e->getMessage());
+            // Preserve progress on failure. CAS-guarded: if the task was
+            // cancelled externally before the exception fired, leave it
+            // Cancelled rather than overwriting with Failed.
+            $this->repository->finalize($taskUid, $messages, TaskStatus::Failed, 'Error: ' . $e->getMessage());
             throw $e;
         }
     }

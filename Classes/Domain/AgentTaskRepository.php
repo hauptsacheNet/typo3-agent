@@ -164,6 +164,86 @@ class AgentTaskRepository
     }
 
     /**
+     * Persist only the messages array, without touching status. Used for the
+     * mid-loop checkpoints in AgentService::runLoop — those must not clobber
+     * a status transition done by another request (e.g. an external cancel
+     * flipping status from InProgress to Cancelled).
+     */
+    public function saveMessages(int $taskUid, array $messages): void
+    {
+        $this->connectionPool
+            ->getConnectionForTable(self::TABLE)
+            ->update(
+                self::TABLE,
+                ['messages' => $messages, 'tstamp' => time()],
+                ['uid' => $taskUid],
+                ['messages' => Types::JSON],
+            );
+    }
+
+    /**
+     * Atomically transition an in-progress task to Cancelled. Restricted to
+     * the task owner (admins see all), so a stray request can't cancel
+     * someone else's chat. Returns true when a row actually changed — i.e.
+     * the task was running and the caller is allowed.
+     *
+     * The CAS on `status = InProgress` is what makes this race-free against
+     * the agent loop: an in-flight saveMessages() leaves status untouched,
+     * and the next iteration's status SELECT will see Cancelled and bail.
+     */
+    public function requestCancel(int $taskUid, int $userId, bool $isAdmin): bool
+    {
+        $criteria = [
+            'uid' => $taskUid,
+            'status' => TaskStatus::InProgress->value,
+        ];
+        if (!$isAdmin) {
+            $criteria['cruser_id'] = $userId;
+        }
+        $affected = $this->connectionPool
+            ->getConnectionForTable(self::TABLE)
+            ->update(
+                self::TABLE,
+                ['status' => TaskStatus::Cancelled->value, 'tstamp' => time()],
+                $criteria,
+            );
+        return $affected > 0;
+    }
+
+    /**
+     * Terminal status transition for the agent loop, guarded by CAS on
+     * `status = InProgress`. Writes messages + new status (+ optional result)
+     * in one UPDATE; no-ops when something else already moved the status off
+     * InProgress in the meantime — most notably an external cancel that
+     * flipped it to Cancelled. Without this guard the loop's final saveState
+     * would silently overwrite Cancelled with Ended.
+     */
+    public function finalize(
+        int $taskUid,
+        array $messages,
+        TaskStatus $terminalStatus,
+        ?string $result = null,
+    ): bool {
+        $data = [
+            'status' => $terminalStatus->value,
+            'messages' => $messages,
+            'tstamp' => time(),
+        ];
+        if ($result !== null) {
+            $data['result'] = $result;
+        }
+        $affected = $this->connectionPool
+            ->getConnectionForTable(self::TABLE)
+            ->update(
+                self::TABLE,
+                $data,
+                ['uid' => $taskUid, 'status' => TaskStatus::InProgress->value],
+                ['messages' => Types::JSON],
+            );
+        return $affected > 0;
+    }
+
+    /**
      * Save task state (messages, status, result) to the database.
      */
     public function saveState(int $taskUid, ?array $messages, TaskStatus $status, ?string $result = null): void

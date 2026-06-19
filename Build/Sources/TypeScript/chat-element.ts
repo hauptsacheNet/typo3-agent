@@ -75,6 +75,7 @@ export class ChatElement extends LitElement {
 
   @property({attribute: 'send-uri'}) sendUri = '';
   @property({attribute: 'stream-uri'}) streamUri = '';
+  @property({attribute: 'cancel-uri'}) cancelUri = '';
   @property({attribute: 'auto-start'}) autoStart = '';
   @property({attribute: 'initial-prompt'}) initialPrompt = '';
   @property({attribute: 'task-workspace-id', type: Number}) taskWorkspaceId = 0;
@@ -629,9 +630,6 @@ export class ChatElement extends LitElement {
     // Promote any in-flight streaming bubble into a real assistant message
     // BEFORE aborting. Otherwise the partial content vanishes the moment
     // isStreaming flips to false — the user would see nothing until reload.
-    // The server-side persisted copy may end up slightly more complete (the
-    // last token batch can arrive between flush and connection_aborted), but
-    // a page reload reconciles to the canonical version.
     if (this.isStreaming && (this.streamingBuffer !== '' || this.reasoningBuffer !== '')) {
       this.messages = [...this.messages, {
         role: 'assistant',
@@ -642,9 +640,15 @@ export class ChatElement extends LitElement {
       this.reasoningBuffer = '';
       this.isStreaming = false;
     }
+    // Tell the server this is an EXPLICIT cancel (not just a navigation). The
+    // server-side flow no longer treats a bare connection close as a cancel —
+    // it would otherwise let the task run to completion. keepalive ensures the
+    // request still goes through if the user simultaneously closes the tab.
+    // The task UID is already on the cancelUri as a query parameter.
+    if (this.cancelUri) {
+      void fetch(this.cancelUri, {method: 'POST', keepalive: true}).catch(() => {});
+    }
     this.abortController?.abort();
-    // Force re-render so the stop button switches to disabled state while the
-    // fetch tears down.
     this.requestUpdate();
   }
 

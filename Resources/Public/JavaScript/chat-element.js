@@ -23,6 +23,7 @@ let ChatElement = class extends LitElement {
     super(...arguments);
     this.sendUri = "";
     this.streamUri = "";
+    this.cancelUri = "";
     this.autoStart = "";
     this.initialPrompt = "";
     this.taskWorkspaceId = 0;
@@ -450,6 +451,10 @@ let ChatElement = class extends LitElement {
       this.reasoningBuffer = "";
       this.isStreaming = false;
     }
+    if (this.cancelUri) {
+      void fetch(this.cancelUri, { method: "POST", keepalive: true }).catch(() => {
+      });
+    }
     this.abortController?.abort();
     this.requestUpdate();
   }
@@ -782,6 +787,9 @@ __decorateClass([
 __decorateClass([
   property({ attribute: "stream-uri" })
 ], ChatElement.prototype, "streamUri", 2);
+__decorateClass([
+  property({ attribute: "cancel-uri" })
+], ChatElement.prototype, "cancelUri", 2);
 __decorateClass([
   property({ attribute: "auto-start" })
 ], ChatElement.prototype, "autoStart", 2);
