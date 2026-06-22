@@ -178,8 +178,10 @@ XLSX, ODT, ODP, ODS, PDF) and store a chosen one in fileadmin:
 - **`ViewExtractedImage`** is an on-demand escape hatch that loads one specific
   extracted image into the model context when the agent genuinely needs to see it.
 
-OOXML/ODF images are read directly from the ZIP media folders; PDF embedded-image
-extraction is best-effort. Extracted originals are cached transiently under
+OOXML/ODF images are read directly from the ZIP media folders. PDF images are
+extracted both when stored as embedded JPEGs and when stored as raw raster
+samples — 8-bit grayscale/RGB streams are reconstructed into real PNGs (CMYK,
+indexed and sub-byte-depth images are skipped). Extracted originals are cached transiently under
 `var/transient/` (keyed by the source document), so picking/storing reuses them
 without re-parsing.
 

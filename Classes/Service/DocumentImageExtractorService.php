@@ -7,6 +7,7 @@ namespace Hn\Agent\Service;
 use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerAwareTrait;
 use Smalot\PdfParser\Parser as PdfParser;
+use Smalot\PdfParser\PDFObject;
 use TYPO3\CMS\Core\Resource\File;
 
 /**
@@ -127,26 +128,51 @@ class DocumentImageExtractorService implements LoggerAwareInterface
                     break;
                 }
                 try {
-                    $bytes = $object->getContent();
+                    $content = $object->getContent();
                 } catch (\Throwable) {
                     continue;
                 }
-                if (!is_string($bytes) || strlen($bytes) < self::MIN_IMAGE_BYTES) {
+                if (!is_string($content) || $content === '') {
                     continue;
                 }
-                // Only keep streams that are standalone raster images (e.g.
-                // DCTDecode/JPEG). FlateDecode pixel data is not and is skipped.
-                $detected = $this->detectImage($bytes);
-                if ($detected === null) {
-                    continue;
+
+                $detected = $this->detectImage($content);
+                if ($detected !== null) {
+                    // The stream is already a standalone image file, e.g. a
+                    // DCTDecode (JPEG) or JPXDecode image — use it as-is.
+                    if (strlen($content) < self::MIN_IMAGE_BYTES) {
+                        continue;
+                    }
+                    $bytes = $content;
+                    $mime = $detected['mime'];
+                    $width = $detected['width'];
+                    $height = $detected['height'];
+                } else {
+                    // The stream is raw raster samples (the common FlateDecode
+                    // case): reconstruct a real PNG from them. Returns null for
+                    // layouts we can't safely rebuild (CMYK, indexed, sub-byte
+                    // depths, unexpected predictors).
+                    $png = $this->rasterSamplesToPng($object, $content);
+                    if ($png === null) {
+                        continue;
+                    }
+                    $det = $this->detectImage($png);
+                    if ($det === null || strlen($png) < self::MIN_IMAGE_BYTES) {
+                        continue;
+                    }
+                    $bytes = $png;
+                    $mime = 'image/png';
+                    $width = $det['width'];
+                    $height = $det['height'];
                 }
+
                 $idx++;
                 $images[] = [
                     'bytes' => $bytes,
-                    'mime' => $detected['mime'],
-                    'sourceName' => sprintf('pdf-image-%d.%s', $idx, $this->extensionFor($detected['mime'])),
-                    'width' => $detected['width'],
-                    'height' => $detected['height'],
+                    'mime' => $mime,
+                    'sourceName' => sprintf('pdf-image-%d.%s', $idx, $this->extensionFor($mime)),
+                    'width' => $width,
+                    'height' => $height,
                 ];
             }
         } catch (\Throwable $e) {
@@ -157,6 +183,75 @@ class DocumentImageExtractorService implements LoggerAwareInterface
             ]);
         }
         return $images;
+    }
+
+    /**
+     * Reconstruct a PNG from a PDF image XObject whose stream is raw raster
+     * samples (Flate-decoded but not yet de-predicted). Supports 8-bit
+     * DeviceGray and DeviceRGB — the common images that aren't stored as JPEG.
+     *
+     * PDF's PNG predictors are byte-for-byte identical to PNG's own scanline
+     * filtering, so the decoded scanlines can simply be re-wrapped as a PNG
+     * IDAT rather than decoding pixels by hand. Returns null when the layout
+     * can't be rebuilt safely (CMYK, indexed, sub-byte depths, …).
+     */
+    private function rasterSamplesToPng(PDFObject $object, string $content): ?string
+    {
+        $details = $object->getDetails(false);
+        $width = (int)($details['Width'] ?? 0);
+        $height = (int)($details['Height'] ?? 0);
+        $bitsPerComponent = (int)($details['BitsPerComponent'] ?? 0);
+        if ($width <= 0 || $height <= 0 || $bitsPerComponent !== 8) {
+            return null;
+        }
+        return $this->samplesToPng($width, $height, $content);
+    }
+
+    /**
+     * Build an 8-bit PNG from raw gray/RGB samples, detecting the layout from
+     * the byte length (with or without the per-row PNG predictor filter byte).
+     *
+     * @return string|null PNG bytes, or null when $content is not an 8-bit
+     *   grayscale or RGB raster of exactly $width x $height.
+     */
+    private function samplesToPng(int $width, int $height, string $content): ?string
+    {
+        $length = strlen($content);
+        // component count => PNG color type (0 = grayscale, 2 = truecolor RGB)
+        foreach ([1 => 0, 3 => 2] as $components => $colorType) {
+            $rowBytes = $width * $components;
+            if ($length === ($rowBytes + 1) * $height) {
+                // Each scanline already carries its PNG predictor filter byte.
+                return $this->assemblePng($width, $height, $colorType, $content);
+            }
+            if ($length === $rowBytes * $height) {
+                // No predictor: prepend a "None" (0) filter byte to each row.
+                $scanlines = '';
+                for ($row = 0; $row < $height; $row++) {
+                    $scanlines .= "\x00" . substr($content, $row * $rowBytes, $rowBytes);
+                }
+                return $this->assemblePng($width, $height, $colorType, $scanlines);
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Assemble a minimal 8-bit PNG. $scanlines must be the filter-byte-prefixed
+     * rows; they are zlib-compressed into the IDAT chunk (PNG's required format).
+     */
+    private function assemblePng(int $width, int $height, int $colorType, string $scanlines): string
+    {
+        $ihdr = pack('N', $width) . pack('N', $height) . chr(8) . chr($colorType) . "\x00\x00\x00";
+        return "\x89PNG\r\n\x1a\n"
+            . $this->pngChunk('IHDR', $ihdr)
+            . $this->pngChunk('IDAT', gzcompress($scanlines, 6))
+            . $this->pngChunk('IEND', '');
+    }
+
+    private function pngChunk(string $type, string $data): string
+    {
+        return pack('N', strlen($data)) . $type . $data . pack('N', crc32($type . $data));
     }
 
     /**
