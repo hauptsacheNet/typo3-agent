@@ -579,9 +579,14 @@ export class ChatElement extends LitElement {
   private renderReasoningBlock(reasoning: string): TemplateResult {
     return html`
       <details class="chat-reasoning mb-2 p-2 rounded border bg-body-tertiary small text-muted">
-        <summary class="d-flex align-items-center gap-2">
-          <typo3-backend-icon identifier="actions-lightbulb-on" size="small"></typo3-backend-icon>
-          <span>Reasoning</span>
+        <summary class="d-flex align-items-center justify-content-between gap-2">
+          <span class="d-flex align-items-center gap-2">
+            <typo3-backend-icon identifier="actions-lightbulb-on" size="small"></typo3-backend-icon>
+            <span>Reasoning</span>
+          </span>
+          <span class="chat-toolcall-toggle" aria-hidden="true">
+            <typo3-backend-icon identifier="actions-chevron-up" size="small"></typo3-backend-icon>
+          </span>
         </summary>
         <div class="mt-2">${unsafeHTML(this.renderMarkdown(reasoning))}</div>
       </details>

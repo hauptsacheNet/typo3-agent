@@ -173,14 +173,16 @@ hn-agent-chat .chat-attachment-warn {
 }
 
 hn-agent-chat .chat-toolcalls > summary,
-hn-agent-chat .chat-toolcall > summary {
+hn-agent-chat .chat-toolcall > summary,
+hn-agent-chat .chat-reasoning > summary {
     cursor: pointer;
     user-select: none;
     list-style: none;
 }
 
 hn-agent-chat .chat-toolcalls > summary::-webkit-details-marker,
-hn-agent-chat .chat-toolcall > summary::-webkit-details-marker {
+hn-agent-chat .chat-toolcall > summary::-webkit-details-marker,
+hn-agent-chat .chat-reasoning > summary::-webkit-details-marker {
     display: none;
 }
 
@@ -192,7 +194,8 @@ hn-agent-chat .chat-toolcall-toggle {
 }
 
 hn-agent-chat .chat-toolcalls[open] > summary > .chat-toolcall-toggle,
-hn-agent-chat .chat-toolcall[open] > summary > .chat-toolcall-toggle {
+hn-agent-chat .chat-toolcall[open] > summary > .chat-toolcall-toggle,
+hn-agent-chat .chat-reasoning[open] > summary > .chat-toolcall-toggle {
     transform: rotate(180deg);
 }
 
