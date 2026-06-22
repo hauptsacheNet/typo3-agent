@@ -35,6 +35,10 @@ final class FormEngineProvider
             return;
         }
 
+        if (empty($GLOBALS['TCA'][$table]['ctrl']['versioningWS'])) {
+            return;
+        }
+
         $record = BackendUtility::getRecord($table, $uid);
         if ($record === null) {
             return;
