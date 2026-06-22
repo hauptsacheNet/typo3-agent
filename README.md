@@ -181,7 +181,10 @@ XLSX, ODT, ODP, ODS, PDF) and store a chosen one in fileadmin:
 OOXML/ODF images are read directly from the ZIP media folders. PDF images are
 extracted both when stored as embedded JPEGs and when stored as raw raster
 samples — 8-bit grayscale/RGB streams are reconstructed into real PNGs (CMYK,
-indexed and sub-byte-depth images are skipped). Extracted originals are cached transiently under
+indexed and sub-byte-depth images are skipped). For full colorspace coverage,
+set the `pdfImagesPath` extension setting to poppler's `pdfimages` binary: when
+configured it is used for PDFs (handling CMYK/indexed/JPEG uniformly), falling
+back to the built-in extractor automatically on any failure. Extracted originals are cached transiently under
 `var/transient/` (keyed by the source document), so picking/storing reuses them
 without re-parsing.
 

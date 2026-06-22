@@ -8,7 +8,10 @@ use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerAwareTrait;
 use Smalot\PdfParser\Parser as PdfParser;
 use Smalot\PdfParser\PDFObject;
+use Symfony\Component\Process\Process;
+use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
 use TYPO3\CMS\Core\Resource\File;
+use TYPO3\CMS\Core\Utility\GeneralUtility;
 
 /**
  * Extracts the *images embedded inside* a document — the binary originals —
@@ -18,8 +21,12 @@ use TYPO3\CMS\Core\Resource\File;
  * embedded raster images sit as plain files under well-known media folders
  * (`word|ppt|xl/media/`, `Pictures/`). A direct ZIP scan is far more reliable
  * than walking the PhpOffice element trees. PDFs are handled best-effort via
- * smalot/pdfparser's image XObjects — streams that aren't standalone raster
- * images (FlateDecode pixel samples, EMF/WMF/SVG, …) are silently skipped.
+ * smalot/pdfparser's image XObjects: standalone JPEGs are used as-is and 8-bit
+ * gray/RGB raster is reconstructed into PNGs; layouts we can't rebuild (CMYK,
+ * indexed, sub-byte depths, EMF/WMF/SVG, …) are skipped. When the optional
+ * `pdfImagesPath` extension setting points at poppler's `pdfimages` binary, it
+ * is used for PDFs instead (full colorspace coverage), with automatic fallback
+ * to the built-in path on any failure.
  *
  * Ordering is stable (ZIP: entry name; PDF: object order) because the index is
  * the handle the user picks and ExtractedImageStore keys on.
@@ -27,6 +34,11 @@ use TYPO3\CMS\Core\Resource\File;
 class DocumentImageExtractorService implements LoggerAwareInterface
 {
     use LoggerAwareTrait;
+
+    public function __construct(
+        private readonly ExtensionConfiguration $extensionConfiguration,
+    ) {
+    }
 
     /** Hard cap on the number of images returned from one document. */
     public const MAX_IMAGES = 50;
@@ -108,6 +120,17 @@ class DocumentImageExtractorService implements LoggerAwareInterface
      */
     private function extractFromPdf(File $file): array
     {
+        // Prefer poppler's pdfimages when an admin has configured it: it covers
+        // colorspaces the built-in extractor skips (CMYK, indexed, …). Any
+        // failure returns null and we fall through to the built-in path below.
+        $binary = $this->pdfImagesBinary();
+        if ($binary !== null) {
+            $result = $this->extractWithPdfImages($file->getForLocalProcessing(false), $binary);
+            if ($result !== null) {
+                return $result;
+            }
+        }
+
         try {
             $parser = new PdfParser();
             $document = $parser->parseContent($file->getContents());
@@ -183,6 +206,92 @@ class DocumentImageExtractorService implements LoggerAwareInterface
             ]);
         }
         return $images;
+    }
+
+    /**
+     * Resolve the configured poppler `pdfimages` binary path, or null when the
+     * `pdfImagesPath` extension setting is empty/unreadable (use built-in path).
+     */
+    private function pdfImagesBinary(): ?string
+    {
+        try {
+            $config = $this->extensionConfiguration->get('agent');
+        } catch (\Throwable) {
+            return null;
+        }
+        $path = is_array($config) ? trim((string)($config['pdfImagesPath'] ?? '')) : '';
+        return $path !== '' ? $path : null;
+    }
+
+    /**
+     * Extract embedded images via poppler's `pdfimages -png`, which renders
+     * every image (JPEG, CMYK, indexed, raw raster, …) to a PNG. Returns null
+     * on any failure so the caller can fall back to the built-in extractor.
+     *
+     * @return list<array{bytes: string, mime: string, sourceName: string, width: ?int, height: ?int}>|null
+     */
+    private function extractWithPdfImages(string $pdfPath, string $binary): ?array
+    {
+        if (!is_executable($binary)) {
+            $this->logger?->warning('pdfimages binary is not executable, falling back', ['binary' => $binary]);
+            return null;
+        }
+
+        // pdfimages writes <prefix>-NNN.png; tempnam() only gives us a unique
+        // name, so drop the empty file it creates and reuse the name as prefix.
+        $prefix = GeneralUtility::tempnam('agent_pdfimages_');
+        @unlink($prefix);
+
+        try {
+            $process = new Process([$binary, '-png', $pdfPath, $prefix]);
+            $process->setTimeout(60.0);
+            $process->run();
+            if (!$process->isSuccessful()) {
+                $this->logger?->warning('pdfimages failed, falling back', [
+                    'exitCode' => $process->getExitCode(),
+                    'stderr' => $process->getErrorOutput(),
+                ]);
+                return null;
+            }
+
+            $files = glob($prefix . '-*.png') ?: [];
+            sort($files, SORT_STRING); // stable, page/position order
+
+            $images = [];
+            $idx = 0;
+            foreach ($files as $file) {
+                if (count($images) >= self::MAX_IMAGES) {
+                    break;
+                }
+                $bytes = @file_get_contents($file);
+                if ($bytes === false || strlen($bytes) < self::MIN_IMAGE_BYTES) {
+                    continue;
+                }
+                $detected = $this->detectImage($bytes);
+                if ($detected === null) {
+                    continue;
+                }
+                $idx++;
+                $images[] = [
+                    'bytes' => $bytes,
+                    'mime' => $detected['mime'],
+                    'sourceName' => sprintf('pdf-image-%d.%s', $idx, $this->extensionFor($detected['mime'])),
+                    'width' => $detected['width'],
+                    'height' => $detected['height'],
+                ];
+            }
+            return $images;
+        } catch (\Throwable $e) {
+            $this->logger?->warning('pdfimages extraction error, falling back', ['exception' => $e->getMessage()]);
+            return null;
+        } finally {
+            foreach (glob($prefix . '-*.png') ?: [] as $file) {
+                @unlink($file);
+            }
+            if (is_file($prefix)) {
+                @unlink($prefix);
+            }
+        }
     }
 
     /**

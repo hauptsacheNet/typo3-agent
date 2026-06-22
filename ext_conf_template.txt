@@ -15,3 +15,6 @@ maxIterations = 20
 
 # cat=basic/agent/060; type=options[off,low,medium,high]; label=Reasoning Effort: Stärke des Reasonings (off = deaktiviert)
 reasoningEffort = medium
+
+# cat=basic/binaries/070; type=string; label=pdfimages Pfad: Voller Pfad zur poppler-Binary "pdfimages" für PDF-Bildextraktion (leer = eingebauter PHP-Extractor)
+pdfImagesPath =

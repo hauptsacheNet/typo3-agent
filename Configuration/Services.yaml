@@ -12,3 +12,6 @@ services:
 
   Hn\Agent\Service\AgentService:
     public: true
+
+  Hn\Agent\Service\DocumentImageExtractorService:
+    public: true
