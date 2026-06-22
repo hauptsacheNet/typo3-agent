@@ -172,3 +172,27 @@ hn-agent-chat .chat-attachment-warn {
     margin-bottom: .5rem;
 }
 
+hn-agent-chat .chat-toolcalls > summary,
+hn-agent-chat .chat-toolcall > summary {
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+}
+
+hn-agent-chat .chat-toolcalls > summary::-webkit-details-marker,
+hn-agent-chat .chat-toolcall > summary::-webkit-details-marker {
+    display: none;
+}
+
+hn-agent-chat .chat-toolcall-toggle {
+    display: inline-flex;
+    align-items: center;
+    transition: transform .15s ease-in-out;
+    color: var(--bs-secondary-color, #6c757d);
+}
+
+hn-agent-chat .chat-toolcalls[open] > summary > .chat-toolcall-toggle,
+hn-agent-chat .chat-toolcall[open] > summary > .chat-toolcall-toggle {
+    transform: rotate(180deg);
+}
+

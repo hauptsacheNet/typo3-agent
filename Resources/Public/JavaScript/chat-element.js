@@ -323,10 +323,15 @@ let ChatElement = class extends LitElement {
     const running = tcs.some((tc) => tc.result === void 0);
     return html`
       <details class="chat-toolcalls mt-2 p-2 rounded border bg-body-tertiary small">
-        <summary class="d-flex align-items-center gap-2">
-          <typo3-backend-icon identifier="actions-cog" size="small"></typo3-backend-icon>
-          <span><strong>${count}</strong> ${noun}</span>
-          ${running ? html`<thinking-indicator class="ms-1"></thinking-indicator>` : nothing}
+        <summary class="d-flex align-items-center justify-content-between gap-2">
+          <span class="d-flex align-items-center gap-2">
+            <typo3-backend-icon identifier="actions-cog" size="small"></typo3-backend-icon>
+            <span><strong>${count}</strong> ${noun}</span>
+            ${running ? html`<thinking-indicator class="ms-1"></thinking-indicator>` : nothing}
+          </span>
+          <span class="chat-toolcall-toggle" aria-hidden="true">
+            <typo3-backend-icon identifier="actions-chevron-up" size="small"></typo3-backend-icon>
+          </span>
         </summary>
         <div class="d-flex flex-column gap-2 mt-2">
           ${tcs.map((tc) => this.renderToolCall(tc))}
@@ -340,8 +345,11 @@ let ChatElement = class extends LitElement {
     const resultMedia = hasResult ? this.contentMedia(tc.result) : [];
     return html`
       <details class="chat-toolcall p-2 rounded border bg-body font-monospace small">
-        <summary>
-          ${tc.function?.name ?? "unknown"}
+        <summary class="d-flex align-items-center justify-content-between gap-2">
+          <span>${tc.function?.name ?? "unknown"}</span>
+          <span class="chat-toolcall-toggle" aria-hidden="true">
+            <typo3-backend-icon identifier="actions-chevron-up" size="small"></typo3-backend-icon>
+          </span>
         </summary>
         <div class="py-3">
 
