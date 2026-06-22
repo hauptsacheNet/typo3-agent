@@ -41,7 +41,7 @@ class AgentInstructionRepository
      * "Active" means not deleted, not hidden, and within the optional
      * start/end time window.
      *
-     * @return array<int, array{uid:int, title:string, description:string, instruction:string, mode:string}>
+     * @return array<int, array{uid:int, pid:int, title:string, description:string, instruction:string, mode:string}>
      */
     public function findActive(): array
     {
@@ -51,7 +51,7 @@ class AgentInstructionRepository
     /**
      * Active instructions with mode "always" — injected into the system prompt.
      *
-     * @return array<int, array{uid:int, title:string, description:string, instruction:string, mode:string}>
+     * @return array<int, array{uid:int, pid:int, title:string, description:string, instruction:string, mode:string}>
      */
     public function findAlways(): array
     {
@@ -62,7 +62,7 @@ class AgentInstructionRepository
      * Active instructions with mode "on_demand" — only indexed in the prompt
      * and fetched on demand via the GetInstruction tool.
      *
-     * @return array<int, array{uid:int, title:string, description:string, instruction:string, mode:string}>
+     * @return array<int, array{uid:int, pid:int, title:string, description:string, instruction:string, mode:string}>
      */
     public function findOnDemand(): array
     {
@@ -74,7 +74,7 @@ class AgentInstructionRepository
      * inactive UIDs are silently dropped.
      *
      * @param int[] $uids
-     * @return array<int, array{uid:int, title:string, description:string, instruction:string, mode:string}>
+     * @return array<int, array{uid:int, pid:int, title:string, description:string, instruction:string, mode:string}>
      */
     public function findByUids(array $uids): array
     {
@@ -93,7 +93,7 @@ class AgentInstructionRepository
      * Keyword search across title / description / instruction of active
      * instructions, ordered by sorting.
      *
-     * @return array<int, array{uid:int, title:string, description:string, instruction:string, mode:string}>
+     * @return array<int, array{uid:int, pid:int, title:string, description:string, instruction:string, mode:string}>
      */
     public function searchActive(string $query): array
     {
@@ -117,8 +117,8 @@ class AgentInstructionRepository
      * Fetch active instructions, optionally filtered by a predicate on the
      * mapped row.
      *
-     * @param null|callable(array{uid:int, title:string, description:string, instruction:string, mode:string}): bool $filter
-     * @return array<int, array{uid:int, title:string, description:string, instruction:string, mode:string}>
+     * @param null|callable(array{uid:int, pid:int, title:string, description:string, instruction:string, mode:string}): bool $filter
+     * @return array<int, array{uid:int, pid:int, title:string, description:string, instruction:string, mode:string}>
      */
     private function fetch(?callable $filter = null): array
     {
@@ -144,7 +144,7 @@ class AgentInstructionRepository
             ->add(new EndTimeRestriction());
 
         return $qb
-            ->select('uid', 'title', 'description', 'instruction', 'mode')
+            ->select('uid', 'pid', 'title', 'description', 'instruction', 'mode')
             ->from(self::TABLE)
             ->orderBy('sorting', 'ASC');
     }
@@ -154,7 +154,7 @@ class AgentInstructionRepository
      * empty body.
      *
      * @param array<int, array<string, mixed>> $rows
-     * @return array<int, array{uid:int, title:string, description:string, instruction:string, mode:string}>
+     * @return array<int, array{uid:int, pid:int, title:string, description:string, instruction:string, mode:string}>
      */
     private function mapRows(array $rows): array
     {
@@ -167,6 +167,7 @@ class AgentInstructionRepository
             $mode = (string)($row['mode'] ?? self::MODE_ALWAYS);
             $instructions[] = [
                 'uid' => (int)$row['uid'],
+                'pid' => (int)($row['pid'] ?? 0),
                 'title' => (string)($row['title'] ?? ''),
                 'description' => (string)($row['description'] ?? ''),
                 'instruction' => $instruction,

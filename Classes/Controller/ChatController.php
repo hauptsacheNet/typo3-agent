@@ -86,9 +86,33 @@ class ChatController
         $collapsed = [
             'current' => (bool)($collapsedTables['agent-tasks-current'] ?? false),
             'subpages' => (bool)($collapsedTables['agent-tasks-subpages'] ?? false),
+            'instructions' => (bool)($collapsedTables['agent-instructions'] ?? false),
         ];
 
         $uploadContext = $this->promptRenderer->getUploadContext($pageId, '', 'hn-agent-new-task');
+
+        $instructions = $this->instructionRepository->findActive();
+        $canEditInstructions = (bool)$GLOBALS['BE_USER']->check('tables_modify', 'tx_agent_instruction');
+        if ($canEditInstructions) {
+            $returnUrl = (string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat', ['id' => $pageId]);
+            foreach ($instructions as &$instruction) {
+                $instruction['editUri'] = (string)$this->uriBuilder->buildUriFromRoute('record_edit', [
+                    'edit' => ['tx_agent_instruction' => [$instruction['uid'] => 'edit']],
+                    'returnUrl' => $returnUrl,
+                ]);
+            }
+            unset($instruction);
+            // Place new records next to existing ones; fall back to the current page.
+            $newPid = $instructions[0]['pid'] ?? $pageId;
+            $newInstructionUri = (string)$this->uriBuilder->buildUriFromRoute('record_edit', [
+                'edit' => ['tx_agent_instruction' => [$newPid => 'new']],
+                'returnUrl' => $returnUrl,
+            ]);
+        } else {
+            $newInstructionUri = '';
+        }
+
+        $workspace = $this->getActiveWorkspaceInfo();
 
         return $view->assignMultiple([
             'tasks' => $tasks,
@@ -96,12 +120,15 @@ class ChatController
             'pageId' => $pageId,
             'newUri' => (string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat.new', ['id' => $pageId]),
             'placeholder' => $placeholder,
-            'workspace' => $this->getActiveWorkspaceInfo(),
+            'workspace' => $workspace,
             'collapsed' => $collapsed,
             'defaultUploadFolder' => $uploadContext['defaultUploadFolder'],
             'fileBrowserUri' => $uploadContext['fileBrowserUri'],
             'preflightUri' => $uploadContext['preflightUri'],
-            'instructions' => $this->instructionRepository->findActive(),
+            'instructions' => $instructions,
+            'canEditInstructions' => $canEditInstructions,
+            'newInstructionUri' => $newInstructionUri,
+            'isLiveWorkspace' => (bool)$workspace['isLive'],
         ])->renderResponse('Chat/Index');
     }
 

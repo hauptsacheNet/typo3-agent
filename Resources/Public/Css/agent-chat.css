@@ -108,27 +108,10 @@ hn-agent-chat .chat-attachment-warn {
     line-height: 1;
 }
 
-/* Editorial instructions panel (Chat index + show) */
-.hn-agent-instructions > summary {
-    cursor: pointer;
-    font-weight: 600;
-    list-style-position: inside;
-}
-
-.hn-agent-instructions > summary .badge {
-    margin-left: .5em;
-}
-
-/* TYPO3's .card-header sets padding-bottom: 0, assuming a .card-body
-   follows. When the <details> is collapsed, the body is hidden but still
-   the last sibling, so the summary looks bottom-cramped. */
-.hn-agent-instructions:not([open]) > summary.card-header {
-    padding-bottom: var(--typo3-card-padding);
-}
-
-.hn-agent-instruction:not(:last-child) {
-    border-bottom: 1px solid var(--bs-border-color, rgba(0, 0, 0, 0.1));
-    padding-bottom: .5rem;
+/* Rich-text rendering inside the instruction-content modal: drop the
+   trailing paragraph margin so the modal body doesn't end with empty space. */
+.hn-instruction-content > :last-child {
+    margin-bottom: 0;
 }
 
 /* Workspace changes drawer (Chat show) */

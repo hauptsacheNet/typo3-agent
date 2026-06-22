@@ -1,4 +1,5 @@
 <html xmlns:f="http://typo3.org/ns/TYPO3/CMS/Fluid/ViewHelpers"
+      xmlns:core="http://typo3.org/ns/TYPO3/CMS/Core/ViewHelpers"
       data-namespace-typo3-fluid="true">
 <div class="recordlist">
     <div class="recordlist-heading">
@@ -14,9 +15,9 @@
                         data-recordlist-action="toggle"
                         data-bs-toggle="collapse"
                         data-bs-target="#recordlist-{identifier}">
-                    <typo3-backend-icon
+                    <core:icon
                         identifier="{f:if(condition: collapsed, then: 'actions-view-list-expand', else: 'actions-view-list-collapse')}"
-                        size="small"></typo3-backend-icon>
+                        size="small"/>
                 </button>
             </div>
         </div>

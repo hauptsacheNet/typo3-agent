@@ -1,40 +1,183 @@
 <html xmlns:f="http://typo3.org/ns/TYPO3/CMS/Fluid/ViewHelpers"
+      xmlns:core="http://typo3.org/ns/TYPO3/CMS/Core/ViewHelpers"
       data-namespace-typo3-fluid="true">
 <f:comment>
-    Collapsible, read-only view of the editor-maintained agent instructions
-    that inform the agent. "Always" instructions are injected into the system
-    prompt; "on-demand" instructions are loaded by the agent via the
-    GetInstruction tool when relevant. Editing happens via the
-    tx_agent_instruction records in the List module (restricted to the
-    permitted backend group). The body is rich text, rendered via
+    Editor-maintained agent instructions, rendered with the same recordlist
+    table pattern as TaskTable.html so the heading, collapse toggle, and
+    persistence-via-BE-user-uc all work out of the box (handled by
+    @typo3/backend/recordlist.js, imported in Chat/Index.html). The
+    persistent collapsed state is stored under
+    BE_USER->uc['moduleData']['web_list']['collapsedTables']['agent-instructions'].
+
+    "Always" instructions are injected into every system prompt; "on-demand"
+    instructions are loaded by the agent via the GetInstruction tool when
+    relevant. Editors with modify rights on tx_agent_instruction see an edit
+    button per row plus a "+ New instruction" action in the heading; both
+    open FormEngine (record_edit) with a returnUrl back to the AI Tasks
+    module. Without that right, the action column is dropped entirely.
+
+    Empty state: no instructions and the user may create them → just a hint
+    plus the "+ New instruction" button, no empty table shell. No
+    instructions and no edit rights → nothing renders.
+
+    Instruction body is rich text from the RTE; rendered via
     f:transform.html (resolves t3:// links) piped through f:sanitize.html
-    (XSS-safe in backend context). Renders nothing when there are no
-    instructions.
+    (XSS-safe in backend context).
 </f:comment>
 <f:if condition="{instructions}">
-    <details class="hn-agent-instructions card mb-3">
-        <summary class="card-header">
-            <f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.heading"/>
-            <span class="badge badge-info">{instructions -> f:count()}</span>
-        </summary>
-        <div class="card-body">
-            <p class="text-muted">
-                <f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.intro"/>
-            </p>
-            <f:for each="{instructions}" as="instruction">
-                <div class="hn-agent-instruction mb-2">
-                    <strong>{instruction.title}</strong>
-                    <f:if condition="{instruction.mode} == 'on_demand'">
-                        <f:then><span class="badge badge-info"><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.badge.onDemand"/></span></f:then>
-                        <f:else><span class="badge badge-default"><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.badge.always"/></span></f:else>
-                    </f:if>
-                    <f:if condition="{instruction.description}">
-                        <div class="text-muted"><em>{instruction.description}</em></div>
-                    </f:if>
-                    <div>{instruction.instruction -> f:transform.html() -> f:sanitize.html()}</div>
+    <f:then>
+        <div class="recordlist">
+            <div class="recordlist-heading">
+                <div class="recordlist-heading-row">
+                    <div class="recordlist-heading-title">
+                        <f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.heading"/>
+                        (<span>{instructions -> f:count()}</span>)
+                    </div>
+                    <div class="recordlist-heading-actions">
+                        <f:if condition="{canEditInstructions}">
+                            <f:if condition="{isLiveWorkspace}">
+                                <f:then>
+                                    <a href="{newInstructionUri}"
+                                       class="btn btn-default btn-sm"
+                                       title="{f:translate(key: 'LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.action.new')}">
+                                        <core:icon identifier="actions-add" size="small"/>
+                                        <f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.action.new"/>
+                                    </a>
+                                </f:then>
+                                <f:else>
+                                    <span class="d-inline-block"
+                                          tabindex="0"
+                                          title="{f:translate(key: 'LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.action.disabled.workspace')}">
+                                        <button type="button"
+                                                class="btn btn-default btn-sm disabled"
+                                                disabled="disabled">
+                                            <core:icon identifier="actions-add" size="small"/>
+                                            <f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.action.new"/>
+                                        </button>
+                                    </span>
+                                </f:else>
+                            </f:if>
+                        </f:if>
+                        <button type="button"
+                                class="btn btn-default btn-sm t3js-toggle-recordlist"
+                                aria-expanded="{f:if(condition: collapsed, then: 'false', else: 'true')}"
+                                data-table="{identifier}"
+                                data-recordlist-action="toggle"
+                                data-bs-toggle="collapse"
+                                data-bs-target="#recordlist-{identifier}">
+                            <core:icon
+                                identifier="{f:if(condition: collapsed, then: 'actions-view-list-expand', else: 'actions-view-list-collapse')}"
+                                size="small"/>
+                        </button>
+                    </div>
                 </div>
-            </f:for>
+            </div>
+            <div class="collapse{f:if(condition: collapsed, else: ' show')}"
+                 data-state="{f:if(condition: collapsed, then: 'collapsed', else: 'expanded')}"
+                 id="recordlist-{identifier}">
+                <div class="table-fit">
+                    <table class="table table-striped table-hover">
+                        <colgroup>
+                            <col>
+                            <col style="width: 110px">
+                            <col style="width: 240px">
+                            <col style="width: 130px">
+                            <f:if condition="{canEditInstructions}"><col style="width: 60px"></f:if>
+                        </colgroup>
+                        <thead>
+                            <tr>
+                                <th><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.column.name"/></th>
+                                <th><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.column.mode"/></th>
+                                <th><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.column.whenToUse"/></th>
+                                <th><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.column.content"/></th>
+                                <f:if condition="{canEditInstructions}"><th></th></f:if>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <f:for each="{instructions}" as="instruction">
+                                <tr>
+                                    <td><strong>{instruction.title}</strong></td>
+                                    <td>
+                                        <f:if condition="{instruction.mode} == 'on_demand'">
+                                            <f:then><span class="badge badge-info"><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.badge.onDemand"/></span></f:then>
+                                            <f:else><span class="badge badge-default"><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.badge.always"/></span></f:else>
+                                        </f:if>
+                                    </td>
+                                    <td class="text-muted"><em>{instruction.description}</em></td>
+                                    <td>
+                                        <button type="button"
+                                                class="btn btn-default btn-sm hn-instruction-show"
+                                                title="{f:translate(key: 'LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.action.show')}"
+                                                data-content-target="instruction-content-{instruction.uid}"
+                                                data-modal-title="{instruction.title}"
+                                                data-close-label="{f:translate(key: 'LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.modal.close')}">
+                                            <core:icon identifier="actions-eye" size="small"/>
+                                            <f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.action.show"/>
+                                        </button>
+                                        <template id="instruction-content-{instruction.uid}">{instruction.instruction -> f:transform.html() -> f:sanitize.html()}</template>
+                                    </td>
+                                    <f:if condition="{canEditInstructions}">
+                                        <td>
+                                            <f:if condition="{isLiveWorkspace}">
+                                                <f:then>
+                                                    <a href="{instruction.editUri}"
+                                                       class="btn btn-default btn-sm"
+                                                       title="{f:translate(key: 'LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.action.edit')}">
+                                                        <core:icon identifier="actions-open" size="small"/>
+                                                    </a>
+                                                </f:then>
+                                                <f:else>
+                                                    <span class="d-inline-block"
+                                                          tabindex="0"
+                                                          title="{f:translate(key: 'LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.action.disabled.workspace')}">
+                                                        <button type="button"
+                                                                class="btn btn-default btn-sm disabled"
+                                                                disabled="disabled">
+                                                            <core:icon identifier="actions-open" size="small"/>
+                                                        </button>
+                                                    </span>
+                                                </f:else>
+                                            </f:if>
+                                        </td>
+                                    </f:if>
+                                </tr>
+                            </f:for>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
-    </details>
+    </f:then>
+    <f:else>
+        <f:if condition="{canEditInstructions}">
+            <div class="callout callout-info mb-3">
+                <div class="callout-body">
+                    <p class="mb-2">
+                        <f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.empty"/>
+                    </p>
+                    <f:if condition="{isLiveWorkspace}">
+                        <f:then>
+                            <a href="{newInstructionUri}" class="btn btn-default btn-sm">
+                                <core:icon identifier="actions-add" size="small"/>
+                                <f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.action.new"/>
+                            </a>
+                        </f:then>
+                        <f:else>
+                            <span class="d-inline-block"
+                                  tabindex="0"
+                                  title="{f:translate(key: 'LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.action.disabled.workspace')}">
+                                <button type="button"
+                                        class="btn btn-default btn-sm disabled"
+                                        disabled="disabled">
+                                    <core:icon identifier="actions-add" size="small"/>
+                                    <f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.action.new"/>
+                                </button>
+                            </span>
+                        </f:else>
+                    </f:if>
+                </div>
+            </div>
+        </f:if>
+    </f:else>
 </f:if>
 </html>

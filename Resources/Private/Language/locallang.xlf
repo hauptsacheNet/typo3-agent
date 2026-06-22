@@ -132,6 +132,36 @@
             <trans-unit id="instructions.badge.onDemand" resname="instructions.badge.onDemand">
                 <source>on-demand</source>
             </trans-unit>
+            <trans-unit id="instructions.action.new" resname="instructions.action.new">
+                <source>New instruction</source>
+            </trans-unit>
+            <trans-unit id="instructions.action.edit" resname="instructions.action.edit">
+                <source>Edit instruction</source>
+            </trans-unit>
+            <trans-unit id="instructions.empty" resname="instructions.empty">
+                <source>No instructions yet. Create one to give the agent reusable guidance (tone of voice, wording rules, how to handle specific content).</source>
+            </trans-unit>
+            <trans-unit id="instructions.column.name" resname="instructions.column.name">
+                <source>Name</source>
+            </trans-unit>
+            <trans-unit id="instructions.column.mode" resname="instructions.column.mode">
+                <source>Mode</source>
+            </trans-unit>
+            <trans-unit id="instructions.column.whenToUse" resname="instructions.column.whenToUse">
+                <source>When to use</source>
+            </trans-unit>
+            <trans-unit id="instructions.column.content" resname="instructions.column.content">
+                <source>Content</source>
+            </trans-unit>
+            <trans-unit id="instructions.action.show" resname="instructions.action.show">
+                <source>Show</source>
+            </trans-unit>
+            <trans-unit id="instructions.modal.close" resname="instructions.modal.close">
+                <source>Close</source>
+            </trans-unit>
+            <trans-unit id="instructions.action.disabled.workspace" resname="instructions.action.disabled.workspace">
+                <source>Only editable in the Live workspace</source>
+            </trans-unit>
         </body>
     </file>
 </xliff>
