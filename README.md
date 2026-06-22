@@ -161,6 +161,28 @@ The extension uses the `ToolRegistry` from `hn/typo3-mcp-server` to access TYPO3
 
 The `messages` JSON field in each task record stores the full OpenAI messages array — the complete conversation state. This enables resumability and future chat-like interfaces.
 
+### Extracting images from documents
+
+The agent can pull the images embedded inside an uploaded document (DOCX, PPTX,
+XLSX, ODT, ODP, ODS, PDF) and store a chosen one in fileadmin:
+
+- **`ExtractDocumentImages`** lists the embedded images and shows numbered
+  thumbnails in the chat. To keep the conversation small, the thumbnails are
+  delivered as a *UI-only* channel (MCP `annotations.audience = [user]`) that the
+  chat renders but `AgentService::serializeForLlm()` strips — so they never
+  re-enter the model context on later turns. The model itself only receives a
+  short text index.
+- The editor picks one conversationally ("use #2"); **`StoreImageInFileadmin`**
+  then writes that single image into fileadmin (the editor's default upload
+  folder, or a given one) and returns the new `sys_file` UID for further use.
+- **`ViewExtractedImage`** is an on-demand escape hatch that loads one specific
+  extracted image into the model context when the agent genuinely needs to see it.
+
+OOXML/ODF images are read directly from the ZIP media folders; PDF embedded-image
+extraction is best-effort. Extracted originals are cached transiently under
+`var/transient/` (keyed by the source document), so picking/storing reuses them
+without re-parsing.
+
 ## Development
 
 Run the functional tests:

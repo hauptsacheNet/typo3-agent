@@ -337,8 +337,9 @@ let ChatElement = class extends LitElement {
     const hasResult = tc.result !== void 0;
     const resultText = hasResult ? this.contentText(tc.result) : "";
     const resultMedia = hasResult ? this.contentMedia(tc.result) : [];
+    const uiMedia = tc.uiMedia ?? [];
     return html`
-      <details class="chat-toolcall p-2 rounded border bg-body font-monospace small">
+      <details class="chat-toolcall p-2 rounded border bg-body font-monospace small" ?open=${uiMedia.length > 0}>
         <summary>
           ${tc.function?.name ?? "unknown"}
         </summary>
@@ -353,12 +354,26 @@ let ChatElement = class extends LitElement {
                   <strong>Result</strong><br/>
                   <pre class="m-0">${resultText}</pre>
                   ${resultMedia.map((b) => this.renderResultMedia(b))}
+                  ${uiMedia.length > 0 ? this.renderUiMediaGallery(uiMedia) : nothing}
                 </div>` : html`
                 <div class="chat-toolcall-running text-muted">
                   <thinking-indicator label="Executing"></thinking-indicator>
                 </div>`}
         </div>
       </details>
+    `;
+  }
+  renderUiMediaGallery(items) {
+    return html`
+      <div class="chat-extracted-images d-flex flex-wrap gap-2 mt-2">
+        ${items.map((item) => html`
+          <figure class="m-0 text-center">
+            <img src=${item.url} alt=${item.label ?? ""} class="rounded border"
+                 style="max-width:160px; max-height:160px; display:block;"/>
+            ${item.label ? html`<figcaption class="small text-muted mt-1">${item.label}</figcaption>` : nothing}
+          </figure>
+        `)}
+      </div>
     `;
   }
   renderResultMedia(block) {
@@ -684,13 +699,14 @@ let ChatElement = class extends LitElement {
       case "tool_result": {
         const toolCallId = data.tool_call_id;
         const content = data.content;
+        const uiMedia = Array.isArray(data.ui_media) ? data.ui_media : void 0;
         this.messages = this.messages.map((msg) => {
           if (msg.role !== "assistant" || !msg.tool_calls) return msg;
           if (!msg.tool_calls.some((tc) => tc.id === toolCallId)) return msg;
           return {
             ...msg,
             tool_calls: msg.tool_calls.map(
-              (tc) => tc.id === toolCallId ? { ...tc, result: content } : tc
+              (tc) => tc.id === toolCallId ? { ...tc, result: content, ...uiMedia && uiMedia.length ? { uiMedia } : {} } : tc
             )
           };
         });
@@ -726,9 +742,13 @@ let ChatElement = class extends LitElement {
    */
   mergeToolResults(msgs) {
     const resultMap = /* @__PURE__ */ new Map();
+    const uiMediaMap = /* @__PURE__ */ new Map();
     for (const msg of msgs) {
       if (msg.role === "tool" && msg.tool_call_id && msg.content !== void 0) {
         resultMap.set(msg.tool_call_id, msg.content);
+        if (Array.isArray(msg._ui_media) && msg._ui_media.length > 0) {
+          uiMediaMap.set(msg.tool_call_id, msg._ui_media);
+        }
       }
     }
     if (resultMap.size === 0) return [...msgs];
@@ -742,7 +762,11 @@ let ChatElement = class extends LitElement {
           ...msg,
           tool_calls: msg.tool_calls.map((tc) => {
             const result = tc.id ? resultMap.get(tc.id) : void 0;
-            return result !== void 0 ? { ...tc, result } : tc;
+            const uiMedia = tc.id ? uiMediaMap.get(tc.id) : void 0;
+            let out = tc;
+            if (result !== void 0) out = { ...out, result };
+            if (uiMedia !== void 0) out = { ...out, uiMedia };
+            return out;
           })
         });
       } else {

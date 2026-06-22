@@ -10,6 +10,7 @@
 # build artifacts
 /.build
 /dist
+/typo3temp
 /Resources/Private/PHP/vendor
 /Resources/Private/PHP/composer.lock
 

@@ -258,17 +258,27 @@ class AgentService implements LoggerAwareInterface
                     // becomes a block array [text, image_url|file] — the same
                     // shape the LLM consumes. The UI's tool-result renderer
                     // extracts the text portion via a small helper.
-                    $messages[] = [
+                    $toolMessage = [
                         'role' => 'tool',
                         'tool_call_id' => $toolCallId,
                         'content' => $this->buildToolContent($toolResult['text'], $toolResult['media']),
                     ];
+                    // UI-only media (e.g. ExtractDocumentImages thumbnails): shown
+                    // in the chat but kept out of the model context. Stored in a
+                    // separate field that serializeForLlm() strips, so it never
+                    // re-inflates the conversation on later turns.
+                    $uiMedia = $this->buildUiMedia($toolResult['uiMedia'] ?? []);
+                    if ($uiMedia !== []) {
+                        $toolMessage['_ui_media'] = $uiMedia;
+                    }
+                    $messages[] = $toolMessage;
 
                     if ($progress !== null) {
                         $progress('tool_result', [
                             'tool_call_id' => $toolCallId,
                             'tool_name' => $toolName,
                             'content' => $toolResult['text'],
+                            'ui_media' => $uiMedia,
                         ]);
                     }
                 }
@@ -698,6 +708,11 @@ class AgentService implements LoggerAwareInterface
     {
         $out = [];
         foreach ($messages as $message) {
+            // UI-only media is never sent to the model — this single strip is
+            // what keeps extracted-image thumbnails from re-inflating context.
+            if (is_array($message)) {
+                unset($message['_ui_media']);
+            }
             if (!is_array($message) || empty($message['attachments']) || !is_array($message['attachments'])) {
                 if (is_array($message) && array_key_exists('attachments', $message)) {
                     unset($message['attachments']);
@@ -745,6 +760,32 @@ class AgentService implements LoggerAwareInterface
             }
         }
         return $blocks;
+    }
+
+    /**
+     * Build the UI-only preview lane for a tool message: data-URI thumbnails
+     * (optionally labelled) that the chat renders but the model never sees.
+     *
+     * @param list<array{mime: string, data: string, label?: string}> $media
+     * @return list<array{url: string, label?: string}>
+     */
+    private function buildUiMedia(array $media): array
+    {
+        $out = [];
+        foreach ($media as $item) {
+            $data = (string)($item['data'] ?? '');
+            if ($data === '') {
+                continue;
+            }
+            $mime = (string)($item['mime'] ?? 'image/png');
+            $entry = ['url' => 'data:' . $mime . ';base64,' . $data];
+            $label = (string)($item['label'] ?? '');
+            if ($label !== '') {
+                $entry['label'] = $label;
+            }
+            $out[] = $entry;
+        }
+        return $out;
     }
 
 }

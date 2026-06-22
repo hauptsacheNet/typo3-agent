@@ -20,6 +20,9 @@ interface ChatMessage {
   tool_call_id?: string;
   reasoning?: string;
   reasoning_details?: unknown[];
+  // UI-only preview thumbnails (e.g. ExtractDocumentImages); rendered in the
+  // chat but stripped from what is sent to the model. Persisted on tool messages.
+  _ui_media?: UiMediaItem[];
 }
 
 type ContentBlock =
@@ -27,10 +30,17 @@ type ContentBlock =
   | {type: 'image_url'; image_url: {url: string}}
   | {type: 'file'; file: {filename: string; file_data: string}};
 
+// A UI-only preview image, optionally labelled (e.g. "#2 — logo.png").
+interface UiMediaItem {
+  url: string;
+  label?: string;
+}
+
 interface ToolCall {
   id?: string;
   function: {name: string; arguments: string};
   result?: string | ContentBlock[];
+  uiMedia?: UiMediaItem[];
 }
 
 interface TrackedChange {
@@ -502,8 +512,11 @@ export class ChatElement extends LitElement {
     const hasResult = tc.result !== undefined;
     const resultText = hasResult ? this.contentText(tc.result!) : '';
     const resultMedia = hasResult ? this.contentMedia(tc.result!) : [];
+    const uiMedia = tc.uiMedia ?? [];
+    // Auto-expand when there are previews to pick from, so the user sees the
+    // thumbnails without having to open the tool-call details.
     return html`
-      <details class="chat-toolcall p-2 rounded border bg-body font-monospace small">
+      <details class="chat-toolcall p-2 rounded border bg-body font-monospace small" ?open=${uiMedia.length > 0}>
         <summary>
           ${tc.function?.name ?? 'unknown'}
         </summary>
@@ -519,6 +532,7 @@ export class ChatElement extends LitElement {
                   <strong>Result</strong><br/>
                   <pre class="m-0">${resultText}</pre>
                   ${resultMedia.map(b => this.renderResultMedia(b))}
+                  ${uiMedia.length > 0 ? this.renderUiMediaGallery(uiMedia) : nothing}
                 </div>`
               : html`
                 <div class="chat-toolcall-running text-muted">
@@ -526,6 +540,22 @@ export class ChatElement extends LitElement {
                 </div>`}
         </div>
       </details>
+    `;
+  }
+
+  private renderUiMediaGallery(items: UiMediaItem[]): TemplateResult {
+    return html`
+      <div class="chat-extracted-images d-flex flex-wrap gap-2 mt-2">
+        ${items.map(item => html`
+          <figure class="m-0 text-center">
+            <img src=${item.url} alt=${item.label ?? ''} class="rounded border"
+                 style="max-width:160px; max-height:160px; display:block;"/>
+            ${item.label
+              ? html`<figcaption class="small text-muted mt-1">${item.label}</figcaption>`
+              : nothing}
+          </figure>
+        `)}
+      </div>
     `;
   }
 
@@ -945,6 +975,7 @@ export class ChatElement extends LitElement {
       case 'tool_result': {
         const toolCallId = data.tool_call_id as string;
         const content = data.content as string;
+        const uiMedia = Array.isArray(data.ui_media) ? (data.ui_media as UiMediaItem[]) : undefined;
 
         this.messages = this.messages.map(msg => {
           if (msg.role !== 'assistant' || !msg.tool_calls) return msg;
@@ -952,7 +983,9 @@ export class ChatElement extends LitElement {
           return {
             ...msg,
             tool_calls: msg.tool_calls.map(tc =>
-              tc.id === toolCallId ? {...tc, result: content} : tc
+              tc.id === toolCallId
+                ? {...tc, result: content, ...(uiMedia && uiMedia.length ? {uiMedia} : {})}
+                : tc
             ),
           };
         });
@@ -997,9 +1030,13 @@ export class ChatElement extends LitElement {
   private mergeToolResults(msgs: ChatMessage[]): ChatMessage[] {
     // Collect tool results keyed by tool_call_id
     const resultMap = new Map<string, string | ContentBlock[]>();
+    const uiMediaMap = new Map<string, UiMediaItem[]>();
     for (const msg of msgs) {
       if (msg.role === 'tool' && msg.tool_call_id && msg.content !== undefined) {
         resultMap.set(msg.tool_call_id, msg.content);
+        if (Array.isArray(msg._ui_media) && msg._ui_media.length > 0) {
+          uiMediaMap.set(msg.tool_call_id, msg._ui_media);
+        }
       }
     }
 
@@ -1017,7 +1054,11 @@ export class ChatElement extends LitElement {
           ...msg,
           tool_calls: msg.tool_calls.map(tc => {
             const result = tc.id ? resultMap.get(tc.id) : undefined;
-            return result !== undefined ? {...tc, result} : tc;
+            const uiMedia = tc.id ? uiMediaMap.get(tc.id) : undefined;
+            let out = tc;
+            if (result !== undefined) out = {...out, result};
+            if (uiMedia !== undefined) out = {...out, uiMedia};
+            return out;
           }),
         });
       } else {
