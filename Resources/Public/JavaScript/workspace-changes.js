@@ -15,8 +15,9 @@ function init() {
   const backend = backendInstance;
   backend.getWorkspaceInfos = function() {
     const settings = { ...this.settings, id: -1, depth: 99 };
+    const buildPayload = typeof this.generateRemotePayloadBody === "function" ? this.generateRemotePayloadBody.bind(this) : this.generateRemotePayload.bind(this);
     this.sendRemoteRequest(
-      this.generateRemotePayload("getWorkspaceInfos", settings)
+      buildPayload("getWorkspaceInfos", settings)
     ).then(async (response) => {
       this.renderWorkspaceInfos((await response.resolve())[0].result);
       updateDrawerBadge();

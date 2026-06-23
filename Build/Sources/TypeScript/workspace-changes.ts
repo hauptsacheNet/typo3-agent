@@ -27,8 +27,14 @@ function init(): void {
   const backend = backendInstance as any;
   backend.getWorkspaceInfos = function () {
     const settings = { ...this.settings, id: -1, depth: 99 };
+    // Feature-Detection statt Versions-Switch: in TYPO3 v14 wurde
+    // generateRemotePayload zu generateRemotePayloadBody umbenannt
+    // (EXT:workspaces ist seit v13 @internal, daher kein Changelog-Eintrag).
+    const buildPayload = typeof this.generateRemotePayloadBody === 'function'
+      ? this.generateRemotePayloadBody.bind(this)
+      : this.generateRemotePayload.bind(this);
     this.sendRemoteRequest(
-      this.generateRemotePayload('getWorkspaceInfos', settings),
+      buildPayload('getWorkspaceInfos', settings),
     ).then(async (response: any) => {
       this.renderWorkspaceInfos((await response.resolve())[0].result);
       updateDrawerBadge();

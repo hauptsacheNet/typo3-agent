@@ -5,9 +5,13 @@
     "build": "esbuild ./Sources/TypeScript/*.ts --outdir=../Resources/Public/JavaScript --format=esm --sourcemap --target=es2022 --tsconfig=tsconfig.json",
     "watch": "esbuild ./Sources/TypeScript/*.ts --outdir=../Resources/Public/JavaScript --format=esm --sourcemap --target=es2022 --tsconfig=tsconfig.json --watch",
     "check": "tsc --project tsconfig.json",
-    "setup-types": "git clone --depth 1 --filter=blob:none --sparse --branch 13.4 https://github.com/TYPO3/typo3.git .typo3-core-types && cd .typo3-core-types && git sparse-checkout set Build/Sources/TypeScript Build/types",
-    "generate-dts": "tsc --project tsconfig.emit-dts.json",
-    "prepare-types": "npm run setup-types && npm run generate-dts"
+    "setup-types": "npm run setup-types:v14",
+    "setup-types:v13": "rm -rf .typo3-core-types && git clone --depth 1 --filter=blob:none --sparse --branch 13.4 https://github.com/TYPO3/typo3.git .typo3-core-types && cd .typo3-core-types && git sparse-checkout set Build/Sources/TypeScript Build/types",
+    "setup-types:v14": "rm -rf .typo3-core-types && git clone --depth 1 --filter=blob:none --sparse --branch 14.3 https://github.com/TYPO3/typo3.git .typo3-core-types && cd .typo3-core-types && git sparse-checkout set Build/Sources/TypeScript Build/types",
+    "generate-dts": "rm -rf .typo3-core-dts && tsc --project tsconfig.emit-dts.json",
+    "prepare-types": "npm run prepare-types:v14",
+    "prepare-types:v13": "npm run setup-types:v13 && npm run generate-dts",
+    "prepare-types:v14": "npm run setup-types:v14 && npm run generate-dts"
   },
   "devDependencies": {
     "dompurify": "^3.4.2",
