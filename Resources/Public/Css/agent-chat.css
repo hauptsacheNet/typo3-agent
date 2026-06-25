@@ -1,28 +1,7 @@
 .module.module-layout--split {
-    height: 100dvh;
-    grid-template-areas: "moduleDocHeaderNavigation" "moduleDocHeaderButtons" "moduleBody" "moduleFooter";
-    grid-template-rows: auto auto minmax(0, 1fr) auto;
-
-    .module-body {
-        min-height: 0;
-        display: flex;
-        flex-direction: column;
-    }
-
-    .module-body-container {
-        flex: 1;
-        min-height: 0;
-        display: flex;
-        flex-direction: column;
-    }
-
     hn-agent-chat {
         flex: 1;
         min-height: 0;
-    }
-
-    .module-footer {
-        grid-area: moduleFooter;
     }
 }
 

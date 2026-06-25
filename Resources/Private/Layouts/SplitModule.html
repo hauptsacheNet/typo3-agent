@@ -1,8 +1,14 @@
-<html
+    <html
         xmlns:f="http://typo3.org/ns/TYPO3/CMS/Fluid/ViewHelpers"
         xmlns:core="http://typo3.org/ns/TYPO3/CMS/Core/ViewHelpers/"
+        xmlns:agent="http://typo3.org/ns/Hn/Agent/ViewHelpers"
         data-namespace-typo3-fluid="true"
 >
+
+<f:asset.css identifier="hn-split-module" href="EXT:agent/Resources/Public/Css/SplitModule.css"/>
+<agent:typo3VersionBelow major="14">
+    <f:asset.css identifier="hn-split-module-v13" href="EXT:agent/Resources/Public/Css/SplitModuleV13.css"/>
+</agent:typo3VersionBelow>
 
 <f:render section="Before" arguments="{_all}" optional="true"/>
 

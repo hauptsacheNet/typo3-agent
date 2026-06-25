@@ -1,0 +1,4 @@
+.module.module-layout--split {
+    grid-template-areas: "moduleDocHeader" "moduleBody" "moduleFooter";
+    grid-template-rows: auto minmax(0, 1fr) auto;
+}
