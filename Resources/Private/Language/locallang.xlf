@@ -141,6 +141,9 @@
             <trans-unit id="instructions.empty" resname="instructions.empty">
                 <source>No instructions yet. Create one to give the agent reusable guidance (tone of voice, wording rules, how to handle specific content).</source>
             </trans-unit>
+            <trans-unit id="instructions.column.id" resname="instructions.column.id">
+                <source>ID</source>
+            </trans-unit>
             <trans-unit id="instructions.column.name" resname="instructions.column.name">
                 <source>Name</source>
             </trans-unit>
