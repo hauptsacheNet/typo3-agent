@@ -1,63 +1,93 @@
-hn-agent-chat .chat-container {
+.module.module-layout--split {
+    height: 100dvh;
+    grid-template-areas: "moduleDocHeaderNavigation" "moduleDocHeaderButtons" "moduleBody" "moduleFooter";
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+
+    .module-body {
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .module-body-container {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    hn-agent-chat {
+        flex: 1;
+        min-height: 0;
+    }
+
+    .module-footer {
+        grid-area: moduleFooter;
+    }
+}
+
+hn-agent-chat {
     display: grid;
-    grid-template-rows: 1fr auto;
-    height: 100%;
-    overflow: hidden;
+    grid-template-rows:  auto minmax(0, 1fr) auto;
+    grid-template-areas: "header" "body" "footer";
+
+    .chat-header {
+        padding: var(--module-body-padding);
+        padding-top: 0;
+        padding-bottom: 0;
+        grid-area: header;
+    }
+
+    .chat-body {
+        overflow: hidden;
+        grid-area: body;
+        min-height: 0;
+        position: relative;
+        display: flex;
+        flex-direction: column;
+
+        &::before, &::after {
+            content: ' ';
+            position: absolute;
+            z-index: 1;
+            display: block;
+
+            left: 0;
+            width: 100%;
+            height: 1.5rem;
+            background: var(--module-bg);
+        }
+        &::before {
+            top: 0;
+            -webkit-mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 1), rgba(0, 0, 0, 0));
+            mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 1), rgba(0, 0, 0, 0));
+        }
+        &::after {
+           bottom: 0;
+            -webkit-mask-image: linear-gradient(to top, rgba(0, 0, 0, 1), rgba(0, 0, 0, 0));
+            mask-image: linear-gradient(to top, rgba(0, 0, 0, 1), rgba(0, 0, 0, 0));
+        }
+    }
+
+    .chat-footer {
+        grid-area: footer;
+    }
+
+    .chat-messages {
+        overflow: auto;
+        flex: 1;
+        min-height: 0;
+    }
 }
 
-hn-agent-chat .message-fade {
-    position: relative;
-}
-
-
-
-hn-agent-chat .message-fade::before {
-    content: ' ';
-    position: absolute;
-    z-index: 1;
-    display: block;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 1.5rem;
-    background: var(--bs-light);
-    -webkit-mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 1), rgba(0, 0, 0, 0));
-    mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 1), rgba(0, 0, 0, 0));
-}
-
-hn-agent-chat .chat-input {
-    outline: none;
-    /*noinspection CssUnknownProperty*/
-    field-sizing: content;
-    resize: none;
-}
-
-hn-agent-chat .chat-msg-prewrap {
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
+hn-agent-chat .card {
+    .panel-heading {
+        container-type: normal;
+    }
 }
 
 hn-agent-chat .chat-turn-latest {
     min-height: 100%;
-}
-
-hn-agent-chat .chat-upload-zone {
-    position: relative;
-}
-
-
-hn-agent-chat .chat-upload-zone::before {
-    content: ' ';
-    position: absolute;
-    z-index: 1;
-    display: block;
-    top: -1.5rem;
-    left: 0;
-    width: 100%;
-    height: 1.5rem;
-    background: var(--bs-light);
-    -webkit-mask-image: linear-gradient(to top, rgba(0, 0, 0, 1), rgba(0, 0, 0, 0));
-    mask-image: linear-gradient(to top, rgba(0, 0, 0, 1), rgba(0, 0, 0, 0));
 }
 
 hn-agent-chat .chat-upload-anchor {
@@ -79,40 +109,6 @@ hn-agent-new-task .chat-upload-zone #typo3-filelist {
     display: none !important;
 }
 
-hn-agent-chat .chat-attachment-chip button {
-    background: transparent;
-    color: inherit;
-    line-height: 1;
-}
-
-hn-agent-chat .chat-attachment-thumb {
-    width: 48px;
-    height: 48px;
-    object-fit: cover;
-    flex: 0 0 48px;
-}
-
-hn-agent-chat .chat-attachment-icon {
-    width: 48px;
-    height: 48px;
-    flex: 0 0 48px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--bs-tertiary-bg, rgba(0, 0, 0, 0.05));
-}
-
-hn-agent-chat .chat-attachment-warn {
-    display: inline-flex;
-    align-items: center;
-    line-height: 1;
-}
-
-/* Rich-text rendering inside the instruction-content modal: drop the
-   trailing paragraph margin so the modal body doesn't end with empty space. */
-.hn-instruction-content > :last-child {
-    margin-bottom: 0;
-}
 
 /* Workspace changes drawer (Chat show) */
 .hn-workspace-drawer {
@@ -172,30 +168,53 @@ hn-agent-chat .chat-attachment-warn {
     margin-bottom: .5rem;
 }
 
-hn-agent-chat .chat-toolcalls > summary,
-hn-agent-chat .chat-toolcall > summary,
-hn-agent-chat .chat-reasoning > summary {
-    cursor: pointer;
-    user-select: none;
-    list-style: none;
+hn-agent-chat, hn-agent-new-task {
+    --typo3-form-control-border-color: var(--typo3-input-border-color);
+    --typo3-form-control-border-width: var(--typo3-input-border-width);
+    --typo3-form-control-border-radius: var(--typo3-input-border-radius);
+    --typo3-form-control-bg: var(--typo3-input-bg);
+    --typo3-form-control-hover-color: var(--typo3-input-hover-color);
+    --typo3-form-control-hover-bg: var(--typo3-input-hover-bg);
+    --typo3-form-control-padding-x: 1rem;
+    --typo3-form-control-padding-y: 0.7rem;
+
+
+    .task-form {
+        margin-bottom: var(--typo3-spacing);
+        padding: var(--typo3-form-control-padding-y) var(--typo3-form-control-padding-x);
+        display: flex;
+        flex-direction: column;
+        gap: var(--typo3-spacing);
+        background-color: var(--typo3-input-bg);
+        border: var(--typo3-form-control-border-width) solid var(--typo3-form-control-border-color);
+        border-radius: var(--typo3-form-control-border-radius);
+    }
+
+    .message-control {
+        --typo3-form-control-font-size: var(--typo3-input-font-size);
+        --typo3-form-control-line-height: var(--typo3-input-line-height);
+        --typo3-form-control-transition: color .15s ease-in-out, background-color .15s ease-in-out, border-color .15s ease-in-out, box-shadow .15s ease-in-out;
+        --typo3-form-control-color: var(--typo3-input-color);
+        --typo3-form-control-placeholder-color: color-mix(in srgb, var(--typo3-input-color), transparent 50%);
+        -webkit-appearance: none;
+        -moz-appearance: none;
+        appearance: none;
+        color: var(--typo3-form-control-color);
+        display: block;
+        font-size: var(--typo3-form-control-font-size);
+        font-weight: 400;
+        line-height: var(--typo3-form-control-line-height);
+        min-width: 120px;
+        outline-offset: 0;
+        transition: var(--typo3-form-control-transition);
+        width: 100%;
+        outline: none;
+        field-sizing: content;
+        resize: none;
+        border: none;
+        background: none;
+    }
+
 }
 
-hn-agent-chat .chat-toolcalls > summary::-webkit-details-marker,
-hn-agent-chat .chat-toolcall > summary::-webkit-details-marker,
-hn-agent-chat .chat-reasoning > summary::-webkit-details-marker {
-    display: none;
-}
-
-hn-agent-chat .chat-toolcall-toggle {
-    display: inline-flex;
-    align-items: center;
-    transition: transform .15s ease-in-out;
-    color: var(--bs-secondary-color, #6c757d);
-}
-
-hn-agent-chat .chat-toolcalls[open] > summary > .chat-toolcall-toggle,
-hn-agent-chat .chat-toolcall[open] > summary > .chat-toolcall-toggle,
-hn-agent-chat .chat-reasoning[open] > summary > .chat-toolcall-toggle {
-    transform: rotate(180deg);
-}
 

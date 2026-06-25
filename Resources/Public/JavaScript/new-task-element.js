@@ -9,11 +9,12 @@ var __decorateClass = (decorators, target, key, kind) => {
   return result;
 };
 import { html, LitElement, nothing } from "lit";
-import { customElement, property, query, state } from "lit/decorators.js";
-import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { customElement, property, state } from "lit/decorators.js";
+import { createRef, ref } from "lit/directives/ref.js";
 import DragUploader from "@typo3/backend/drag-uploader.js";
 import Modal from "@typo3/backend/modal.js";
 import { MessageUtility } from "@typo3/backend/utility/message-utility.js";
+import "@hn/agent/attachment-chip-elements.js";
 let NewTaskElement = class extends LitElement {
   constructor() {
     super(...arguments);
@@ -29,6 +30,8 @@ let NewTaskElement = class extends LitElement {
     this.preflightUri = "";
     this.message = "";
     this.attachments = [];
+    this.uploadTriggerRef = createRef();
+    this.uploadZoneRef = createRef();
     this.elementBrowserListener = (e) => {
       if (!MessageUtility.verifyOrigin(e.origin)) return;
       const data = e.data;
@@ -59,14 +62,15 @@ let NewTaskElement = class extends LitElement {
     return this.workspaceId <= 0;
   }
   firstUpdated() {
-    if (this.uploadZoneEl) {
-      new DragUploader(this.uploadZoneEl);
+    const zoneEl = this.uploadZoneRef.value;
+    if (zoneEl) {
+      new DragUploader(zoneEl);
     }
-    this.uploadTriggerEl?.addEventListener("uploadSuccess", this.uploadSuccessListener);
+    this.uploadTriggerRef.value?.addEventListener("uploadSuccess", this.uploadSuccessListener);
   }
   disconnectedCallback() {
     super.disconnectedCallback();
-    this.uploadTriggerEl?.removeEventListener("uploadSuccess", this.uploadSuccessListener);
+    this.uploadTriggerRef.value?.removeEventListener("uploadSuccess", this.uploadSuccessListener);
     window.removeEventListener("message", this.elementBrowserListener);
   }
   onInput(e) {
@@ -144,25 +148,25 @@ let NewTaskElement = class extends LitElement {
     const uploadEnabled = !!this.defaultUploadFolder;
     const pickEnabled = !!this.fileBrowserUri;
     return html`
-      <div style="margin-bottom: calc(var(--typo3-spacing) * 2);">
+      <div>
         <div
             class="chat-upload-zone"
+            ${ref(this.uploadZoneRef)}
             data-target-folder=${this.defaultUploadFolder}
             data-max-file-size="0"
             data-dropzone-target=".chat-upload-anchor"
             data-dropzone-trigger=".chat-upload-trigger"
             data-default-action="rename">
           <form action=${this.actionUri} method="post"
-                class="position-relative rounded-4 border bg-white overflow-hidden d-flex flex-column gap-3 p-3">
+                class="task-form">
             <input type="hidden" name="table" .value=${this.table}>
             <input type="hidden" name="uid" .value=${String(this.uid)}>
             <input type="hidden" name="return_url" .value=${this.returnUrl}>
             <input type="hidden" name="attachments" .value=${this.serializeAttachments()}>
 
             <textarea
-                class="d-block w-100 border-0 bg-white"
+                class="message-control"
                 name="message"
-                rows="2"
                 placeholder=${this.placeholder}
                 .value=${this.message}
                 @input=${this.onInput}
@@ -170,9 +174,12 @@ let NewTaskElement = class extends LitElement {
                 style="outline: none; field-sizing: content; resize: none;"
             ></textarea>
 
-            ${this.attachments.length > 0 ? html`<div class="chat-attachments d-flex flex-wrap gap-2">
-                  ${this.attachments.map((a, i) => this.renderAttachmentChip(a, () => this.removeAttachment(i)))}
-                </div>` : nothing}
+            ${this.attachments.length > 0 ? html`
+                  <hn-agent-attachment-chips
+                      .attachments=${this.attachments}
+                      @remove=${(e) => this.removeAttachment(e.detail.index)}>
+                  </hn-agent-attachment-chips>
+                ` : nothing}
 
             <div class="chat-upload-anchor" style="display:none"></div>
 
@@ -200,6 +207,7 @@ let NewTaskElement = class extends LitElement {
       <div>
         <button type="button"
                 class="chat-upload-trigger btn btn-sm btn-default"
+                ${ref(this.uploadTriggerRef)}
                 ?disabled=${!uploadEnabled}
                 title=${uploadEnabled ? "Datei hochladen" : "Kein Upload-Ordner verf\xFCgbar"}>
           <typo3-backend-icon identifier="actions-upload" size="small"/>
@@ -215,54 +223,18 @@ let NewTaskElement = class extends LitElement {
       </div>
     `;
   }
-  renderAttachmentChip(att, onRemove) {
-    const thumbUrl = this.buildThumbnailUrl(att);
-    const onThumbError = (e) => {
-      const img = e.target;
-      img.style.display = "none";
-      const fallback = img.nextElementSibling;
-      if (fallback) fallback.style.display = "";
-    };
-    const notReadable = att.readableByLlm === false;
-    const warnTitle = notReadable ? `LLM kann den Inhalt nicht via ReadFile lesen \u2014 nur Metadaten${att.reason ? ` (${att.reason})` : ""}` : att.unresolvable ? "Datei nicht aufl\xF6sbar" : "";
-    return html`
-      <span class="chat-attachment-chip d-inline-flex align-items-center gap-2 border rounded bg-body p-1 ${onRemove ? "pe-2" : "px-2"}"
-            title=${warnTitle}>
-        ${thumbUrl ? html`
-              <img src=${thumbUrl} alt="" class="chat-attachment-thumb rounded" @error=${onThumbError}/>
-              <span class="chat-attachment-icon rounded" style="display:none">${this.renderFallbackIcon(att)}</span>` : html`<span class="chat-attachment-icon rounded">${this.renderFallbackIcon(att)}</span>`}
-        <span class="chat-attachment-name ${att.unresolvable ? "text-decoration-line-through opacity-75" : ""}">${att.name}</span>
-        ${notReadable ? html`<span class="chat-attachment-warn badge bg-warning-subtle text-warning-emphasis border border-warning-subtle"
-                       title=${warnTitle}>
-              <typo3-backend-icon identifier="actions-exclamation" size="small"/>
-            </span>` : nothing}
-        ${onRemove ? html`<button type="button"
-                  class="btn btn-sm p-0 border-0 text-muted"
-                  title="Entfernen"
-                  @click=${onRemove}>×</button>` : nothing}
-      </span>
-    `;
-  }
-  renderFallbackIcon(att) {
-    if (att.iconHtml) return html`${unsafeHTML(att.iconHtml)}`;
-    return html`<typo3-backend-icon identifier="mimetypes-other-other" size="medium"></typo3-backend-icon>`;
-  }
-  buildThumbnailUrl(att) {
-    const base = window.top?.TYPO3?.settings?.Resource?.thumbnailUrl;
-    if (!base) return "";
-    const ref = att.uid ?? att.identifier;
-    if (ref === void 0 || ref === null || ref === "") return "";
-    const url = new URL(base, window.location.origin);
-    url.searchParams.set("identifier", String(ref));
-    url.searchParams.set("size", "large");
-    url.searchParams.set("keepAspectRatio", "false");
-    return url.toString();
-  }
   renderLiveCallout() {
     const text = TYPO3?.lang?.["workspace.callout.selectWorkspace"] ?? "Please switch to a workspace before starting a task.";
     return html`
-      <div class="alert alert-warning" style="margin-bottom: calc(var(--typo3-spacing) * 2);">
-        ${text}
+      <div class="callout callout-info">
+        <div class="callout-icon"><span class="icon-emphasized">
+          <typo3-backend-icon
+              identifier="actions-info"
+              size="small"/>
+        </div>
+        <div class="callout-content">
+          <div class="callout-body">${text}</div>
+        </div>
       </div>
     `;
   }
@@ -303,12 +275,6 @@ __decorateClass([
 __decorateClass([
   state()
 ], NewTaskElement.prototype, "attachments", 2);
-__decorateClass([
-  query(".chat-upload-trigger")
-], NewTaskElement.prototype, "uploadTriggerEl", 2);
-__decorateClass([
-  query(".chat-upload-zone")
-], NewTaskElement.prototype, "uploadZoneEl", 2);
 NewTaskElement = __decorateClass([
   customElement("hn-agent-new-task")
 ], NewTaskElement);

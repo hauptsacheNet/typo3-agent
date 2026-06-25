@@ -453,7 +453,11 @@ class ChatController
 
     private function addReloadButton($view, ServerRequestInterface $request): void
     {
-        $buttonBar = $view->getDocHeaderComponent()->getButtonBar();
+        $docHeader = $view->getDocHeaderComponent();
+        if (method_exists($docHeader, 'disableAutomaticReloadButton')) {
+            return;
+        }
+        $buttonBar = $docHeader->getButtonBar();
         $reloadButton = $buttonBar->makeLinkButton()
             ->setHref((string)$request->getAttribute('normalizedParams')->getRequestUri())
             ->setTitle('Reload')

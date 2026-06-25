@@ -11,12 +11,14 @@ var __decorateClass = (decorators, target, key, kind) => {
 import { html, LitElement, nothing } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { createRef, ref } from "lit/directives/ref.js";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import DragUploader from "@typo3/backend/drag-uploader.js";
 import Modal from "@typo3/backend/modal.js";
 import { MessageUtility } from "@typo3/backend/utility/message-utility.js";
 import "./thinking-indicator.js";
+import "@hn/agent/attachment-chip-elements.js";
 marked.setOptions({ breaks: true, gfm: true });
 let ChatElement = class extends LitElement {
   constructor() {
@@ -52,6 +54,13 @@ let ChatElement = class extends LitElement {
     // AbortError and exits cleanly. PHP-side, the disconnect is picked up by
     // SseStream's connection_aborted() check on the next flush.
     this.abortController = null;
+    // DragUploader dispatches `uploadSuccess` on its `data-dropzone-trigger`
+    // element (not the wrapper, and not bubbling) — so we have to listen on
+    // the trigger button itself.
+    this.uploadTriggerRef = createRef();
+    this.uploadZoneRef = createRef();
+    this.messagesContainerRef = createRef();
+    this.latestUserBubbleRef = createRef();
     this.elementBrowserListener = (e) => {
       if (!MessageUtility.verifyOrigin(e.origin)) return;
       const data = e.data;
@@ -80,6 +89,8 @@ let ChatElement = class extends LitElement {
       if (!file) return;
       this.addAttachment({ uid: file.uid, identifier: file.id, name: file.name, iconHtml: file.icon });
     };
+    this.toolCallsGroupIds = /* @__PURE__ */ new WeakMap();
+    this.reasoningGroupIds = /* @__PURE__ */ new WeakMap();
   }
   // No Shadow DOM — use TYPO3 backend Bootstrap CSS
   createRenderRoot() {
@@ -89,10 +100,11 @@ let ChatElement = class extends LitElement {
   firstUpdated() {
     this.messages = this.mergeToolResults(this.initialMessages);
     this.changes = [...this.initialChanges];
-    if (this.uploadZoneEl) {
-      new DragUploader(this.uploadZoneEl);
+    const zoneEl = this.uploadZoneRef.value;
+    if (zoneEl) {
+      new DragUploader(zoneEl);
     }
-    this.uploadTriggerEl?.addEventListener("uploadSuccess", this.uploadSuccessListener);
+    this.uploadTriggerRef.value?.addEventListener("uploadSuccess", this.uploadSuccessListener);
     document.addEventListener("keydown", this.onKeydownGlobal);
     if ((this.autoStart === "1" || this.autoStart === "true") && this.streamUri && !this.isWorkspaceMismatch()) {
       this.doAutoStart();
@@ -101,7 +113,7 @@ let ChatElement = class extends LitElement {
   }
   disconnectedCallback() {
     super.disconnectedCallback();
-    this.uploadTriggerEl?.removeEventListener("uploadSuccess", this.uploadSuccessListener);
+    this.uploadTriggerRef.value?.removeEventListener("uploadSuccess", this.uploadSuccessListener);
     window.removeEventListener("message", this.elementBrowserListener);
     document.removeEventListener("keydown", this.onKeydownGlobal);
   }
@@ -116,152 +128,106 @@ let ChatElement = class extends LitElement {
     const canSubmit = !inputDisabled && (this.inputValue.trim() !== "" || this.attachments.length > 0);
     const uploadEnabled = !!this.defaultUploadFolder;
     const pickEnabled = !!this.fileBrowserUri;
+    const showHeader = mismatch || !!this.errorMessage;
     return html`
-      <div class="chat-container message-fade mx-4">
-        ${this.errorMessage ? html`
-              <div class="chat-error-banner alert alert-danger d-flex align-items-center gap-2 m-3 mb-0 sticky-top" role="alert">
-                <span class="flex-grow-1">${this.errorMessage}</span>
-                ${this.lastSubmission !== null ? html`
-                      <button type="button"
-                              class="btn btn-sm btn-outline-danger"
-                              ?disabled=${this.loading}
-                              @click=${this.onRetry}>
-                        <typo3-backend-icon identifier="actions-refresh" size="small"/>
-                        Erneut versuchen
-                      </button>` : nothing}
-                <button type="button"
-                        class="btn-close"
-                        aria-label="Schließen"
-                        @click=${this.onDismissError}></button>
-              </div>` : nothing}
-        <div class="chat-messages overflow-auto mx-3 py-4">
-          ${this.computeTurns().map((turn, i, all) => {
+            ${showHeader ? html`
+                <div class="chat-header">
+                    ${mismatch ? this.renderWorkspaceMismatch() : nothing}
+                    ${this.errorMessage ? this.renderErrorMessage() : nothing}
+                </div>` : nothing}
+            <div class="chat-body">
+
+                <div class="chat-messages mx-3 py-4" ${ref(this.messagesContainerRef)}>
+                    ${this.computeTurns().map((turn, i, all) => {
       const isLast = i === all.length - 1;
       return html`
-              <div class="chat-turn d-flex flex-column gap-3 ${isLast ? "chat-turn-latest" : "pb-3"}">
-                ${turn.map((msg) => this.renderMessage(msg))}
-                ${isLast && this.isStreaming ? this.renderStreamingBubble() : nothing}
-                ${isLast && this.thinking && !this.isStreaming ? this.renderThinkingIndicator() : nothing}
-              </div>
-            `;
+                            <div class="chat-turn d-flex flex-column gap-3 ${isLast ? "chat-turn-latest" : "pb-3"}">
+                                ${turn.map((msg, j) => this.renderMessage(msg, isLast && j === 0 && msg.role === "user"))}
+                                ${isLast && this.isStreaming ? this.renderStreamingBubble() : nothing}
+                                ${isLast && this.thinking && !this.isStreaming ? this.renderThinkingIndicator() : nothing}
+                            </div>
+                        `;
     })}
-        </div>
-
-        <div
-            class="chat-upload-zone"
-            data-target-folder=${this.defaultUploadFolder}
-            data-max-file-size="0"
-            data-dropzone-target=".chat-upload-anchor"
-            data-dropzone-trigger=".chat-upload-trigger"
-            data-default-action="rename">
-
-          
-
-          ${mismatch ? this.renderWorkspaceMismatch() : nothing}
-
-          <form class="position-relative rounded-4 border bg-white overflow-hidden d-flex flex-column gap-3 p-3 " @submit=${this.onSubmit}>
-            <textarea
-                name="message"
-                class="chat-input border-0 d-block w-100 bg-white"
-                rows="2"
-                placeholder="Type a follow-up message\u2026"
-                .value=${this.inputValue}
-                @input=${this.onInput}
-                @keydown=${this.onKeydown}
-            ></textarea>
-            ${this.attachments.length > 0 ? html`<div class="chat-attachments d-flex flex-wrap gap-2">
-                  ${this.attachments.map((a, i) => this.renderAttachmentChip(a, () => this.removeAttachment(i)))}
-                </div>` : nothing}
-            <div class="chat-upload-anchor" style="display:none"></div>
-            <div class="w-100 d-flex flex-row">
-              ${this.renderAttachmentsBar(uploadEnabled, pickEnabled, inputDisabled)}
-              <div class="ms-auto">
-                ${this.loading ? html`
-                    <button type="button"
-                            class="btn btn-sm"
-                            title="Antwort abbrechen"
-                            ?disabled=${this.abortController === null}
-                            @click=${this.onStop}>
-                      <typo3-backend-icon identifier="actions-close" size="small"/>
-                    </button>` : html`
-                    <button type="submit" class="btn btn-sm" ?disabled=${!canSubmit}>
-                      <typo3-backend-icon
-                          identifier="actions-arrow-down-start-alt"
-                          size="small"/>
-                    </button>`}
-              </div>
+                </div>
             </div>
-          </form>
+            <div class="chat-footer">
 
-         
-        </div>
 
-      </div>
-    `;
+                <div
+                        class="chat-upload-zone"
+                        ${ref(this.uploadZoneRef)}
+                        data-target-folder=${this.defaultUploadFolder}
+                        data-max-file-size="0"
+                        data-dropzone-target=".chat-upload-anchor"
+                        data-dropzone-trigger=".chat-upload-trigger"
+                        data-default-action="rename">
+
+
+                    <form class="task-form" @submit=${this.onSubmit}>
+            <textarea
+                    class="message-control"
+                    name="message"
+                    rows="2"
+                    placeholder="Type a follow-up message\u2026"
+                    .value=${this.inputValue}
+                    @input=${this.onInput}
+                    @keydown=${this.onKeydown}
+            ></textarea>
+
+                        ${this.attachments.length > 0 ? html`
+                                    <hn-agent-attachment-chips
+                                            .attachments=${this.attachments}
+                                            @remove=${(e) => this.removeAttachment(e.detail.index)}>
+                                    </hn-agent-attachment-chips>
+                                ` : nothing}
+
+                        <div class="chat-upload-anchor" style="display:none"></div>
+                        <div class="w-100 d-flex flex-row">
+                            ${this.renderAttachmentsBar(uploadEnabled, pickEnabled, inputDisabled)}
+                            <div class="ms-auto">
+                                ${this.loading ? html`
+                                            <button type="button"
+                                                    class="btn btn-sm"
+                                                    title="Antwort abbrechen"
+                                                    ?disabled=${this.abortController === null}
+                                                    @click=${this.onStop}>
+                                                <typo3-backend-icon identifier="actions-close" size="small"/>
+                                            </button>` : html`
+                                            <button type="submit" class="btn btn-sm" ?disabled=${!canSubmit}>
+                                                <typo3-backend-icon
+                                                        identifier="actions-arrow-down-start-alt"
+                                                        size="small"/>
+                                            </button>`}
+                            </div>
+                        </div>
+                    </form>
+
+
+                </div>
+            </div>
+        `;
   }
   renderAttachmentsBar(uploadEnabled, pickEnabled, inputDisabled) {
     return html`
-      <div>
-        <button type="button"
-                class="chat-upload-trigger btn btn-sm btn-default"
-                ?disabled=${inputDisabled || !uploadEnabled}
-                title=${uploadEnabled ? "Datei hochladen" : "Kein Upload-Ordner verf\xFCgbar"}>
-          <typo3-backend-icon identifier="actions-upload" size="small"/>
-          Hochladen
-        </button>
-        <button type="button"
-                class="btn btn-sm btn-default"
-                ?disabled=${inputDisabled || !pickEnabled}
-                @click=${this.onPickClick}>
-          <typo3-backend-icon identifier="actions-folder" size="small"/>
-          Ausw\u00e4hlen
-        </button>
-        
-      </div>
-    `;
-  }
-  renderAttachmentChip(att, onRemove) {
-    const thumbUrl = this.buildThumbnailUrl(att);
-    const onThumbError = (e) => {
-      const img = e.target;
-      img.style.display = "none";
-      const fallback = img.nextElementSibling;
-      if (fallback) fallback.style.display = "";
-    };
-    const notReadable = att.readableByLlm === false;
-    const warnTitle = notReadable ? `LLM kann den Inhalt nicht via ReadFile lesen \u2014 nur Metadaten${att.reason ? ` (${att.reason})` : ""}` : att.unresolvable ? "Datei nicht aufl\xF6sbar" : "";
-    return html`
-      <span class="chat-attachment-chip d-inline-flex align-items-center gap-2 border rounded bg-body p-1 ${onRemove ? "pe-2" : "px-2"}"
-            title=${warnTitle}>
-        ${thumbUrl ? html`
-              <img src=${thumbUrl} alt="" class="chat-attachment-thumb rounded" @error=${onThumbError}/>
-              <span class="chat-attachment-icon rounded" style="display:none">${this.renderFallbackIcon(att)}</span>` : html`<span class="chat-attachment-icon rounded">${this.renderFallbackIcon(att)}</span>`}
-        <span class="chat-attachment-name ${att.unresolvable ? "text-decoration-line-through opacity-75" : ""}">${att.name}</span>
-        ${notReadable ? html`<span class="chat-attachment-warn badge bg-warning-subtle text-warning-emphasis border border-warning-subtle"
-                       title=${warnTitle}>
-              <typo3-backend-icon identifier="actions-exclamation" size="small"/>
-            </span>` : nothing}
-        ${onRemove ? html`<button type="button"
-                  class="btn btn-sm p-0 border-0 text-muted"
-                  title="Entfernen"
-                  @click=${onRemove}>\u00d7</button>` : nothing}
-      </span>
-    `;
-  }
-  renderFallbackIcon(att) {
-    if (att.iconHtml) return html`${unsafeHTML(att.iconHtml)}`;
-    return html`<typo3-backend-icon identifier="mimetypes-other-other" size="medium"></typo3-backend-icon>`;
-  }
-  buildThumbnailUrl(att) {
-    const base = window.top?.TYPO3?.settings?.Resource?.thumbnailUrl;
-    if (!base) return "";
-    const ref = att.uid ?? att.identifier;
-    if (ref === void 0 || ref === null || ref === "") return "";
-    const url = new URL(base, window.location.origin);
-    url.searchParams.set("identifier", String(ref));
-    url.searchParams.set("size", "large");
-    url.searchParams.set("keepAspectRatio", "false");
-    return url.toString();
+            <div>
+                <button type="button"
+                        class="chat-upload-trigger btn btn-sm btn-default"
+                        ${ref(this.uploadTriggerRef)}
+                        ?disabled=${inputDisabled || !uploadEnabled}
+                        title=${uploadEnabled ? "Datei hochladen" : "Kein Upload-Ordner verf\xFCgbar"}>
+                    <typo3-backend-icon identifier="actions-upload" size="small"/>
+                    Hochladen
+                </button>
+                <button type="button"
+                        class="btn btn-sm btn-default"
+                        ?disabled=${inputDisabled || !pickEnabled}
+                        @click=${this.onPickClick}>
+                    <typo3-backend-icon identifier="actions-folder" size="small"/>
+                    Ausw\u00e4hlen
+                </button>
+
+            </div>
+        `;
   }
   renderWorkspaceMismatch() {
     const mismatchTemplate = TYPO3?.lang?.["workspace.chat.mismatch"] ?? 'This task belongs to workspace "%s", but you are currently in "%s". Switch to "%s" to continue the conversation.';
@@ -271,111 +237,218 @@ let ChatElement = class extends LitElement {
     const message = mismatchTemplate.replace("%s", taskTitle).replace("%s", activeTitle).replace("%s", taskTitle);
     const buttonLabel = buttonTemplate.replace("%s", taskTitle);
     return html`
-      <div class="alert alert-warning d-flex flex-column align-items-start justify-content-between mb-3 gap-3">
-        <div>${message}</div>
-        <a href=${this.switchWorkspaceUri}
-           target="_top"
-           class="btn btn-warning text-decoration-none ${this.switchWorkspaceUri ? "" : "disabled"}"
-           @click=${this.onSwitchClick}>
-          <typo3-backend-icon identifier="apps-toolbar-menu-workspace" size="small"></typo3-backend-icon>
-          ${buttonLabel}
-        </a>
-      </div>
-    `;
+            <div class="callout callout-warning">
+                <div class="callout-icon">
+                        <span class="icon-emphasized">
+                          <typo3-backend-icon identifier="actions-exclamation" size="small"></typo3-backend-icon>
+                        </span>
+                </div>
+                <div class="callout-content">
+                    <div class="callout-title">Warning</div>
+                    <div class="callout-body">
+                        <div class="mb-2">
+                            ${message}
+                        </div>
+                        <a href=${this.switchWorkspaceUri}
+                           target="_top"
+                           class="btn btn-warning text-decoration-none ${this.switchWorkspaceUri ? "" : "disabled"}"
+                        <typo3-backend-icon identifier="apps-toolbar-menu-workspace" size="small"></typo3-backend-icon>
+                        ${buttonLabel}
+                        </a>
+                    </div>
+                </div>
+
+        `;
   }
-  onSwitchClick(e) {
-    if (!this.switchWorkspaceUri) return;
-    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
-    e.preventDefault();
-    const topWindow = window.top ?? window;
-    topWindow.location.href = this.switchWorkspaceUri;
+  renderErrorMessage() {
+    return html`
+            <div class="alert alert-danger alert-dismissible">
+                <button type="button" class="close">
+          <span aria-hidden="true"><typo3-backend-icon identifier="actions-close"
+                                                       size="small"></typo3-backend-icon></span>
+                    <span class="visually-hidden">Close</span></button>
+                <button type="button"
+                        class="close"
+                        aria-label="Schließen"
+                        @click=${this.onDismissError}>
+                    <button type="button" class="close">
+            <span aria-hidden="true"><typo3-backend-icon identifier="actions-close"
+                                                         size="small"></typo3-backend-icon></span>
+                        <span class="visually-hidden">Close</span>
+                    </button>
+                    <div class="alert-inner">
+                        <div class="alert-icon">
+              <span class="icon-emphasized">
+                <typo3-backend-icon size="small" identifier="actions-exclamation"></typo3-backend-icon>
+              </span>
+                        </div>
+                        <div class="alert-content">
+                            <div class="alert-title" id="alert-title-stp4daa23v">Warning</div>
+                            <p class="alert-message mb-2" id="alert-message-stp4daa23v">${this.errorMessage}</p>
+                            ${this.lastSubmission !== null ? html`
+                                        <button type="button"
+                                                class="btn btn-sm btn-danger"
+                                                ?disabled=${this.loading}
+                                                @click=${this.onRetry}>
+                                            <typo3-backend-icon identifier="actions-refresh"
+                                                                size="small"></typo3-backend-icon>
+                                            Erneut versuchen
+                                        </button>` : nothing}
+                        </div>
+                    </div>
+            </div>
+        `;
   }
-  renderMessage(msg) {
+  renderMessage(msg, isLatestUser = false) {
     const role = msg.role || "unknown";
     if (role === "system") return nothing;
     const roleLabel = role === "user" ? "you" : role;
     if (role === "assistant") {
       const assistantText = msg.content != null ? this.contentText(msg.content) : "";
       return html`
-        <div class="rounded-4 bg-white border p-3 me-3">
-          <div class="chat-msg-role fw-bold small opacity-75 mb-1 text-uppercase">${roleLabel}</div>
-          ${msg.reasoning ? this.renderReasoningBlock(msg.reasoning) : nothing}
-          ${assistantText ? html`<div class="chat-msg-content">${unsafeHTML(this.renderMarkdown(assistantText))}</div>` : nothing}
-          ${msg.tool_calls && msg.tool_calls.length > 0 ? this.renderToolCallsGroup(msg.tool_calls) : nothing}
-        </div>
-      `;
+                <div class="card card-default me-3">
+                    <div class="card-header">
+                        <div class="card-header-body">
+                            <span class="card-subtitle">${roleLabel}</span>
+                        </div>
+                    </div>
+                    
+                    ${assistantText ? html`
+                                <div class="card-body">${unsafeHTML(this.renderMarkdown(assistantText))}</div>` : nothing}
+
+                    ${msg.reasoning || msg.tool_calls && msg.tool_calls.length > 0 ? html`
+                    <div class="card-footer">
+                        ${msg.reasoning ? html`
+                                    ${this.renderReasoningBlock(msg.reasoning, msg)}` : nothing}
+    
+                        ${msg.tool_calls && msg.tool_calls.length > 0 ? html`
+                                    ${this.renderToolCallsGroup(msg.tool_calls)}` : nothing}
+                        
+                    </div>` : nothing}
+                    
+                </div>
+            `;
     }
     const attachments = msg.attachments ?? [];
     const userText = msg.content != null ? this.contentText(msg.content) : "";
     return html`
-      <div class="chat-msg-user rounded-4 bg-success-subtle border p-3 ms-3 align-self-end">
-        <div class="chat-msg-role fw-bold small opacity-75 mb-1 text-uppercase">${roleLabel}</div>
-        ${userText ? html`<pre class="chat-msg-prewrap m-0">${userText}</pre>` : nothing}
-        ${attachments.length > 0 ? html`<div class="chat-attachments d-flex flex-wrap gap-2 ${msg.content ? "mt-2" : ""}">
-              ${attachments.map((a) => this.renderAttachmentChip(a))}
-            </div>` : nothing}
-      </div>
-    `;
+            <div class="card card-success align-self-end ms-3" ${isLatestUser ? ref(this.latestUserBubbleRef) : nothing}>
+                <div class="card-header">
+
+                    <div class="card-header-body">
+                        <span class="card-subtitle">${roleLabel}</span>
+                    </div>
+                </div>
+                ${userText ? html`
+                            <div class="card-body"><p class="card-text">${userText}</p></div>` : nothing}
+
+
+                ${attachments.length > 0 ? html`
+                            <div class="card-footer">
+                                <hn-agent-attachment-chips
+                                        readonly
+                                        .attachments=${attachments}>
+                                </hn-agent-attachment-chips>
+                            </div>` : nothing}
+
+
+            </div>
+        `;
+  }
+  getToolCallsGroupId(tcs) {
+    let id = this.toolCallsGroupIds.get(tcs);
+    if (!id) {
+      id = `tcg-${crypto.randomUUID()}`;
+      this.toolCallsGroupIds.set(tcs, id);
+    }
+    return id;
+  }
+  getReasoningGroupId(key) {
+    let id = this.reasoningGroupIds.get(key);
+    if (!id) {
+      id = `rg-${crypto.randomUUID()}`;
+      this.reasoningGroupIds.set(key, id);
+    }
+    return id;
   }
   renderToolCallsGroup(tcs) {
     const count = tcs.length;
     const noun = count === 1 ? "Tool Call" : "Tool Calls";
-    const running = tcs.some((tc) => tc.result === void 0);
+    const collapseId = this.getToolCallsGroupId(tcs);
     return html`
-      <details class="chat-toolcalls mt-2 p-2 rounded border bg-body-tertiary small">
-        <summary class="d-flex align-items-center justify-content-between gap-2">
-          <span class="d-flex align-items-center gap-2">
-            <typo3-backend-icon identifier="actions-cog" size="small"></typo3-backend-icon>
-            <span><strong>${count}</strong> ${noun}</span>
-            ${running ? html`<thinking-indicator class="ms-1"></thinking-indicator>` : nothing}
-          </span>
-          <span class="chat-toolcall-toggle" aria-hidden="true">
-            <typo3-backend-icon identifier="actions-chevron-up" size="small"></typo3-backend-icon>
-          </span>
-        </summary>
-        <div class="d-flex flex-column gap-2 mt-2">
-          ${tcs.map((tc) => this.renderToolCall(tc))}
-        </div>
-      </details>
-    `;
+            <div class="panel panel-default panel-condensed">
+                <div class="panel-heading">
+                    <div class="panel-heading-row">
+                        <button class="panel-button collapsed" type="button"
+                                data-bs-toggle="collapse" data-bs-target="#${collapseId}"
+                                aria-expanded="false" aria-controls="${collapseId}">
+                            <span class="panel-icon">
+                                <typo3-backend-icon identifier="actions-cog" size="small"></typo3-backend-icon>
+                            </span>
+                            <div class="panel-title"><span><strong>${count}</strong> ${noun}</span></div>
+                            <span class="caret"></span>
+                        </button>
+
+                    </div>
+
+                </div>
+                <div id="${collapseId}" class="panel-collapse collapse">
+                    <div class="panel-body">
+                        <div class="panel-group">
+                            ${tcs.map((tc) => this.renderToolCall(tc))}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
   }
   renderToolCall(tc) {
     const hasResult = tc.result !== void 0;
     const resultText = hasResult ? this.contentText(tc.result) : "";
     const resultMedia = hasResult ? this.contentMedia(tc.result) : [];
     return html`
-      <details class="chat-toolcall p-2 rounded border bg-body font-monospace small">
-        <summary class="d-flex align-items-center justify-content-between gap-2">
-          <span>${tc.function?.name ?? "unknown"}</span>
-          <span class="chat-toolcall-toggle" aria-hidden="true">
-            <typo3-backend-icon identifier="actions-chevron-up" size="small"></typo3-backend-icon>
-          </span>
-        </summary>
-        <div class="py-3">
+            <div class="panel panel-default panel-condensed">
+                <div class="panel-heading">
 
-          <div class="mb-3">
-            <strong>Args</strong><br/>
-            <code>${tc.function?.arguments ?? ""}</code>
-          </div>
-          ${hasResult ? html`
-                <div>
-                  <strong>Result</strong><br/>
-                  <pre class="m-0">${resultText}</pre>
-                  ${resultMedia.map((b) => this.renderResultMedia(b))}
-                </div>` : html`
-                <div class="chat-toolcall-running text-muted">
-                  <thinking-indicator label="Executing"></thinking-indicator>
-                </div>`}
-        </div>
-      </details>
-    `;
+                    <div class="panel-heading-row">
+                        <button class="panel-button collapsed" type="button" data-bs-toggle="collapse"
+                                data-bs-target="#panel-record-collapsed-auto6a3bd0d254d40" aria-expanded="false">
+                            <div class="panel-title">${tc.function?.name ?? "unknown"}</div>
+                            <span class="caret"></span>
+                        </button>
+
+                    </div>
+
+                </div>
+                <div class="panel-collapse collapse" id="panel-record-collapsed-auto6a3bd0d254d40" style="">
+                    <div class="panel-body">
+                        <strong>Args</strong><br/>
+                        <code>${tc.function?.arguments ?? ""}</code>
+                        ${hasResult ? html`
+                                    <div>
+                                        <strong>Result</strong><br/>
+                                        <pre class="m-0">${resultText}</pre>
+                                        ${resultMedia.map((b) => this.renderResultMedia(b))}
+                                    </div>` : html`
+                                    <div class="chat-toolcall-running text-muted">
+                                        <thinking-indicator label="Executing"></thinking-indicator>
+                                    </div>`}
+                    </div>
+                </div>
+            </div>
+        `;
   }
   renderResultMedia(block) {
     if (block.type === "image_url") {
-      return html`<img src=${block.image_url.url} alt="" class="mt-2 d-block" style="max-width:100%; max-height:240px;"/>`;
+      return html`<img src=${block.image_url.url} alt="" class="mt-2 d-block"
+                             style="max-width:100%; max-height:240px;"/>`;
     }
     if (block.type === "file") {
-      return html`<div class="mt-2"><typo3-backend-icon identifier="mimetypes-other-other" size="small"/> ${block.file.filename}</div>`;
+      return html`
+                <div class="mt-2">
+                    <typo3-backend-icon identifier="mimetypes-other-other" size="small"/>
+                    ${block.file.filename}
+                </div>`;
     }
     return nothing;
   }
@@ -390,37 +463,57 @@ let ChatElement = class extends LitElement {
   }
   renderStreamingBubble() {
     return html`
-      <div class="rounded-4 bg-white border p-3">
-        <div class="chat-msg-role fw-bold small opacity-75 mb-1 text-uppercase">assistant</div>
-        ${this.reasoningBuffer ? this.renderReasoningBlock(this.reasoningBuffer) : nothing}
-        <div class="chat-msg-content">
-          ${unsafeHTML(this.renderMarkdown(this.streamingBuffer))}<thinking-indicator></thinking-indicator>
-        </div>
-      </div>
-    `;
+            <div class="card card-default me-3">
+                <div class="card-header">
+                    <div class="card-header-body">
+                        <span class="card-subtitle">assistant</span>
+                    </div>
+                </div>
+
+                <div class="card-body">
+                    ${unsafeHTML(this.renderMarkdown(this.streamingBuffer))}
+                    <thinking-indicator></thinking-indicator>
+                </div>
+                
+
+                ${this.reasoningBuffer ? html`
+                    <div class="card-footer">
+                        ${this.renderReasoningBlock(this.reasoningBuffer, this)}
+                    </div>` : nothing}
+            </div>
+        `;
   }
-  renderReasoningBlock(reasoning) {
+  renderReasoningBlock(reasoning, key) {
+    const collapseId = this.getReasoningGroupId(key);
     return html`
-      <details class="chat-reasoning mb-2 p-2 rounded border bg-body-tertiary small text-muted">
-        <summary class="d-flex align-items-center justify-content-between gap-2">
-          <span class="d-flex align-items-center gap-2">
-            <typo3-backend-icon identifier="actions-lightbulb-on" size="small"></typo3-backend-icon>
-            <span>Reasoning</span>
-          </span>
-          <span class="chat-toolcall-toggle" aria-hidden="true">
-            <typo3-backend-icon identifier="actions-chevron-up" size="small"></typo3-backend-icon>
-          </span>
-        </summary>
-        <div class="mt-2">${unsafeHTML(this.renderMarkdown(reasoning))}</div>
-      </details>
-    `;
+            <div class="panel panel-default panel-condensed">
+                <div class="panel-heading">
+                    <div class="panel-heading-row">
+                        <button class="panel-button collapsed" type="button"
+                                data-bs-toggle="collapse" data-bs-target="#${collapseId}"
+                                aria-expanded="false" aria-controls="${collapseId}">
+                            <span class="panel-icon">
+                                <typo3-backend-icon identifier="actions-lightbulb-on" size="small"></typo3-backend-icon>
+                            </span>
+                            <div class="panel-title"><span>Reasoning</span></div>
+                            <span class="caret"></span>
+                        </button>
+                    </div>
+                </div>
+                <div id="${collapseId}" class="panel-collapse collapse">
+                    <div class="panel-body">
+                        ${unsafeHTML(this.renderMarkdown(reasoning))}
+                    </div>
+                </div>
+            </div>
+        `;
   }
   renderThinkingIndicator() {
     return html`
-      <div class="p-3 align-self-start">
-        <thinking-indicator label="Thinking"></thinking-indicator>
-      </div>
-    `;
+            <div class="p-3 align-self-start">
+                <thinking-indicator label="Thinking"></thinking-indicator>
+            </div>
+        `;
   }
   // -- Markdown --------------------------------------------------------------
   renderMarkdown(text) {
@@ -783,11 +876,9 @@ let ChatElement = class extends LitElement {
   }
   scrollLatestUserMessageToTop() {
     void this.updateComplete.then(() => {
-      const container = this.renderRoot.querySelector(".chat-messages");
-      if (!container) return;
-      const userBubbles = container.querySelectorAll(".chat-msg-user");
-      const latest = userBubbles[userBubbles.length - 1];
-      if (!latest) return;
+      const container = this.messagesContainerRef.value;
+      const latest = this.latestUserBubbleRef.value;
+      if (!container || !latest) return;
       const containerTop = container.getBoundingClientRect().top;
       const latestTop = latest.getBoundingClientRect().top;
       container.scrollTo({ top: container.scrollTop + latestTop - containerTop, behavior: "smooth" });
@@ -899,12 +990,6 @@ __decorateClass([
 __decorateClass([
   query("textarea")
 ], ChatElement.prototype, "inputEl", 2);
-__decorateClass([
-  query(".chat-upload-trigger")
-], ChatElement.prototype, "uploadTriggerEl", 2);
-__decorateClass([
-  query(".chat-upload-zone")
-], ChatElement.prototype, "uploadZoneEl", 2);
 ChatElement = __decorateClass([
   customElement("hn-agent-chat")
 ], ChatElement);

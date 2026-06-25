@@ -1,64 +1,66 @@
 import {html, LitElement, nothing, type TemplateResult} from 'lit';
 import {customElement, property, query, state} from 'lit/decorators.js';
 import {unsafeHTML} from 'lit/directives/unsafe-html.js';
+import {createRef, ref, type Ref} from 'lit/directives/ref.js';
 import {marked} from 'marked';
 import DOMPurify from 'dompurify';
 import DragUploader from '@typo3/backend/drag-uploader.js';
 import Modal from '@typo3/backend/modal.js';
 import {MessageUtility} from '@typo3/backend/utility/message-utility.js';
 import './thinking-indicator.js';
+import '@hn/agent/attachment-chip-elements.js';
 
 marked.setOptions({breaks: true, gfm: true});
 
 // ---- Types ----------------------------------------------------------------
 
 interface ChatMessage {
-  role: 'user' | 'assistant' | 'system' | 'tool';
-  content?: string | ContentBlock[];
-  attachments?: Attachment[];
-  tool_calls?: ToolCall[];
-  tool_call_id?: string;
-  reasoning?: string;
-  reasoning_details?: unknown[];
+    role: 'user' | 'assistant' | 'system' | 'tool';
+    content?: string | ContentBlock[];
+    attachments?: Attachment[];
+    tool_calls?: ToolCall[];
+    tool_call_id?: string;
+    reasoning?: string;
+    reasoning_details?: unknown[];
 }
 
 type ContentBlock =
-  | {type: 'text'; text: string}
-  | {type: 'image_url'; image_url: {url: string}}
-  | {type: 'file'; file: {filename: string; file_data: string}};
+    | { type: 'text'; text: string }
+    | { type: 'image_url'; image_url: { url: string } }
+    | { type: 'file'; file: { filename: string; file_data: string } };
 
 interface ToolCall {
-  id?: string;
-  function: {name: string; arguments: string};
-  result?: string | ContentBlock[];
+    id?: string;
+    function: { name: string; arguments: string };
+    result?: string | ContentBlock[];
 }
 
 interface TrackedChange {
-  tablename: string;
-  record_uid: number;
-  workspace_record_uid: number;
-  page_id: number;
-  workspace_page_id: number;
-  task_uid?: number;
+    tablename: string;
+    record_uid: number;
+    workspace_record_uid: number;
+    page_id: number;
+    workspace_page_id: number;
+    task_uid?: number;
 }
 
 interface SseParsed {
-  event: string;
-  data: Record<string, unknown>;
+    event: string;
+    data: Record<string, unknown>;
 }
 
 interface Attachment {
-  uid?: number;
-  identifier?: string;
-  name: string;
-  mime_type?: string;
-  iconHtml?: string;
-  unresolvable?: boolean;
-  // Pre-flight result (populated async after add; undefined while loading).
-  // True when the LLM can fetch the file's bytes via the ReadFile tool.
-  readableByLlm?: boolean;
-  reason?: string;
-  size?: number;
+    uid?: number;
+    identifier?: string;
+    name: string;
+    mime_type?: string;
+    iconHtml?: string;
+    unresolvable?: boolean;
+    // Pre-flight result (populated async after add; undefined while loading).
+    // True when the LLM can fetch the file's bytes via the ReadFile tool.
+    readableByLlm?: boolean;
+    reason?: string;
+    size?: number;
 }
 
 // ---- Component -------------------------------------------------------------
@@ -66,1007 +68,1082 @@ interface Attachment {
 @customElement('hn-agent-chat')
 export class ChatElement extends LitElement {
 
-  // No Shadow DOM — use TYPO3 backend Bootstrap CSS
-  override createRenderRoot() {
-    return this;
-  }
-
-  // -- Properties (HTML attributes, set by Fluid template) -------------------
-
-  @property({attribute: 'send-uri'}) sendUri = '';
-  @property({attribute: 'stream-uri'}) streamUri = '';
-  @property({attribute: 'cancel-uri'}) cancelUri = '';
-  @property({attribute: 'auto-start'}) autoStart = '';
-  @property({attribute: 'initial-prompt'}) initialPrompt = '';
-  @property({attribute: 'task-workspace-id', type: Number}) taskWorkspaceId = 0;
-  @property({attribute: 'task-workspace-title'}) taskWorkspaceTitle = '';
-  @property({attribute: 'active-workspace-id', type: Number}) activeWorkspaceId = 0;
-  @property({attribute: 'active-workspace-title'}) activeWorkspaceTitle = '';
-  @property({attribute: 'switch-workspace-uri'}) switchWorkspaceUri = '';
-  @property({attribute: 'default-upload-folder'}) defaultUploadFolder = '';
-  @property({attribute: 'file-browser-uri'}) fileBrowserUri = '';
-  @property({attribute: 'preflight-uri'}) preflightUri = '';
-
-  @property({
-    attribute: 'initial-messages',
-    converter: {
-      fromAttribute(value: string | null): ChatMessage[] {
-        if (!value) return [];
-        try {
-          return JSON.parse(value) as ChatMessage[];
-        } catch {
-          return [];
-        }
-      },
-    },
-  })
-  initialMessages: ChatMessage[] = [];
-
-  @property({
-    attribute: 'initial-changes',
-    converter: {
-      fromAttribute(value: string | null): TrackedChange[] {
-        if (!value) return [];
-        try {
-          return JSON.parse(value) as TrackedChange[];
-        } catch {
-          return [];
-        }
-      },
-    },
-  })
-  initialChanges: TrackedChange[] = [];
-
-  // -- Internal state --------------------------------------------------------
-
-  @state() private changes: TrackedChange[] = [];
-  @state() private messages: ChatMessage[] = [];
-  @state() private inputValue = '';
-  @state() private loading = false;
-  @state() private errorMessage = '';
-  @state() private thinking = false;
-  @state() private streamingBuffer = '';
-  @state() private reasoningBuffer = '';
-  @state() private isStreaming = false;
-  @state() private attachments: Attachment[] = [];
-  @state() private lastSubmission: {message: string; attachments: Attachment[]} | null = null;
-
-  // Active SSE fetch's AbortController while a stream is in flight, null otherwise.
-  // The Stop button calls .abort() on it; the reader loop in sendStreaming sees the
-  // AbortError and exits cleanly. PHP-side, the disconnect is picked up by
-  // SseStream's connection_aborted() check on the next flush.
-  private abortController: AbortController | null = null;
-
-  @query('textarea') private inputEl!: HTMLTextAreaElement;
-  // DragUploader dispatches `uploadSuccess` on its `data-dropzone-trigger`
-  // element (not the wrapper, and not bubbling) — so we have to listen on
-  // the trigger button itself.
-  @query('.chat-upload-trigger') private uploadTriggerEl?: HTMLElement;
-  @query('.chat-upload-zone') private uploadZoneEl?: HTMLElement;
-
-  private elementBrowserListener = (e: MessageEvent): void => {
-    if (!MessageUtility.verifyOrigin(e.origin)) return;
-    const data = e.data as {actionName?: string; fieldName?: string; value?: string; label?: string};
-    if (data.actionName !== 'typo3:elementBrowser:elementAdded') return;
-    if (data.fieldName !== 'hn-agent-chat') return;
-    const raw = (data.value ?? '').toString();
-    if (!raw) return;
-    // File-mode element browser sends the sys_file UID as a plain numeric
-    // string in `value`. A combined identifier ("1:/path/file.png") would
-    // contain a colon — pass that through as `identifier` instead.
-    const numericUid = /^\d+$/.test(raw) ? parseInt(raw, 10) : 0;
-    if (numericUid > 0) {
-      this.addAttachment({uid: numericUid, name: data.label || `sys_file:${numericUid}`});
-    } else {
-      this.addAttachment({identifier: raw, name: data.label || raw});
-    }
-  };
-
-  private onKeydownGlobal = (e: KeyboardEvent): void => {
-    if (e.key !== 'Escape') return;
-    // Already handled by another consumer (e.g. an open TYPO3 modal) — don't
-    // also tear down the stream in that case.
-    if (e.defaultPrevented) return;
-    if (!this.loading || this.abortController === null) return;
-    e.preventDefault();
-    this.onStop();
-  };
-
-  private uploadSuccessListener = (e: Event): void => {
-    const detail = (e as CustomEvent).detail as unknown as [unknown, {upload?: Array<{uid: number; name: string; id: string; icon?: string}>}];
-    const payload = Array.isArray(detail) ? detail[1] : undefined;
-    const file = payload?.upload?.[0];
-    if (!file) return;
-    this.addAttachment({uid: file.uid, identifier: file.id, name: file.name, iconHtml: file.icon});
-  };
-
-  // -- Lifecycle -------------------------------------------------------------
-
-  override firstUpdated(): void {
-    this.messages = this.mergeToolResults(this.initialMessages);
-    this.changes = [...this.initialChanges];
-
-    // Manual single-instance init. The auto-discovery in DragUploader.init()
-    // races (MutationObserver + DocumentService.ready both pick up the same
-    // .t3js-drag-uploader element when Lit's render microtask interleaves with
-    // the ready() promise resolution), producing duplicate dropzones and
-    // double file-picker pops. Instantiating ourselves — without the
-    // `t3js-drag-uploader` marker class in the template — sidesteps both
-    // paths.
-    if (this.uploadZoneEl) {
-      new DragUploader(this.uploadZoneEl);
-    }
-    this.uploadTriggerEl?.addEventListener('uploadSuccess', this.uploadSuccessListener);
-    document.addEventListener('keydown', this.onKeydownGlobal);
-
-    if ((this.autoStart === '1' || this.autoStart === 'true') && this.streamUri && !this.isWorkspaceMismatch()) {
-      this.doAutoStart();
+    // No Shadow DOM — use TYPO3 backend Bootstrap CSS
+    override createRenderRoot() {
+        return this;
     }
 
-    this.inputEl?.focus();
-  }
+    // -- Properties (HTML attributes, set by Fluid template) -------------------
 
-  override disconnectedCallback(): void {
-    super.disconnectedCallback();
-    this.uploadTriggerEl?.removeEventListener('uploadSuccess', this.uploadSuccessListener);
-    window.removeEventListener('message', this.elementBrowserListener);
-    document.removeEventListener('keydown', this.onKeydownGlobal);
-  }
+    @property({attribute: 'send-uri'}) sendUri = '';
+    @property({attribute: 'stream-uri'}) streamUri = '';
+    @property({attribute: 'cancel-uri'}) cancelUri = '';
+    @property({attribute: 'auto-start'}) autoStart = '';
+    @property({attribute: 'initial-prompt'}) initialPrompt = '';
+    @property({attribute: 'task-workspace-id', type: Number}) taskWorkspaceId = 0;
+    @property({attribute: 'task-workspace-title'}) taskWorkspaceTitle = '';
+    @property({attribute: 'active-workspace-id', type: Number}) activeWorkspaceId = 0;
+    @property({attribute: 'active-workspace-title'}) activeWorkspaceTitle = '';
+    @property({attribute: 'switch-workspace-uri'}) switchWorkspaceUri = '';
+    @property({attribute: 'default-upload-folder'}) defaultUploadFolder = '';
+    @property({attribute: 'file-browser-uri'}) fileBrowserUri = '';
+    @property({attribute: 'preflight-uri'}) preflightUri = '';
 
-  private isWorkspaceMismatch(): boolean {
-    if (!this.taskWorkspaceId) return false;
-    return this.taskWorkspaceId !== this.activeWorkspaceId;
-  }
-
-  // -- Render ----------------------------------------------------------------
-
-  override render() {
-    const mismatch = this.isWorkspaceMismatch();
-    const inputDisabled = this.loading || mismatch;
-    const canSubmit = !inputDisabled && (this.inputValue.trim() !== '' || this.attachments.length > 0);
-    const uploadEnabled = !!this.defaultUploadFolder;
-    const pickEnabled = !!this.fileBrowserUri;
-    return html`
-      <div class="chat-container message-fade mx-4">
-        ${this.errorMessage
-            ? html`
-              <div class="chat-error-banner alert alert-danger d-flex align-items-center gap-2 m-3 mb-0 sticky-top" role="alert">
-                <span class="flex-grow-1">${this.errorMessage}</span>
-                ${this.lastSubmission !== null
-                    ? html`
-                      <button type="button"
-                              class="btn btn-sm btn-outline-danger"
-                              ?disabled=${this.loading}
-                              @click=${this.onRetry}>
-                        <typo3-backend-icon identifier="actions-refresh" size="small"/>
-                        Erneut versuchen
-                      </button>`
-                    : nothing}
-                <button type="button"
-                        class="btn-close"
-                        aria-label="Schließen"
-                        @click=${this.onDismissError}></button>
-              </div>`
-            : nothing}
-        <div class="chat-messages overflow-auto mx-3 py-4">
-          ${this.computeTurns().map((turn, i, all) => {
-            const isLast = i === all.length - 1;
-            return html`
-              <div class="chat-turn d-flex flex-column gap-3 ${isLast ? 'chat-turn-latest' : 'pb-3'}">
-                ${turn.map(msg => this.renderMessage(msg))}
-                ${isLast && this.isStreaming ? this.renderStreamingBubble() : nothing}
-                ${isLast && this.thinking && !this.isStreaming ? this.renderThinkingIndicator() : nothing}
-              </div>
-            `;
-          })}
-        </div>
-
-        <div
-            class="chat-upload-zone"
-            data-target-folder=${this.defaultUploadFolder}
-            data-max-file-size="0"
-            data-dropzone-target=".chat-upload-anchor"
-            data-dropzone-trigger=".chat-upload-trigger"
-            data-default-action="rename">
-
-          
-
-          ${mismatch ? this.renderWorkspaceMismatch() : nothing}
-
-          <form class="position-relative rounded-4 border bg-white overflow-hidden d-flex flex-column gap-3 p-3 " @submit=${this.onSubmit}>
-            <textarea
-                name="message"
-                class="chat-input border-0 d-block w-100 bg-white"
-                rows="2"
-                placeholder="Type a follow-up message\u2026"
-                .value=${this.inputValue}
-                @input=${this.onInput}
-                @keydown=${this.onKeydown}
-            ></textarea>
-            ${this.attachments.length > 0
-              ? html`<div class="chat-attachments d-flex flex-wrap gap-2">
-                  ${this.attachments.map((a, i) => this.renderAttachmentChip(a, () => this.removeAttachment(i)))}
-                </div>`
-              : nothing}
-            <div class="chat-upload-anchor" style="display:none"></div>
-            <div class="w-100 d-flex flex-row">
-              ${this.renderAttachmentsBar(uploadEnabled, pickEnabled, inputDisabled)}
-              <div class="ms-auto">
-                ${this.loading
-                  ? html`
-                    <button type="button"
-                            class="btn btn-sm"
-                            title="Antwort abbrechen"
-                            ?disabled=${this.abortController === null}
-                            @click=${this.onStop}>
-                      <typo3-backend-icon identifier="actions-close" size="small"/>
-                    </button>`
-                  : html`
-                    <button type="submit" class="btn btn-sm" ?disabled=${!canSubmit}>
-                      <typo3-backend-icon
-                          identifier="actions-arrow-down-start-alt"
-                          size="small"/>
-                    </button>`}
-              </div>
-            </div>
-          </form>
-
-         
-        </div>
-
-      </div>
-    `;
-  }
-
-  private renderAttachmentsBar(uploadEnabled: boolean, pickEnabled: boolean, inputDisabled: boolean): TemplateResult {
-    return html`
-      <div>
-        <button type="button"
-                class="chat-upload-trigger btn btn-sm btn-default"
-                ?disabled=${inputDisabled || !uploadEnabled}
-                title=${uploadEnabled ? 'Datei hochladen' : 'Kein Upload-Ordner verf\u00fcgbar'}>
-          <typo3-backend-icon identifier="actions-upload" size="small"/>
-          Hochladen
-        </button>
-        <button type="button"
-                class="btn btn-sm btn-default"
-                ?disabled=${inputDisabled || !pickEnabled}
-                @click=${this.onPickClick}>
-          <typo3-backend-icon identifier="actions-folder" size="small"/>
-          Ausw\u00e4hlen
-        </button>
-        
-      </div>
-    `;
-  }
-
-  private renderAttachmentChip(att: Attachment, onRemove?: () => void): TemplateResult {
-    const thumbUrl = this.buildThumbnailUrl(att);
-    const onThumbError = (e: Event): void => {
-      const img = e.target as HTMLImageElement;
-      img.style.display = 'none';
-      const fallback = img.nextElementSibling as HTMLElement | null;
-      if (fallback) fallback.style.display = '';
-    };
-    const notReadable = att.readableByLlm === false;
-    const warnTitle = notReadable
-      ? `LLM kann den Inhalt nicht via ReadFile lesen \u2014 nur Metadaten${att.reason ? ` (${att.reason})` : ''}`
-      : (att.unresolvable ? 'Datei nicht aufl\u00f6sbar' : '');
-    return html`
-      <span class="chat-attachment-chip d-inline-flex align-items-center gap-2 border rounded bg-body p-1 ${onRemove ? 'pe-2' : 'px-2'}"
-            title=${warnTitle}>
-        ${thumbUrl
-          ? html`
-              <img src=${thumbUrl} alt="" class="chat-attachment-thumb rounded" @error=${onThumbError}/>
-              <span class="chat-attachment-icon rounded" style="display:none">${this.renderFallbackIcon(att)}</span>`
-          : html`<span class="chat-attachment-icon rounded">${this.renderFallbackIcon(att)}</span>`}
-        <span class="chat-attachment-name ${att.unresolvable ? 'text-decoration-line-through opacity-75' : ''}">${att.name}</span>
-        ${notReadable
-          ? html`<span class="chat-attachment-warn badge bg-warning-subtle text-warning-emphasis border border-warning-subtle"
-                       title=${warnTitle}>
-              <typo3-backend-icon identifier="actions-exclamation" size="small"/>
-            </span>`
-          : nothing}
-        ${onRemove
-          ? html`<button type="button"
-                  class="btn btn-sm p-0 border-0 text-muted"
-                  title="Entfernen"
-                  @click=${onRemove}>\u00d7</button>`
-          : nothing}
-      </span>
-    `;
-  }
-
-  private renderFallbackIcon(att: Attachment): TemplateResult {
-    if (att.iconHtml) return html`${unsafeHTML(att.iconHtml)}`;
-    return html`<typo3-backend-icon identifier="mimetypes-other-other" size="medium"></typo3-backend-icon>`;
-  }
-
-  private buildThumbnailUrl(att: Attachment): string {
-    const base = (window.top as unknown as {TYPO3?: {settings?: {Resource?: {thumbnailUrl?: string}}}})
-      ?.TYPO3?.settings?.Resource?.thumbnailUrl;
-    if (!base) return '';
-    const ref = att.uid ?? att.identifier;
-    if (ref === undefined || ref === null || ref === '') return '';
-    const url = new URL(base, window.location.origin);
-    url.searchParams.set('identifier', String(ref));
-    url.searchParams.set('size', 'large');
-    url.searchParams.set('keepAspectRatio', 'false');
-    return url.toString();
-  }
-
-  private renderWorkspaceMismatch(): TemplateResult {
-    const mismatchTemplate = TYPO3?.lang?.['workspace.chat.mismatch']
-      ?? 'This task belongs to workspace "%s", but you are currently in "%s". Switch to "%s" to continue the conversation.';
-    const buttonTemplate = TYPO3?.lang?.['workspace.chat.switchButton'] ?? 'Switch to workspace "%s"';
-
-    const taskTitle = this.taskWorkspaceTitle || `#${this.taskWorkspaceId}`;
-    const activeTitle = this.activeWorkspaceTitle
-      || (this.activeWorkspaceId > 0 ? `#${this.activeWorkspaceId}` : 'Live');
-
-    const message = mismatchTemplate
-      .replace('%s', taskTitle)
-      .replace('%s', activeTitle)
-      .replace('%s', taskTitle);
-    const buttonLabel = buttonTemplate.replace('%s', taskTitle);
-
-    // Navigate the top-level backend window so the workspace selector in the
-    // toolbar reloads. target="_top" is set on the anchor for ctrl-click /
-    // accessibility, but the explicit click handler is what actually fires —
-    // the BE module iframe otherwise eats the navigation.
-    return html`
-      <div class="alert alert-warning d-flex flex-column align-items-start justify-content-between mb-3 gap-3">
-        <div>${message}</div>
-        <a href=${this.switchWorkspaceUri}
-           target="_top"
-           class="btn btn-warning text-decoration-none ${this.switchWorkspaceUri ? '' : 'disabled'}"
-           @click=${this.onSwitchClick}>
-          <typo3-backend-icon identifier="apps-toolbar-menu-workspace" size="small"></typo3-backend-icon>
-          ${buttonLabel}
-        </a>
-      </div>
-    `;
-  }
-
-  private onSwitchClick(e: MouseEvent): void {
-    if (!this.switchWorkspaceUri) return;
-    // Allow native handling for modifier clicks (open in new tab etc.).
-    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
-    e.preventDefault();
-    const topWindow = window.top ?? window;
-    topWindow.location.href = this.switchWorkspaceUri;
-  }
-
-  private renderMessage(msg: ChatMessage): TemplateResult | typeof nothing {
-    const role = msg.role || 'unknown';
-    if (role === 'system') return nothing;
-    const roleLabel = role === 'user' ? 'you' : role;
-
-    if (role === 'assistant') {
-      const assistantText = msg.content != null ? this.contentText(msg.content) : '';
-      return html`
-        <div class="rounded-4 bg-white border p-3 me-3">
-          <div class="chat-msg-role fw-bold small opacity-75 mb-1 text-uppercase">${roleLabel}</div>
-          ${msg.reasoning
-            ? this.renderReasoningBlock(msg.reasoning)
-            : nothing}
-          ${assistantText
-            ? html`<div class="chat-msg-content">${unsafeHTML(this.renderMarkdown(assistantText))}</div>`
-            : nothing}
-          ${msg.tool_calls && msg.tool_calls.length > 0
-            ? this.renderToolCallsGroup(msg.tool_calls)
-            : nothing}
-        </div>
-      `;
-    }
-
-
-    // user, system, unknown
-    const attachments = msg.attachments ?? [];
-    const userText = msg.content != null ? this.contentText(msg.content) : '';
-    return html`
-      <div class="chat-msg-user rounded-4 bg-success-subtle border p-3 ms-3 align-self-end">
-        <div class="chat-msg-role fw-bold small opacity-75 mb-1 text-uppercase">${roleLabel}</div>
-        ${userText
-          ? html`<pre class="chat-msg-prewrap m-0">${userText}</pre>`
-          : nothing}
-        ${attachments.length > 0
-          ? html`<div class="chat-attachments d-flex flex-wrap gap-2 ${msg.content ? 'mt-2' : ''}">
-              ${attachments.map(a => this.renderAttachmentChip(a))}
-            </div>`
-          : nothing}
-      </div>
-    `;
-  }
-
-  private renderToolCallsGroup(tcs: ToolCall[]): TemplateResult {
-    const count = tcs.length;
-    const noun = count === 1 ? 'Tool Call' : 'Tool Calls';
-    const running = tcs.some(tc => tc.result === undefined);
-    return html`
-      <details class="chat-toolcalls mt-2 p-2 rounded border bg-body-tertiary small">
-        <summary class="d-flex align-items-center justify-content-between gap-2">
-          <span class="d-flex align-items-center gap-2">
-            <typo3-backend-icon identifier="actions-cog" size="small"></typo3-backend-icon>
-            <span><strong>${count}</strong> ${noun}</span>
-            ${running
-              ? html`<thinking-indicator class="ms-1"></thinking-indicator>`
-              : nothing}
-          </span>
-          <span class="chat-toolcall-toggle" aria-hidden="true">
-            <typo3-backend-icon identifier="actions-chevron-up" size="small"></typo3-backend-icon>
-          </span>
-        </summary>
-        <div class="d-flex flex-column gap-2 mt-2">
-          ${tcs.map(tc => this.renderToolCall(tc))}
-        </div>
-      </details>
-    `;
-  }
-
-  private renderToolCall(tc: ToolCall): TemplateResult {
-    const hasResult = tc.result !== undefined;
-    const resultText = hasResult ? this.contentText(tc.result!) : '';
-    const resultMedia = hasResult ? this.contentMedia(tc.result!) : [];
-    return html`
-      <details class="chat-toolcall p-2 rounded border bg-body font-monospace small">
-        <summary class="d-flex align-items-center justify-content-between gap-2">
-          <span>${tc.function?.name ?? 'unknown'}</span>
-          <span class="chat-toolcall-toggle" aria-hidden="true">
-            <typo3-backend-icon identifier="actions-chevron-up" size="small"></typo3-backend-icon>
-          </span>
-        </summary>
-        <div class="py-3">
-
-          <div class="mb-3">
-            <strong>Args</strong><br/>
-            <code>${tc.function?.arguments ?? ''}</code>
-          </div>
-          ${hasResult
-              ? html`
-                <div>
-                  <strong>Result</strong><br/>
-                  <pre class="m-0">${resultText}</pre>
-                  ${resultMedia.map(b => this.renderResultMedia(b))}
-                </div>`
-              : html`
-                <div class="chat-toolcall-running text-muted">
-                  <thinking-indicator label="Executing"></thinking-indicator>
-                </div>`}
-        </div>
-      </details>
-    `;
-  }
-
-  private renderResultMedia(block: ContentBlock): TemplateResult | typeof nothing {
-    if (block.type === 'image_url') {
-      return html`<img src=${block.image_url.url} alt="" class="mt-2 d-block" style="max-width:100%; max-height:240px;"/>`;
-    }
-    if (block.type === 'file') {
-      return html`<div class="mt-2"><typo3-backend-icon identifier="mimetypes-other-other" size="small"/> ${block.file.filename}</div>`;
-    }
-    return nothing;
-  }
-
-  private contentText(content: string | ContentBlock[] | null | undefined): string {
-    if (content == null) return '';
-    if (typeof content === 'string') return content;
-    return content
-      .filter((b): b is Extract<ContentBlock, {type: 'text'}> => b.type === 'text')
-      .map(b => b.text)
-      .join('\n');
-  }
-
-  private contentMedia(content: string | ContentBlock[] | null | undefined): ContentBlock[] {
-    if (content == null || typeof content === 'string') return [];
-    return content.filter(b => b.type !== 'text');
-  }
-
-  private renderStreamingBubble(): TemplateResult {
-    return html`
-      <div class="rounded-4 bg-white border p-3">
-        <div class="chat-msg-role fw-bold small opacity-75 mb-1 text-uppercase">assistant</div>
-        ${this.reasoningBuffer
-          ? this.renderReasoningBlock(this.reasoningBuffer)
-          : nothing}
-        <div class="chat-msg-content">
-          ${unsafeHTML(this.renderMarkdown(this.streamingBuffer))}<thinking-indicator></thinking-indicator>
-        </div>
-      </div>
-    `;
-  }
-
-  private renderReasoningBlock(reasoning: string): TemplateResult {
-    return html`
-      <details class="chat-reasoning mb-2 p-2 rounded border bg-body-tertiary small text-muted">
-        <summary class="d-flex align-items-center justify-content-between gap-2">
-          <span class="d-flex align-items-center gap-2">
-            <typo3-backend-icon identifier="actions-lightbulb-on" size="small"></typo3-backend-icon>
-            <span>Reasoning</span>
-          </span>
-          <span class="chat-toolcall-toggle" aria-hidden="true">
-            <typo3-backend-icon identifier="actions-chevron-up" size="small"></typo3-backend-icon>
-          </span>
-        </summary>
-        <div class="mt-2">${unsafeHTML(this.renderMarkdown(reasoning))}</div>
-      </details>
-    `;
-  }
-
-  private renderThinkingIndicator(): TemplateResult {
-    return html`
-      <div class="p-3 align-self-start">
-        <thinking-indicator label="Thinking"></thinking-indicator>
-      </div>
-    `;
-  }
-
-  // -- Markdown --------------------------------------------------------------
-
-  private renderMarkdown(text: string): string {
-    return DOMPurify.sanitize(marked.parse(text ?? '') as string);
-  }
-
-  // -- Event handlers --------------------------------------------------------
-
-  private onSubmit(e: Event): void {
-    e.preventDefault();
-    if (this.isWorkspaceMismatch()) return;
-    const message = this.inputValue.trim();
-    const attachments = this.attachments;
-    if (!message && attachments.length === 0) return;
-
-    this.errorMessage = '';
-    this.lastSubmission = {message, attachments};
-    const optimistic: ChatMessage = {role: 'user', content: message};
-    if (attachments.length > 0) optimistic.attachments = attachments;
-    this.messages = [...this.messages, optimistic];
-    this.inputValue = '';
-    this.attachments = [];
-    this.loading = true;
-    this.scrollLatestUserMessageToTop();
-    this.inputEl?.focus();
-
-    if (this.streamUri) {
-      this.sendStreaming(message, attachments).then(() => this.finishSend());
-    } else {
-      this.sendBlocking(message, attachments).then(() => this.finishSend());
-    }
-  }
-
-  private onDismissError(): void {
-    this.errorMessage = '';
-    this.lastSubmission = null;
-  }
-
-  private onStop(): void {
-    // Promote any in-flight streaming bubble into a real assistant message
-    // BEFORE aborting. Otherwise the partial content vanishes the moment
-    // isStreaming flips to false — the user would see nothing until reload.
-    if (this.isStreaming && (this.streamingBuffer !== '' || this.reasoningBuffer !== '')) {
-      this.messages = [...this.messages, {
-        role: 'assistant',
-        content: this.streamingBuffer,
-        ...(this.reasoningBuffer ? {reasoning: this.reasoningBuffer} : {}),
-      }];
-      this.streamingBuffer = '';
-      this.reasoningBuffer = '';
-      this.isStreaming = false;
-    }
-    // Tell the server this is an EXPLICIT cancel (not just a navigation). The
-    // server-side flow no longer treats a bare connection close as a cancel —
-    // it would otherwise let the task run to completion. keepalive ensures the
-    // request still goes through if the user simultaneously closes the tab.
-    // The task UID is already on the cancelUri as a query parameter.
-    if (this.cancelUri) {
-      void fetch(this.cancelUri, {method: 'POST', keepalive: true}).catch(() => {});
-    }
-    this.abortController?.abort();
-    this.requestUpdate();
-  }
-
-  private onRetry(): void {
-    if (!this.lastSubmission || this.loading) return;
-    const {message, attachments} = this.lastSubmission;
-    this.errorMessage = '';
-    this.loading = true;
-    const promise = this.streamUri
-        ? this.sendStreaming(message, attachments)
-        : this.sendBlocking(message, attachments);
-    promise.then(() => this.finishSend());
-  }
-
-  private addAttachment(att: Attachment): void {
-    this.attachments = [...this.attachments, att];
-    if (this.preflightUri && (att.uid !== undefined || att.identifier)) {
-      void this.preflightAttachment(att);
-    }
-  }
-
-  private async preflightAttachment(att: Attachment): Promise<void> {
-    try {
-      const url = new URL(this.preflightUri, window.location.origin);
-      if (att.uid !== undefined) url.searchParams.set('uid', String(att.uid));
-      if (att.identifier) url.searchParams.set('identifier', att.identifier);
-      const response = await fetch(url.toString(), {headers: {'Accept': 'application/json'}});
-      if (!response.ok) return;
-      const info = await response.json() as {
-        uid?: number; identifier?: string; name?: string;
-        mime?: string; size?: number;
-        readableByLlm: boolean; reason?: string | null;
-      };
-      this.attachments = this.attachments.map(a => {
-        const sameUid = info.uid !== undefined && a.uid === info.uid;
-        const sameIdent = !!info.identifier && a.identifier === info.identifier;
-        if (!sameUid && !sameIdent) return a;
-        return {
-          ...a,
-          mime_type: info.mime || a.mime_type,
-          size: typeof info.size === 'number' ? info.size : a.size,
-          readableByLlm: info.readableByLlm,
-          reason: info.reason ?? undefined,
-        };
-      });
-    } catch {
-      // silent — chip just stays without status indicator
-    }
-  }
-
-  private removeAttachment(index: number): void {
-    this.attachments = this.attachments.filter((_, i) => i !== index);
-  }
-
-  private onPickClick(): void {
-    if (!this.fileBrowserUri) return;
-    // Listener is attached fresh each open and removed on modal close to avoid
-    // duplicate handling between sessions.
-    window.addEventListener('message', this.elementBrowserListener);
-    const modal = Modal.advanced({
-      type: Modal.types.iframe,
-      content: this.fileBrowserUri,
-      size: Modal.sizes.large,
-    });
-    modal.addEventListener('typo3-modal-hide', () => {
-      window.removeEventListener('message', this.elementBrowserListener);
-    });
-  }
-
-  private onInput(e: Event): void {
-    this.inputValue = (e.target as HTMLTextAreaElement).value;
-  }
-
-  private onKeydown(e: KeyboardEvent): void {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      if (this.loading || this.isWorkspaceMismatch()) {
-        return;
-      }
-      (e.target as HTMLTextAreaElement).closest('form')?.requestSubmit();
-    }
-  }
-
-  private finishSend(): void {
-    this.loading = false;
-    if (this.errorMessage === '') {
-      this.lastSubmission = null;
-    }
-    this.inputEl?.focus();
-  }
-
-  private appendAttachments(formData: FormData, attachments: Attachment[]): void {
-    if (attachments.length === 0) return;
-    const payload = attachments.map(a => ({
-      uid: a.uid,
-      identifier: a.identifier,
-      name: a.name,
-    }));
-    formData.append('attachments', JSON.stringify(payload));
-  }
-
-  // -- Auto-start ------------------------------------------------------------
-
-  private async doAutoStart(): Promise<void> {
-    // Note: the user-bubble is intentionally NOT pushed optimistically here.
-    // The backend streams a `user_message` event after any synthetic context
-    // turns so live and reload renderings stay identical (the persisted order
-    // is [system, assistant_context?, tool*, user, ...]).
-    this.loading = true;
-    this.lastSubmission = {message: '', attachments: []};
-    await this.sendStreaming('');
-    this.finishSend();
-  }
-
-  // -- Network: blocking -----------------------------------------------------
-
-  private async sendBlocking(message: string, attachments: Attachment[] = []): Promise<void> {
-    try {
-      const formData = new FormData();
-      formData.append('message', message);
-      this.appendAttachments(formData, attachments);
-
-      const response = await fetch(this.sendUri, {
-        method: 'POST',
-        headers: {
-          'X-Requested-With': 'XMLHttpRequest',
-          'Accept': 'application/json',
+    @property({
+        attribute: 'initial-messages',
+        converter: {
+            fromAttribute(value: string | null): ChatMessage[] {
+                if (!value) return [];
+                try {
+                    return JSON.parse(value) as ChatMessage[];
+                } catch {
+                    return [];
+                }
+            },
         },
-        body: formData,
-      });
+    })
+    initialMessages: ChatMessage[] = [];
 
-      const data = await response.json();
+    @property({
+        attribute: 'initial-changes',
+        converter: {
+            fromAttribute(value: string | null): TrackedChange[] {
+                if (!value) return [];
+                try {
+                    return JSON.parse(value) as TrackedChange[];
+                } catch {
+                    return [];
+                }
+            },
+        },
+    })
+    initialChanges: TrackedChange[] = [];
 
-      if (!response.ok || data.error) {
-        this.errorMessage = data.error || `Request failed (${response.status})`;
-      }
+    // -- Internal state --------------------------------------------------------
 
-      if (Array.isArray(data.messages)) {
-        this.messages = data.messages as ChatMessage[];
-      }
-    } catch (err) {
-      this.errorMessage = (err as Error).message || String(err);
+    @state() private changes: TrackedChange[] = [];
+    @state() private messages: ChatMessage[] = [];
+    @state() private inputValue = '';
+    @state() private loading = false;
+    @state() private errorMessage = '';
+    @state() private thinking = false;
+    @state() private streamingBuffer = '';
+    @state() private reasoningBuffer = '';
+    @state() private isStreaming = false;
+    @state() private attachments: Attachment[] = [];
+    @state() private lastSubmission: { message: string; attachments: Attachment[] } | null = null;
+
+    // Active SSE fetch's AbortController while a stream is in flight, null otherwise.
+    // The Stop button calls .abort() on it; the reader loop in sendStreaming sees the
+    // AbortError and exits cleanly. PHP-side, the disconnect is picked up by
+    // SseStream's connection_aborted() check on the next flush.
+    private abortController: AbortController | null = null;
+
+    @query('textarea') private inputEl!: HTMLTextAreaElement;
+    // DragUploader dispatches `uploadSuccess` on its `data-dropzone-trigger`
+    // element (not the wrapper, and not bubbling) — so we have to listen on
+    // the trigger button itself.
+    private uploadTriggerRef: Ref<HTMLElement> = createRef();
+    private uploadZoneRef: Ref<HTMLElement> = createRef();
+
+    private messagesContainerRef: Ref<HTMLElement> = createRef();
+    private latestUserBubbleRef: Ref<HTMLElement> = createRef();
+
+    private elementBrowserListener = (e: MessageEvent): void => {
+        if (!MessageUtility.verifyOrigin(e.origin)) return;
+        const data = e.data as { actionName?: string; fieldName?: string; value?: string; label?: string };
+        if (data.actionName !== 'typo3:elementBrowser:elementAdded') return;
+        if (data.fieldName !== 'hn-agent-chat') return;
+        const raw = (data.value ?? '').toString();
+        if (!raw) return;
+        // File-mode element browser sends the sys_file UID as a plain numeric
+        // string in `value`. A combined identifier ("1:/path/file.png") would
+        // contain a colon — pass that through as `identifier` instead.
+        const numericUid = /^\d+$/.test(raw) ? parseInt(raw, 10) : 0;
+        if (numericUid > 0) {
+            this.addAttachment({uid: numericUid, name: data.label || `sys_file:${numericUid}`});
+        } else {
+            this.addAttachment({identifier: raw, name: data.label || raw});
+        }
+    };
+
+    private onKeydownGlobal = (e: KeyboardEvent): void => {
+        if (e.key !== 'Escape') return;
+        // Already handled by another consumer (e.g. an open TYPO3 modal) — don't
+        // also tear down the stream in that case.
+        if (e.defaultPrevented) return;
+        if (!this.loading || this.abortController === null) return;
+        e.preventDefault();
+        this.onStop();
+    };
+
+    private uploadSuccessListener = (e: Event): void => {
+        const detail = (e as CustomEvent).detail as unknown as [unknown, {
+            upload?: Array<{ uid: number; name: string; id: string; icon?: string }>
+        }];
+        const payload = Array.isArray(detail) ? detail[1] : undefined;
+        const file = payload?.upload?.[0];
+        if (!file) return;
+        this.addAttachment({uid: file.uid, identifier: file.id, name: file.name, iconHtml: file.icon});
+    };
+
+    // -- Lifecycle -------------------------------------------------------------
+
+    override firstUpdated(): void {
+        this.messages = this.mergeToolResults(this.initialMessages);
+        this.changes = [...this.initialChanges];
+
+        // Manual single-instance init. The auto-discovery in DragUploader.init()
+        // races (MutationObserver + DocumentService.ready both pick up the same
+        // .t3js-drag-uploader element when Lit's render microtask interleaves with
+        // the ready() promise resolution), producing duplicate dropzones and
+        // double file-picker pops. Instantiating ourselves — without the
+        // `t3js-drag-uploader` marker class in the template — sidesteps both
+        // paths.
+        const zoneEl = this.uploadZoneRef.value;
+        if (zoneEl) {
+            new DragUploader(zoneEl);
+        }
+        this.uploadTriggerRef.value?.addEventListener('uploadSuccess', this.uploadSuccessListener);
+        document.addEventListener('keydown', this.onKeydownGlobal);
+
+        if ((this.autoStart === '1' || this.autoStart === 'true') && this.streamUri && !this.isWorkspaceMismatch()) {
+            this.doAutoStart();
+        }
+
+        this.inputEl?.focus();
     }
-  }
 
-  // -- Network: streaming (SSE) ----------------------------------------------
-
-  private async sendStreaming(message: string, attachments: Attachment[] = []): Promise<void> {
-    this.abortController = new AbortController();
-    try {
-      this.thinking = true;
-      const formData = new FormData();
-      formData.append('message', message);
-      this.appendAttachments(formData, attachments);
-
-      const response = await fetch(this.streamUri, {
-        method: 'POST',
-        body: formData,
-        signal: this.abortController.signal,
-      });
-
-      if (!response.ok) {
-        this.errorMessage = `Request failed (${response.status})`;
-        return;
-      }
-
-      const reader = response.body!.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const {done, value} = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, {stream: true});
-
-        const result = this.parseSseBuffer(buffer);
-        buffer = result.remainder;
-
-        for (const evt of result.parsed) {
-          this.handleSseEvent(evt.event, evt.data);
-        }
-      }
-    } catch (err) {
-      this.thinking = false;
-      this.isStreaming = false;
-      // AbortError is the user clicking Stop — not a failure. The streaming
-      // bubble (if any) stays visible; finishSend() will flip loading off and
-      // a reload would reveal the task as Cancelled with partial messages.
-      if ((err as Error).name !== 'AbortError') {
-        this.errorMessage = (err as Error).message || String(err);
-      }
-    } finally {
-      this.abortController = null;
+    override disconnectedCallback(): void {
+        super.disconnectedCallback();
+        this.uploadTriggerRef.value?.removeEventListener('uploadSuccess', this.uploadSuccessListener);
+        window.removeEventListener('message', this.elementBrowserListener);
+        document.removeEventListener('keydown', this.onKeydownGlobal);
     }
-  }
 
-  // -- SSE parsing -----------------------------------------------------------
-
-  private parseSseBuffer(buffer: string): {parsed: SseParsed[]; remainder: string} {
-    const parsed: SseParsed[] = [];
-    const blocks = buffer.split('\n\n');
-    const remainder = blocks.pop()!;
-
-    for (const block of blocks) {
-      if (!block.trim()) continue;
-      let event = 'message';
-      let data = '';
-      for (const line of block.split('\n')) {
-        if (line.startsWith('event: ')) {
-          event = line.slice(7);
-        } else if (line.startsWith('data: ')) {
-          data = line.slice(6);
-        }
-      }
-      if (data) {
-        try {
-          parsed.push({event, data: JSON.parse(data) as Record<string, unknown>});
-        } catch {
-          // skip malformed
-        }
-      }
+    private isWorkspaceMismatch(): boolean {
+        if (!this.taskWorkspaceId) return false;
+        return this.taskWorkspaceId !== this.activeWorkspaceId;
     }
-    return {parsed, remainder};
-  }
 
-  // -- SSE event dispatch ----------------------------------------------------
+    // -- Render ----------------------------------------------------------------
 
-  private handleSseEvent(event: string, data: Record<string, unknown>): void {
-    switch (event) {
-      case 'llm_start':
-        this.thinking = true;
-        break;
+    override render() {
+        const mismatch = this.isWorkspaceMismatch();
+        const inputDisabled = this.loading || mismatch;
+        const canSubmit = !inputDisabled && (this.inputValue.trim() !== '' || this.attachments.length > 0);
+        const uploadEnabled = !!this.defaultUploadFolder;
+        const pickEnabled = !!this.fileBrowserUri;
+        const showHeader = mismatch || !!this.errorMessage
+        return html`
+            ${showHeader ? html`
+                <div class="chat-header">
+                    ${mismatch ? this.renderWorkspaceMismatch() : nothing}
+                    ${this.errorMessage ? this.renderErrorMessage() : nothing}
+                </div>` : nothing}
+            <div class="chat-body">
 
-      case 'content_delta':
-        this.thinking = false;
-        this.isStreaming = true;
-        this.streamingBuffer += (data.text as string) || '';
-        break;
+                <div class="chat-messages mx-3 py-4" ${ref(this.messagesContainerRef)}>
+                    ${this.computeTurns().map((turn, i, all) => {
+                        const isLast = i === all.length - 1;
+                        return html`
+                            <div class="chat-turn d-flex flex-column gap-3 ${isLast ? 'chat-turn-latest' : 'pb-3'}">
+                                ${turn.map((msg, j) => this.renderMessage(msg, isLast && j === 0 && msg.role === 'user'))}
+                                ${isLast && this.isStreaming ? this.renderStreamingBubble() : nothing}
+                                ${isLast && this.thinking && !this.isStreaming ? this.renderThinkingIndicator() : nothing}
+                            </div>
+                        `;
+                    })}
+                </div>
+            </div>
+            <div class="chat-footer">
 
-      case 'reasoning_delta':
-        this.thinking = false;
-        this.isStreaming = true;
-        this.reasoningBuffer += (data.text as string) || '';
-        break;
 
-      case 'tool_call_delta':
-        this.thinking = false;
-        break;
+                <div
+                        class="chat-upload-zone"
+                        ${ref(this.uploadZoneRef)}
+                        data-target-folder=${this.defaultUploadFolder}
+                        data-max-file-size="0"
+                        data-dropzone-target=".chat-upload-anchor"
+                        data-dropzone-trigger=".chat-upload-trigger"
+                        data-default-action="rename">
 
-      case 'user_message': {
-        // Emitted exactly once during initial processing, after any synthetic
-        // context turns. Renders the user prompt in the same slot it occupies
-        // in the persisted message array.
-        const msg = data.message as ChatMessage | undefined;
-        if (msg) {
-          this.messages = [...this.messages, msg];
-          this.scrollLatestUserMessageToTop();
+
+                    <form class="task-form" @submit=${this.onSubmit}>
+            <textarea
+                    class="message-control"
+                    name="message"
+                    rows="2"
+                    placeholder="Type a follow-up message\u2026"
+                    .value=${this.inputValue}
+                    @input=${this.onInput}
+                    @keydown=${this.onKeydown}
+            ></textarea>
+
+                        ${this.attachments.length > 0
+                                ? html`
+                                    <hn-agent-attachment-chips
+                                            .attachments=${this.attachments}
+                                            @remove=${(e: CustomEvent<{
+                                                index: number
+                                            }>) => this.removeAttachment(e.detail.index)}>
+                                    </hn-agent-attachment-chips>
+                                `
+                                : nothing}
+
+                        <div class="chat-upload-anchor" style="display:none"></div>
+                        <div class="w-100 d-flex flex-row">
+                            ${this.renderAttachmentsBar(uploadEnabled, pickEnabled, inputDisabled)}
+                            <div class="ms-auto">
+                                ${this.loading
+                                        ? html`
+                                            <button type="button"
+                                                    class="btn btn-sm"
+                                                    title="Antwort abbrechen"
+                                                    ?disabled=${this.abortController === null}
+                                                    @click=${this.onStop}>
+                                                <typo3-backend-icon identifier="actions-close" size="small"/>
+                                            </button>`
+                                        : html`
+                                            <button type="submit" class="btn btn-sm" ?disabled=${!canSubmit}>
+                                                <typo3-backend-icon
+                                                        identifier="actions-arrow-down-start-alt"
+                                                        size="small"/>
+                                            </button>`}
+                            </div>
+                        </div>
+                    </form>
+
+
+                </div>
+            </div>
+        `;
+    }
+
+    private renderAttachmentsBar(uploadEnabled: boolean, pickEnabled: boolean, inputDisabled: boolean): TemplateResult {
+        return html`
+            <div>
+                <button type="button"
+                        class="chat-upload-trigger btn btn-sm btn-default"
+                        ${ref(this.uploadTriggerRef)}
+                        ?disabled=${inputDisabled || !uploadEnabled}
+                        title=${uploadEnabled ? 'Datei hochladen' : 'Kein Upload-Ordner verf\u00fcgbar'}>
+                    <typo3-backend-icon identifier="actions-upload" size="small"/>
+                    Hochladen
+                </button>
+                <button type="button"
+                        class="btn btn-sm btn-default"
+                        ?disabled=${inputDisabled || !pickEnabled}
+                        @click=${this.onPickClick}>
+                    <typo3-backend-icon identifier="actions-folder" size="small"/>
+                    Ausw\u00e4hlen
+                </button>
+
+            </div>
+        `;
+    }
+
+    private renderWorkspaceMismatch(): TemplateResult {
+        const mismatchTemplate = TYPO3?.lang?.['workspace.chat.mismatch']
+            ?? 'This task belongs to workspace "%s", but you are currently in "%s". Switch to "%s" to continue the conversation.';
+        const buttonTemplate = TYPO3?.lang?.['workspace.chat.switchButton'] ?? 'Switch to workspace "%s"';
+
+        const taskTitle = this.taskWorkspaceTitle || `#${this.taskWorkspaceId}`;
+        const activeTitle = this.activeWorkspaceTitle
+            || (this.activeWorkspaceId > 0 ? `#${this.activeWorkspaceId}` : 'Live');
+
+        const message = mismatchTemplate
+            .replace('%s', taskTitle)
+            .replace('%s', activeTitle)
+            .replace('%s', taskTitle);
+        const buttonLabel = buttonTemplate.replace('%s', taskTitle);
+
+        // Navigate the top-level backend window so the workspace selector in the
+        // toolbar reloads. target="_top" is set on the anchor for ctrl-click /
+        // accessibility, but the explicit click handler is what actually fires —
+        // the BE module iframe otherwise eats the navigation.
+        return html`
+            <div class="callout callout-warning">
+                <div class="callout-icon">
+                        <span class="icon-emphasized">
+                          <typo3-backend-icon identifier="actions-exclamation" size="small"></typo3-backend-icon>
+                        </span>
+                </div>
+                <div class="callout-content">
+                    <div class="callout-title">Warning</div>
+                    <div class="callout-body">
+                        <div class="mb-2">
+                            ${message}
+                        </div>
+                        <a href=${this.switchWorkspaceUri}
+                           target="_top"
+                           class="btn btn-warning text-decoration-none ${this.switchWorkspaceUri ? '' : 'disabled'}"
+                        <typo3-backend-icon identifier="apps-toolbar-menu-workspace" size="small"></typo3-backend-icon>
+                        ${buttonLabel}
+                        </a>
+                    </div>
+                </div>
+
+        `;
+    }
+
+    private renderErrorMessage(): TemplateResult {
+        return html`
+            <div class="alert alert-danger alert-dismissible">
+                <button type="button" class="close">
+          <span aria-hidden="true"><typo3-backend-icon identifier="actions-close"
+                                                       size="small"></typo3-backend-icon></span>
+                    <span class="visually-hidden">Close</span></button>
+                <button type="button"
+                        class="close"
+                        aria-label="Schließen"
+                        @click=${this.onDismissError}>
+                    <button type="button" class="close">
+            <span aria-hidden="true"><typo3-backend-icon identifier="actions-close"
+                                                         size="small"></typo3-backend-icon></span>
+                        <span class="visually-hidden">Close</span>
+                    </button>
+                    <div class="alert-inner">
+                        <div class="alert-icon">
+              <span class="icon-emphasized">
+                <typo3-backend-icon size="small" identifier="actions-exclamation"></typo3-backend-icon>
+              </span>
+                        </div>
+                        <div class="alert-content">
+                            <div class="alert-title" id="alert-title-stp4daa23v">Warning</div>
+                            <p class="alert-message mb-2" id="alert-message-stp4daa23v">${this.errorMessage}</p>
+                            ${this.lastSubmission !== null
+                                    ? html`
+                                        <button type="button"
+                                                class="btn btn-sm btn-danger"
+                                                ?disabled=${this.loading}
+                                                @click=${this.onRetry}>
+                                            <typo3-backend-icon identifier="actions-refresh"
+                                                                size="small"></typo3-backend-icon>
+                                            Erneut versuchen
+                                        </button>`
+                                    : nothing}
+                        </div>
+                    </div>
+            </div>
+        `;
+    }
+
+    private renderMessage(msg: ChatMessage, isLatestUser = false): TemplateResult | typeof nothing {
+        const role = msg.role || 'unknown';
+        if (role === 'system') return nothing;
+        const roleLabel = role === 'user' ? 'you' : role;
+
+        if (role === 'assistant') {
+            const assistantText = msg.content != null ? this.contentText(msg.content) : '';
+            return html`
+                <div class="card card-default me-3">
+                    <div class="card-header">
+                        <div class="card-header-body">
+                            <span class="card-subtitle">${roleLabel}</span>
+                        </div>
+                    </div>
+                    
+                    ${assistantText
+                            ? html`
+                                <div class="card-body">${unsafeHTML(this.renderMarkdown(assistantText))}</div>`
+                            : nothing}
+
+                    ${msg.reasoning || (msg.tool_calls && msg.tool_calls.length > 0) ? html`
+                    <div class="card-footer">
+                        ${msg.reasoning
+                                ? html`
+                                    ${this.renderReasoningBlock(msg.reasoning, msg)}`
+                                : nothing}
+    
+                        ${msg.tool_calls && msg.tool_calls.length > 0
+                                ? html`
+                                    ${this.renderToolCallsGroup(msg.tool_calls)}`
+                                : nothing}
+                        
+                    </div>`: nothing}
+                    
+                </div>
+            `;
         }
-        break;
-      }
 
-      case 'assistant_message': {
-        this.thinking = false;
-        const msg = data.message as ChatMessage | undefined;
 
-        if (this.isStreaming) {
-          if (Array.isArray(msg?.tool_calls) && msg!.tool_calls.length > 0) {
-            // Replace streaming bubble with finalized message including tool_calls
-            this.messages = [...this.messages, msg!];
-          } else {
-            // Finalize with server content (trusted) or streamed buffer; preserve
-            // reasoning from the server message, falling back to the streamed
-            // reasoning buffer if the server didn't ship a `reasoning` field.
+        // user, system, unknown
+        const attachments = msg.attachments ?? [];
+        const userText = msg.content != null ? this.contentText(msg.content) : '';
+        return html`
+            <div class="card card-success align-self-end ms-3" ${isLatestUser ? ref(this.latestUserBubbleRef) : nothing}>
+                <div class="card-header">
+
+                    <div class="card-header-body">
+                        <span class="card-subtitle">${roleLabel}</span>
+                    </div>
+                </div>
+                ${userText
+                        ? html`
+                            <div class="card-body"><p class="card-text">${userText}</p></div>`
+                        : nothing}
+
+
+                ${attachments.length > 0
+                        ? html`
+                            <div class="card-footer">
+                                <hn-agent-attachment-chips
+                                        readonly
+                                        .attachments=${attachments}>
+                                </hn-agent-attachment-chips>
+                            </div>`
+                        : nothing}
+
+
+            </div>
+        `;
+    }
+
+    private toolCallsGroupIds = new WeakMap<ToolCall[], string>();
+
+    private getToolCallsGroupId(tcs: ToolCall[]): string {
+        let id = this.toolCallsGroupIds.get(tcs);
+        if (!id) {
+            id = `tcg-${crypto.randomUUID()}`;
+            this.toolCallsGroupIds.set(tcs, id);
+        }
+        return id;
+    }
+
+    private reasoningGroupIds = new WeakMap<object, string>();
+
+    private getReasoningGroupId(key: object): string {
+        let id = this.reasoningGroupIds.get(key);
+        if (!id) {
+            id = `rg-${crypto.randomUUID()}`;
+            this.reasoningGroupIds.set(key, id);
+        }
+        return id;
+    }
+
+    private renderToolCallsGroup(tcs: ToolCall[]): TemplateResult {
+        const count = tcs.length;
+        const noun = count === 1 ? 'Tool Call' : 'Tool Calls';
+        const collapseId = this.getToolCallsGroupId(tcs);
+        return html`
+            <div class="panel panel-default panel-condensed">
+                <div class="panel-heading">
+                    <div class="panel-heading-row">
+                        <button class="panel-button collapsed" type="button"
+                                data-bs-toggle="collapse" data-bs-target="#${collapseId}"
+                                aria-expanded="false" aria-controls="${collapseId}">
+                            <span class="panel-icon">
+                                <typo3-backend-icon identifier="actions-cog" size="small"></typo3-backend-icon>
+                            </span>
+                            <div class="panel-title"><span><strong>${count}</strong> ${noun}</span></div>
+                            <span class="caret"></span>
+                        </button>
+
+                    </div>
+
+                </div>
+                <div id="${collapseId}" class="panel-collapse collapse">
+                    <div class="panel-body">
+                        <div class="panel-group">
+                            ${tcs.map(tc => this.renderToolCall(tc))}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    private renderToolCall(tc: ToolCall): TemplateResult {
+        const hasResult = tc.result !== undefined;
+        const resultText = hasResult ? this.contentText(tc.result!) : '';
+        const resultMedia = hasResult ? this.contentMedia(tc.result!) : [];
+        return html`
+            <div class="panel panel-default panel-condensed">
+                <div class="panel-heading">
+
+                    <div class="panel-heading-row">
+                        <button class="panel-button collapsed" type="button" data-bs-toggle="collapse"
+                                data-bs-target="#panel-record-collapsed-auto6a3bd0d254d40" aria-expanded="false">
+                            <div class="panel-title">${tc.function?.name ?? 'unknown'}</div>
+                            <span class="caret"></span>
+                        </button>
+
+                    </div>
+
+                </div>
+                <div class="panel-collapse collapse" id="panel-record-collapsed-auto6a3bd0d254d40" style="">
+                    <div class="panel-body">
+                        <strong>Args</strong><br/>
+                        <code>${tc.function?.arguments ?? ''}</code>
+                        ${hasResult
+                                ? html`
+                                    <div>
+                                        <strong>Result</strong><br/>
+                                        <pre class="m-0">${resultText}</pre>
+                                        ${resultMedia.map(b => this.renderResultMedia(b))}
+                                    </div>`
+                                : html`
+                                    <div class="chat-toolcall-running text-muted">
+                                        <thinking-indicator label="Executing"></thinking-indicator>
+                                    </div>`}
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    private renderResultMedia(block: ContentBlock): TemplateResult | typeof nothing {
+        if (block.type === 'image_url') {
+            return html`<img src=${block.image_url.url} alt="" class="mt-2 d-block"
+                             style="max-width:100%; max-height:240px;"/>`;
+        }
+        if (block.type === 'file') {
+            return html`
+                <div class="mt-2">
+                    <typo3-backend-icon identifier="mimetypes-other-other" size="small"/>
+                    ${block.file.filename}
+                </div>`;
+        }
+        return nothing;
+    }
+
+    private contentText(content: string | ContentBlock[] | null | undefined): string {
+        if (content == null) return '';
+        if (typeof content === 'string') return content;
+        return content
+            .filter((b): b is Extract<ContentBlock, { type: 'text' }> => b.type === 'text')
+            .map(b => b.text)
+            .join('\n');
+    }
+
+    private contentMedia(content: string | ContentBlock[] | null | undefined): ContentBlock[] {
+        if (content == null || typeof content === 'string') return [];
+        return content.filter(b => b.type !== 'text');
+    }
+
+    private renderStreamingBubble(): TemplateResult {
+        return html`
+            <div class="card card-default me-3">
+                <div class="card-header">
+                    <div class="card-header-body">
+                        <span class="card-subtitle">assistant</span>
+                    </div>
+                </div>
+
+                <div class="card-body">
+                    ${unsafeHTML(this.renderMarkdown(this.streamingBuffer))}
+                    <thinking-indicator></thinking-indicator>
+                </div>
+                
+
+                ${this.reasoningBuffer ? html`
+                    <div class="card-footer">
+                        ${this.renderReasoningBlock(this.reasoningBuffer, this)}
+                    </div>`: nothing}
+            </div>
+        `;
+    }
+
+    private renderReasoningBlock(reasoning: string, key: object): TemplateResult {
+        const collapseId = this.getReasoningGroupId(key);
+        return html`
+            <div class="panel panel-default panel-condensed">
+                <div class="panel-heading">
+                    <div class="panel-heading-row">
+                        <button class="panel-button collapsed" type="button"
+                                data-bs-toggle="collapse" data-bs-target="#${collapseId}"
+                                aria-expanded="false" aria-controls="${collapseId}">
+                            <span class="panel-icon">
+                                <typo3-backend-icon identifier="actions-lightbulb-on" size="small"></typo3-backend-icon>
+                            </span>
+                            <div class="panel-title"><span>Reasoning</span></div>
+                            <span class="caret"></span>
+                        </button>
+                    </div>
+                </div>
+                <div id="${collapseId}" class="panel-collapse collapse">
+                    <div class="panel-body">
+                        ${unsafeHTML(this.renderMarkdown(reasoning))}
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    private renderThinkingIndicator(): TemplateResult {
+        return html`
+            <div class="p-3 align-self-start">
+                <thinking-indicator label="Thinking"></thinking-indicator>
+            </div>
+        `;
+    }
+
+    // -- Markdown --------------------------------------------------------------
+
+    private renderMarkdown(text: string): string {
+        return DOMPurify.sanitize(marked.parse(text ?? '') as string);
+    }
+
+    // -- Event handlers --------------------------------------------------------
+
+    private onSubmit(e: Event): void {
+        e.preventDefault();
+        if (this.isWorkspaceMismatch()) return;
+        const message = this.inputValue.trim();
+        const attachments = this.attachments;
+        if (!message && attachments.length === 0) return;
+
+        this.errorMessage = '';
+        this.lastSubmission = {message, attachments};
+        const optimistic: ChatMessage = {role: 'user', content: message};
+        if (attachments.length > 0) optimistic.attachments = attachments;
+        this.messages = [...this.messages, optimistic];
+        this.inputValue = '';
+        this.attachments = [];
+        this.loading = true;
+        this.scrollLatestUserMessageToTop();
+        this.inputEl?.focus();
+
+        if (this.streamUri) {
+            this.sendStreaming(message, attachments).then(() => this.finishSend());
+        } else {
+            this.sendBlocking(message, attachments).then(() => this.finishSend());
+        }
+    }
+
+    private onDismissError(): void {
+        this.errorMessage = '';
+        this.lastSubmission = null;
+    }
+
+    private onStop(): void {
+        // Promote any in-flight streaming bubble into a real assistant message
+        // BEFORE aborting. Otherwise the partial content vanishes the moment
+        // isStreaming flips to false — the user would see nothing until reload.
+        if (this.isStreaming && (this.streamingBuffer !== '' || this.reasoningBuffer !== '')) {
             this.messages = [...this.messages, {
-              role: 'assistant',
-              content: msg?.content || this.streamingBuffer,
-              ...(msg?.reasoning || this.reasoningBuffer
-                ? {reasoning: msg?.reasoning || this.reasoningBuffer}
-                : {}),
-              ...(msg?.reasoning_details ? {reasoning_details: msg.reasoning_details} : {}),
+                role: 'assistant',
+                content: this.streamingBuffer,
+                ...(this.reasoningBuffer ? {reasoning: this.reasoningBuffer} : {}),
             }];
-          }
-          this.isStreaming = false;
-          this.streamingBuffer = '';
-          this.reasoningBuffer = '';
-        } else if (msg) {
-          this.messages = [...this.messages, msg];
+            this.streamingBuffer = '';
+            this.reasoningBuffer = '';
+            this.isStreaming = false;
         }
-        break;
-      }
-
-      case 'tool_start':
-        // No-op: the assistant_message bubble already carries the tool_call.
-        // Its "running" state is rendered inline (result === undefined).
-        break;
-
-      case 'tool_result': {
-        const toolCallId = data.tool_call_id as string;
-        const content = data.content as string;
-
-        this.messages = this.messages.map(msg => {
-          if (msg.role !== 'assistant' || !msg.tool_calls) return msg;
-          if (!msg.tool_calls.some(tc => tc.id === toolCallId)) return msg;
-          return {
-            ...msg,
-            tool_calls: msg.tool_calls.map(tc =>
-              tc.id === toolCallId ? {...tc, result: content} : tc
-            ),
-          };
-        });
-        break;
-      }
-
-      case 'change_tracked': {
-        const change = data as unknown as TrackedChange;
-        this.changes = [...this.changes, change];
-        document.dispatchEvent(new CustomEvent('agent:record-changed', { detail: change }));
-        break;
-      }
-
-      case 'done':
-        this.thinking = false;
-        this.isStreaming = false;
-        this.streamingBuffer = '';
-        this.reasoningBuffer = '';
-        // Replace optimistic messages with the persisted server state so the
-        // user sees the canonical form (e.g. resolved attachment block) instead
-        // of the locally-composed preview.
-        if (Array.isArray((data as {messages?: unknown}).messages)) {
-          this.messages = this.mergeToolResults((data as {messages: ChatMessage[]}).messages);
+        // Tell the server this is an EXPLICIT cancel (not just a navigation). The
+        // server-side flow no longer treats a bare connection close as a cancel —
+        // it would otherwise let the task run to completion. keepalive ensures the
+        // request still goes through if the user simultaneously closes the tab.
+        // The task UID is already on the cancelUri as a query parameter.
+        if (this.cancelUri) {
+            void fetch(this.cancelUri, {method: 'POST', keepalive: true}).catch(() => {
+            });
         }
-        document.dispatchEvent(new CustomEvent('agent:record-changed'));
-        break;
-
-      case 'error':
-        this.thinking = false;
-        this.isStreaming = false;
-        this.errorMessage = (data.error as string) || 'Unknown error';
-        break;
-    }
-  }
-
-  // -- Helpers ---------------------------------------------------------------
-
-  /**
-   * Merge tool-role messages into the tool_calls of their parent assistant
-   * message so that call + result are rendered in the same bubble.
-   */
-  private mergeToolResults(msgs: ChatMessage[]): ChatMessage[] {
-    // Collect tool results keyed by tool_call_id
-    const resultMap = new Map<string, string | ContentBlock[]>();
-    for (const msg of msgs) {
-      if (msg.role === 'tool' && msg.tool_call_id && msg.content !== undefined) {
-        resultMap.set(msg.tool_call_id, msg.content);
-      }
+        this.abortController?.abort();
+        this.requestUpdate();
     }
 
-    if (resultMap.size === 0) return [...msgs];
+    private onRetry(): void {
+        if (!this.lastSubmission || this.loading) return;
+        const {message, attachments} = this.lastSubmission;
+        this.errorMessage = '';
+        this.loading = true;
+        const promise = this.streamUri
+            ? this.sendStreaming(message, attachments)
+            : this.sendBlocking(message, attachments);
+        promise.then(() => this.finishSend());
+    }
 
-    const merged: ChatMessage[] = [];
-    for (const msg of msgs) {
-      if (msg.role === 'tool' && msg.tool_call_id && resultMap.has(msg.tool_call_id)) {
-        // Skip — result is inlined into the assistant message's tool_call
-        continue;
-      }
+    private addAttachment(att: Attachment): void {
+        this.attachments = [...this.attachments, att];
+        if (this.preflightUri && (att.uid !== undefined || att.identifier)) {
+            void this.preflightAttachment(att);
+        }
+    }
 
-      if (msg.role === 'assistant' && msg.tool_calls) {
-        merged.push({
-          ...msg,
-          tool_calls: msg.tool_calls.map(tc => {
-            const result = tc.id ? resultMap.get(tc.id) : undefined;
-            return result !== undefined ? {...tc, result} : tc;
-          }),
+    private async preflightAttachment(att: Attachment): Promise<void> {
+        try {
+            const url = new URL(this.preflightUri, window.location.origin);
+            if (att.uid !== undefined) url.searchParams.set('uid', String(att.uid));
+            if (att.identifier) url.searchParams.set('identifier', att.identifier);
+            const response = await fetch(url.toString(), {headers: {'Accept': 'application/json'}});
+            if (!response.ok) return;
+            const info = await response.json() as {
+                uid?: number; identifier?: string; name?: string;
+                mime?: string; size?: number;
+                readableByLlm: boolean; reason?: string | null;
+            };
+            this.attachments = this.attachments.map(a => {
+                const sameUid = info.uid !== undefined && a.uid === info.uid;
+                const sameIdent = !!info.identifier && a.identifier === info.identifier;
+                if (!sameUid && !sameIdent) return a;
+                return {
+                    ...a,
+                    mime_type: info.mime || a.mime_type,
+                    size: typeof info.size === 'number' ? info.size : a.size,
+                    readableByLlm: info.readableByLlm,
+                    reason: info.reason ?? undefined,
+                };
+            });
+        } catch {
+            // silent — chip just stays without status indicator
+        }
+    }
+
+    private removeAttachment(index: number): void {
+        this.attachments = this.attachments.filter((_, i) => i !== index);
+    }
+
+    private onPickClick(): void {
+        if (!this.fileBrowserUri) return;
+        // Listener is attached fresh each open and removed on modal close to avoid
+        // duplicate handling between sessions.
+        window.addEventListener('message', this.elementBrowserListener);
+        const modal = Modal.advanced({
+            type: Modal.types.iframe,
+            content: this.fileBrowserUri,
+            size: Modal.sizes.large,
         });
-      } else {
-        merged.push(msg);
-      }
+        modal.addEventListener('typo3-modal-hide', () => {
+            window.removeEventListener('message', this.elementBrowserListener);
+        });
     }
-    return merged;
-  }
 
-  private computeTurns(): ChatMessage[][] {
-    const turns: ChatMessage[][] = [];
-    for (const msg of this.messages) {
-      if (msg.role === 'system') continue;
-      if (msg.role === 'user' || turns.length === 0) {
-        turns.push([msg]);
-      } else {
-        turns[turns.length - 1].push(msg);
-      }
+    private onInput(e: Event): void {
+        this.inputValue = (e.target as HTMLTextAreaElement).value;
     }
-    return turns;
-  }
 
-  private scrollLatestUserMessageToTop(): void {
-    void this.updateComplete.then(() => {
-      const container = this.renderRoot.querySelector('.chat-messages') as HTMLElement | null;
-      if (!container) return;
-      const userBubbles = container.querySelectorAll<HTMLElement>('.chat-msg-user');
-      const latest = userBubbles[userBubbles.length - 1];
-      if (!latest) return;
-      const containerTop = container.getBoundingClientRect().top;
-      const latestTop = latest.getBoundingClientRect().top;
-      container.scrollTo({top: container.scrollTop + latestTop - containerTop, behavior: 'smooth'});
-    });
-  }
+    private onKeydown(e: KeyboardEvent): void {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            if (this.loading || this.isWorkspaceMismatch()) {
+                return;
+            }
+            (e.target as HTMLTextAreaElement).closest('form')?.requestSubmit();
+        }
+    }
+
+    private finishSend(): void {
+        this.loading = false;
+        if (this.errorMessage === '') {
+            this.lastSubmission = null;
+        }
+        this.inputEl?.focus();
+    }
+
+    private appendAttachments(formData: FormData, attachments: Attachment[]): void {
+        if (attachments.length === 0) return;
+        const payload = attachments.map(a => ({
+            uid: a.uid,
+            identifier: a.identifier,
+            name: a.name,
+        }));
+        formData.append('attachments', JSON.stringify(payload));
+    }
+
+    // -- Auto-start ------------------------------------------------------------
+
+    private async doAutoStart(): Promise<void> {
+        // Note: the user-bubble is intentionally NOT pushed optimistically here.
+        // The backend streams a `user_message` event after any synthetic context
+        // turns so live and reload renderings stay identical (the persisted order
+        // is [system, assistant_context?, tool*, user, ...]).
+        this.loading = true;
+        this.lastSubmission = {message: '', attachments: []};
+        await this.sendStreaming('');
+        this.finishSend();
+    }
+
+    // -- Network: blocking -----------------------------------------------------
+
+    private async sendBlocking(message: string, attachments: Attachment[] = []): Promise<void> {
+        try {
+            const formData = new FormData();
+            formData.append('message', message);
+            this.appendAttachments(formData, attachments);
+
+            const response = await fetch(this.sendUri, {
+                method: 'POST',
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'Accept': 'application/json',
+                },
+                body: formData,
+            });
+
+            const data = await response.json();
+
+            if (!response.ok || data.error) {
+                this.errorMessage = data.error || `Request failed (${response.status})`;
+            }
+
+            if (Array.isArray(data.messages)) {
+                this.messages = data.messages as ChatMessage[];
+            }
+        } catch (err) {
+            this.errorMessage = (err as Error).message || String(err);
+        }
+    }
+
+    // -- Network: streaming (SSE) ----------------------------------------------
+
+    private async sendStreaming(message: string, attachments: Attachment[] = []): Promise<void> {
+        this.abortController = new AbortController();
+        try {
+            this.thinking = true;
+            const formData = new FormData();
+            formData.append('message', message);
+            this.appendAttachments(formData, attachments);
+
+            const response = await fetch(this.streamUri, {
+                method: 'POST',
+                body: formData,
+                signal: this.abortController.signal,
+            });
+
+            if (!response.ok) {
+                this.errorMessage = `Request failed (${response.status})`;
+                return;
+            }
+
+            const reader = response.body!.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            while (true) {
+                const {done, value} = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, {stream: true});
+
+                const result = this.parseSseBuffer(buffer);
+                buffer = result.remainder;
+
+                for (const evt of result.parsed) {
+                    this.handleSseEvent(evt.event, evt.data);
+                }
+            }
+        } catch (err) {
+            this.thinking = false;
+            this.isStreaming = false;
+            // AbortError is the user clicking Stop — not a failure. The streaming
+            // bubble (if any) stays visible; finishSend() will flip loading off and
+            // a reload would reveal the task as Cancelled with partial messages.
+            if ((err as Error).name !== 'AbortError') {
+                this.errorMessage = (err as Error).message || String(err);
+            }
+        } finally {
+            this.abortController = null;
+        }
+    }
+
+    // -- SSE parsing -----------------------------------------------------------
+
+    private parseSseBuffer(buffer: string): { parsed: SseParsed[]; remainder: string } {
+        const parsed: SseParsed[] = [];
+        const blocks = buffer.split('\n\n');
+        const remainder = blocks.pop()!;
+
+        for (const block of blocks) {
+            if (!block.trim()) continue;
+            let event = 'message';
+            let data = '';
+            for (const line of block.split('\n')) {
+                if (line.startsWith('event: ')) {
+                    event = line.slice(7);
+                } else if (line.startsWith('data: ')) {
+                    data = line.slice(6);
+                }
+            }
+            if (data) {
+                try {
+                    parsed.push({event, data: JSON.parse(data) as Record<string, unknown>});
+                } catch {
+                    // skip malformed
+                }
+            }
+        }
+        return {parsed, remainder};
+    }
+
+    // -- SSE event dispatch ----------------------------------------------------
+
+    private handleSseEvent(event: string, data: Record<string, unknown>): void {
+        switch (event) {
+            case 'llm_start':
+                this.thinking = true;
+                break;
+
+            case 'content_delta':
+                this.thinking = false;
+                this.isStreaming = true;
+                this.streamingBuffer += (data.text as string) || '';
+                break;
+
+            case 'reasoning_delta':
+                this.thinking = false;
+                this.isStreaming = true;
+                this.reasoningBuffer += (data.text as string) || '';
+                break;
+
+            case 'tool_call_delta':
+                this.thinking = false;
+                break;
+
+            case 'user_message': {
+                // Emitted exactly once during initial processing, after any synthetic
+                // context turns. Renders the user prompt in the same slot it occupies
+                // in the persisted message array.
+                const msg = data.message as ChatMessage | undefined;
+                if (msg) {
+                    this.messages = [...this.messages, msg];
+                    this.scrollLatestUserMessageToTop();
+                }
+                break;
+            }
+
+            case 'assistant_message': {
+                this.thinking = false;
+                const msg = data.message as ChatMessage | undefined;
+
+                if (this.isStreaming) {
+                    if (Array.isArray(msg?.tool_calls) && msg!.tool_calls.length > 0) {
+                        // Replace streaming bubble with finalized message including tool_calls
+                        this.messages = [...this.messages, msg!];
+                    } else {
+                        // Finalize with server content (trusted) or streamed buffer; preserve
+                        // reasoning from the server message, falling back to the streamed
+                        // reasoning buffer if the server didn't ship a `reasoning` field.
+                        this.messages = [...this.messages, {
+                            role: 'assistant',
+                            content: msg?.content || this.streamingBuffer,
+                            ...(msg?.reasoning || this.reasoningBuffer
+                                ? {reasoning: msg?.reasoning || this.reasoningBuffer}
+                                : {}),
+                            ...(msg?.reasoning_details ? {reasoning_details: msg.reasoning_details} : {}),
+                        }];
+                    }
+                    this.isStreaming = false;
+                    this.streamingBuffer = '';
+                    this.reasoningBuffer = '';
+                } else if (msg) {
+                    this.messages = [...this.messages, msg];
+                }
+                break;
+            }
+
+            case 'tool_start':
+                // No-op: the assistant_message bubble already carries the tool_call.
+                // Its "running" state is rendered inline (result === undefined).
+                break;
+
+            case 'tool_result': {
+                const toolCallId = data.tool_call_id as string;
+                const content = data.content as string;
+
+                this.messages = this.messages.map(msg => {
+                    if (msg.role !== 'assistant' || !msg.tool_calls) return msg;
+                    if (!msg.tool_calls.some(tc => tc.id === toolCallId)) return msg;
+                    return {
+                        ...msg,
+                        tool_calls: msg.tool_calls.map(tc =>
+                            tc.id === toolCallId ? {...tc, result: content} : tc
+                        ),
+                    };
+                });
+                break;
+            }
+
+            case 'change_tracked': {
+                const change = data as unknown as TrackedChange;
+                this.changes = [...this.changes, change];
+                document.dispatchEvent(new CustomEvent('agent:record-changed', {detail: change}));
+                break;
+            }
+
+            case 'done':
+                this.thinking = false;
+                this.isStreaming = false;
+                this.streamingBuffer = '';
+                this.reasoningBuffer = '';
+                // Replace optimistic messages with the persisted server state so the
+                // user sees the canonical form (e.g. resolved attachment block) instead
+                // of the locally-composed preview.
+                if (Array.isArray((data as { messages?: unknown }).messages)) {
+                    this.messages = this.mergeToolResults((data as { messages: ChatMessage[] }).messages);
+                }
+                document.dispatchEvent(new CustomEvent('agent:record-changed'));
+                break;
+
+            case 'error':
+                this.thinking = false;
+                this.isStreaming = false;
+                this.errorMessage = (data.error as string) || 'Unknown error';
+                break;
+        }
+    }
+
+    // -- Helpers ---------------------------------------------------------------
+
+    /**
+     * Merge tool-role messages into the tool_calls of their parent assistant
+     * message so that call + result are rendered in the same bubble.
+     */
+    private mergeToolResults(msgs: ChatMessage[]): ChatMessage[] {
+        // Collect tool results keyed by tool_call_id
+        const resultMap = new Map<string, string | ContentBlock[]>();
+        for (const msg of msgs) {
+            if (msg.role === 'tool' && msg.tool_call_id && msg.content !== undefined) {
+                resultMap.set(msg.tool_call_id, msg.content);
+            }
+        }
+
+        if (resultMap.size === 0) return [...msgs];
+
+        const merged: ChatMessage[] = [];
+        for (const msg of msgs) {
+            if (msg.role === 'tool' && msg.tool_call_id && resultMap.has(msg.tool_call_id)) {
+                // Skip — result is inlined into the assistant message's tool_call
+                continue;
+            }
+
+            if (msg.role === 'assistant' && msg.tool_calls) {
+                merged.push({
+                    ...msg,
+                    tool_calls: msg.tool_calls.map(tc => {
+                        const result = tc.id ? resultMap.get(tc.id) : undefined;
+                        return result !== undefined ? {...tc, result} : tc;
+                    }),
+                });
+            } else {
+                merged.push(msg);
+            }
+        }
+        return merged;
+    }
+
+    private computeTurns(): ChatMessage[][] {
+        const turns: ChatMessage[][] = [];
+        for (const msg of this.messages) {
+            if (msg.role === 'system') continue;
+            if (msg.role === 'user' || turns.length === 0) {
+                turns.push([msg]);
+            } else {
+                turns[turns.length - 1].push(msg);
+            }
+        }
+        return turns;
+    }
+
+    private scrollLatestUserMessageToTop(): void {
+        void this.updateComplete.then(() => {
+            const container = this.messagesContainerRef.value;
+            const latest = this.latestUserBubbleRef.value;
+            if (!container || !latest) return;
+            const containerTop = container.getBoundingClientRect().top;
+            const latestTop = latest.getBoundingClientRect().top;
+            container.scrollTo({top: container.scrollTop + latestTop - containerTop, behavior: 'smooth'});
+        });
+    }
 }

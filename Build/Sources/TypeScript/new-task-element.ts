@@ -1,21 +1,11 @@
 import {html, LitElement, nothing, type TemplateResult} from 'lit';
-import {customElement, property, query, state} from 'lit/decorators.js';
-import {unsafeHTML} from 'lit/directives/unsafe-html.js';
+import {customElement, property, state} from 'lit/decorators.js';
+import {createRef, ref, type Ref} from 'lit/directives/ref.js';
 import DragUploader from '@typo3/backend/drag-uploader.js';
 import Modal from '@typo3/backend/modal.js';
 import {MessageUtility} from '@typo3/backend/utility/message-utility.js';
-
-interface Attachment {
-  uid?: number;
-  identifier?: string;
-  name: string;
-  mime_type?: string;
-  iconHtml?: string;
-  unresolvable?: boolean;
-  readableByLlm?: boolean;
-  reason?: string;
-  size?: number;
-}
+import type {Attachment} from '@hn/agent/attachment.js';
+import '@hn/agent/attachment-chip-elements.js';
 
 @customElement('hn-agent-new-task')
 export class NewTaskElement extends LitElement {
@@ -39,8 +29,8 @@ export class NewTaskElement extends LitElement {
   @state() private message = '';
   @state() private attachments: Attachment[] = [];
 
-  @query('.chat-upload-trigger') private uploadTriggerEl?: HTMLElement;
-  @query('.chat-upload-zone') private uploadZoneEl?: HTMLElement;
+  private uploadTriggerRef: Ref<HTMLElement> = createRef();
+  private uploadZoneRef: Ref<HTMLElement> = createRef();
 
   private get isLive(): boolean {
     // workspaceId === 0 means Live workspace (or attribute not set at all).
@@ -74,15 +64,16 @@ export class NewTaskElement extends LitElement {
     // Manual single-instance init — see chat-element.ts for the rationale
     // (auto-discovery race between MutationObserver and DocumentService.ready
     // can produce duplicate DragUploader instances on the same element).
-    if (this.uploadZoneEl) {
-      new DragUploader(this.uploadZoneEl);
+    const zoneEl = this.uploadZoneRef.value;
+    if (zoneEl) {
+      new DragUploader(zoneEl);
     }
-    this.uploadTriggerEl?.addEventListener('uploadSuccess', this.uploadSuccessListener);
+    this.uploadTriggerRef.value?.addEventListener('uploadSuccess', this.uploadSuccessListener);
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
-    this.uploadTriggerEl?.removeEventListener('uploadSuccess', this.uploadSuccessListener);
+    this.uploadTriggerRef.value?.removeEventListener('uploadSuccess', this.uploadSuccessListener);
     window.removeEventListener('message', this.elementBrowserListener);
   }
 
@@ -177,25 +168,25 @@ export class NewTaskElement extends LitElement {
     const pickEnabled = !!this.fileBrowserUri;
 
     return html`
-      <div style="margin-bottom: calc(var(--typo3-spacing) * 2);">
+      <div>
         <div
             class="chat-upload-zone"
+            ${ref(this.uploadZoneRef)}
             data-target-folder=${this.defaultUploadFolder}
             data-max-file-size="0"
             data-dropzone-target=".chat-upload-anchor"
             data-dropzone-trigger=".chat-upload-trigger"
             data-default-action="rename">
           <form action=${this.actionUri} method="post"
-                class="position-relative rounded-4 border bg-white overflow-hidden d-flex flex-column gap-3 p-3">
+                class="task-form">
             <input type="hidden" name="table" .value=${this.table}>
             <input type="hidden" name="uid" .value=${String(this.uid)}>
             <input type="hidden" name="return_url" .value=${this.returnUrl}>
             <input type="hidden" name="attachments" .value=${this.serializeAttachments()}>
 
             <textarea
-                class="d-block w-100 border-0 bg-white"
+                class="message-control"
                 name="message"
-                rows="2"
                 placeholder=${this.placeholder}
                 .value=${this.message}
                 @input=${this.onInput}
@@ -204,9 +195,12 @@ export class NewTaskElement extends LitElement {
             ></textarea>
 
             ${this.attachments.length > 0
-              ? html`<div class="chat-attachments d-flex flex-wrap gap-2">
-                  ${this.attachments.map((a, i) => this.renderAttachmentChip(a, () => this.removeAttachment(i)))}
-                </div>`
+              ? html`
+                  <hn-agent-attachment-chips
+                      .attachments=${this.attachments}
+                      @remove=${(e: CustomEvent<{index: number}>) => this.removeAttachment(e.detail.index)}>
+                  </hn-agent-attachment-chips>
+                `
               : nothing}
 
             <div class="chat-upload-anchor" style="display:none"></div>
@@ -236,6 +230,7 @@ export class NewTaskElement extends LitElement {
       <div>
         <button type="button"
                 class="chat-upload-trigger btn btn-sm btn-default"
+                ${ref(this.uploadTriggerRef)}
                 ?disabled=${!uploadEnabled}
                 title=${uploadEnabled ? 'Datei hochladen' : 'Kein Upload-Ordner verfügbar'}>
           <typo3-backend-icon identifier="actions-upload" size="small"/>
@@ -252,67 +247,19 @@ export class NewTaskElement extends LitElement {
     `;
   }
 
-  private renderAttachmentChip(att: Attachment, onRemove?: () => void): TemplateResult {
-    const thumbUrl = this.buildThumbnailUrl(att);
-    const onThumbError = (e: Event): void => {
-      const img = e.target as HTMLImageElement;
-      img.style.display = 'none';
-      const fallback = img.nextElementSibling as HTMLElement | null;
-      if (fallback) fallback.style.display = '';
-    };
-    const notReadable = att.readableByLlm === false;
-    const warnTitle = notReadable
-      ? `LLM kann den Inhalt nicht via ReadFile lesen — nur Metadaten${att.reason ? ` (${att.reason})` : ''}`
-      : (att.unresolvable ? 'Datei nicht auflösbar' : '');
-    return html`
-      <span class="chat-attachment-chip d-inline-flex align-items-center gap-2 border rounded bg-body p-1 ${onRemove ? 'pe-2' : 'px-2'}"
-            title=${warnTitle}>
-        ${thumbUrl
-          ? html`
-              <img src=${thumbUrl} alt="" class="chat-attachment-thumb rounded" @error=${onThumbError}/>
-              <span class="chat-attachment-icon rounded" style="display:none">${this.renderFallbackIcon(att)}</span>`
-          : html`<span class="chat-attachment-icon rounded">${this.renderFallbackIcon(att)}</span>`}
-        <span class="chat-attachment-name ${att.unresolvable ? 'text-decoration-line-through opacity-75' : ''}">${att.name}</span>
-        ${notReadable
-          ? html`<span class="chat-attachment-warn badge bg-warning-subtle text-warning-emphasis border border-warning-subtle"
-                       title=${warnTitle}>
-              <typo3-backend-icon identifier="actions-exclamation" size="small"/>
-            </span>`
-          : nothing}
-        ${onRemove
-          ? html`<button type="button"
-                  class="btn btn-sm p-0 border-0 text-muted"
-                  title="Entfernen"
-                  @click=${onRemove}>×</button>`
-          : nothing}
-      </span>
-    `;
-  }
-
-  private renderFallbackIcon(att: Attachment): TemplateResult {
-    if (att.iconHtml) return html`${unsafeHTML(att.iconHtml)}`;
-    return html`<typo3-backend-icon identifier="mimetypes-other-other" size="medium"></typo3-backend-icon>`;
-  }
-
-  private buildThumbnailUrl(att: Attachment): string {
-    const base = (window.top as unknown as {TYPO3?: {settings?: {Resource?: {thumbnailUrl?: string}}}})
-      ?.TYPO3?.settings?.Resource?.thumbnailUrl;
-    if (!base) return '';
-    const ref = att.uid ?? att.identifier;
-    if (ref === undefined || ref === null || ref === '') return '';
-    const url = new URL(base, window.location.origin);
-    url.searchParams.set('identifier', String(ref));
-    url.searchParams.set('size', 'large');
-    url.searchParams.set('keepAspectRatio', 'false');
-    return url.toString();
-  }
-
   private renderLiveCallout() {
     const text = TYPO3?.lang?.['workspace.callout.selectWorkspace']
       ?? 'Please switch to a workspace before starting a task.';
     return html`
-      <div class="alert alert-warning" style="margin-bottom: calc(var(--typo3-spacing) * 2);">
-        ${text}
+      <div class="callout callout-info">
+        <div class="callout-icon"><span class="icon-emphasized">
+          <typo3-backend-icon
+              identifier="actions-info"
+              size="small"/>
+        </div>
+        <div class="callout-content">
+          <div class="callout-body">${text}</div>
+        </div>
       </div>
     `;
   }
