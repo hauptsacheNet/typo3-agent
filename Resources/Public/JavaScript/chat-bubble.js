@@ -21,13 +21,9 @@ let ChatBubble = class extends LitElement {
   createRenderRoot() {
     return this;
   }
-  willUpdate(changed) {
-    this.classList.value = "card card-success card--chat-bubble  align-self-end";
-    if (changed.has("author")) {
-      this.classList.toggle("align-self-end", this.author === "user");
-      this.classList.toggle("card--chat-bubble-right", this.author === "user");
-      this.classList.toggle("card--chat-bubble-left", this.author !== "user");
-    }
+  willUpdate() {
+    const isUser = this.author === "user";
+    this.classList.value = isUser ? "card card--chat-bubble align-self-end card-success card--chat-bubble-right" : "card card--chat-bubble card--chat-bubble-left";
   }
   hasContent(c) {
     return c != null && c !== nothing && c !== "";
