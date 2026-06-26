@@ -49,11 +49,11 @@
                 </thead>
                 <tbody>
                     <f:for each="{tasks}" as="task">
-                        <tr title="id={task.uid}">
+                        <tr>
                             <td>{task.uid}</td>
                             <td class="col-title col-responsive nowrap">{task.title}</td>
                             <f:if condition="{showPage}">
-                                <td>
+                                <td class="col-title col-responsive nowrap">
                                     <a href="{f:be.uri(route:'ai_agent_chat', parameters:'{id:task.pid}')}">{task.pageTitle}</a>
                                 </td>
                             </f:if>
