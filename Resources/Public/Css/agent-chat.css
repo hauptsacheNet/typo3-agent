@@ -36,13 +36,15 @@ hn-agent-chat {
             height: 1.5rem;
             background: var(--module-bg);
         }
+
         &::before {
             top: 0;
             -webkit-mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 1), rgba(0, 0, 0, 0));
             mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 1), rgba(0, 0, 0, 0));
         }
+
         &::after {
-           bottom: 0;
+            bottom: 0;
             -webkit-mask-image: linear-gradient(to top, rgba(0, 0, 0, 1), rgba(0, 0, 0, 0));
             mask-image: linear-gradient(to top, rgba(0, 0, 0, 1), rgba(0, 0, 0, 0));
         }
@@ -196,4 +198,49 @@ hn-agent-chat, hn-agent-new-task {
 
 }
 
+.card.card--chat-bubble {
+    overflow: visible;
+    margin-left: var(--typo3-card-border-radius);
+    margin-right: var(--typo3-card-border-radius);
 
+    &::before {
+        position: absolute;
+        bottom: -1px;
+        width: calc(var(--typo3-card-border-radius) + 2px);
+        height: calc(var(--typo3-card-border-radius) + 2px);
+        z-index: 1;
+        background: var(--typo3-card-bg);
+        border: 1px solid var(--typo3-card-border-color);
+        box-shadow: var(--typo3-component-box-shadow);
+    }
+}
+
+.card.card--chat-bubble.card--chat-bubble-right:not(:has(+ .card--chat-bubble-right)) {
+    border-bottom-right-radius: 0;
+    &::before {
+        content: '';
+        right: calc(-1 * (var(--typo3-card-border-radius) + 2px));
+        border-top-right-radius: 10px;
+        corner-top-right-shape: scoop;
+        border-left: 0;
+        -webkit-clip-path: inset(-5px -5px -5px 0px);
+        clip-path: inset(-5px -5px -5px 0px);
+    }
+}
+
+.card.card--chat-bubble.card--chat-bubble-left {
+    --typo3-card-bg: var(--typo3-surface-container-lowest);
+}
+
+.card.card--chat-bubble.card--chat-bubble-left:not(:has(+ .card--chat-bubble-left)) {
+    border-bottom-left-radius: 0;
+    &::before {
+        content: '';
+        left: calc(-1 * (var(--typo3-card-border-radius) + 2px));
+        border-top-left-radius: 10px;
+        corner-top-left-shape: scoop;
+        border-right: 0;
+        -webkit-clip-path: inset(-5px 0px -5px -5px);
+        clip-path: inset(-5px 0px -5px -5px);
+    }
+}

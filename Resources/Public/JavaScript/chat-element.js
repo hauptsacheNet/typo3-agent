@@ -18,6 +18,7 @@ import DragUploader from "@typo3/backend/drag-uploader.js";
 import Modal from "@typo3/backend/modal.js";
 import { MessageUtility } from "@typo3/backend/utility/message-utility.js";
 import "./thinking-indicator.js";
+import "./chat-bubble.js";
 import "@hn/agent/attachment-chip-elements.js";
 marked.setOptions({ breaks: true, gfm: true });
 let ChatElement = class extends LitElement {
@@ -137,7 +138,7 @@ let ChatElement = class extends LitElement {
                 </div>` : nothing}
             <div class="chat-body">
 
-                <div class="chat-messages mx-3 py-4" ${ref(this.messagesContainerRef)}>
+                <div class="chat-messages px-2 py-4" ${ref(this.messagesContainerRef)}>
                     ${this.computeTurns().map((turn, i, all) => {
       const isLast = i === all.length - 1;
       return html`
@@ -302,57 +303,32 @@ let ChatElement = class extends LitElement {
   renderMessage(msg, isLatestUser = false) {
     const role = msg.role || "unknown";
     if (role === "system") return nothing;
-    const roleLabel = role === "user" ? "you" : role;
     if (role === "assistant") {
       const assistantText = msg.content != null ? this.contentText(msg.content) : "";
+      const hasFooter = !!msg.reasoning || !!msg.tool_calls && msg.tool_calls.length > 0;
       return html`
-                <div class="card card-default me-3">
-                    <div class="card-header">
-                        <div class="card-header-body">
-                            <span class="card-subtitle">${roleLabel}</span>
-                        </div>
-                    </div>
-                    
-                    ${assistantText ? html`
-                                <div class="card-body">${unsafeHTML(this.renderMarkdown(assistantText))}</div>` : nothing}
-
-                    ${msg.reasoning || msg.tool_calls && msg.tool_calls.length > 0 ? html`
-                    <div class="card-footer">
-                        ${msg.reasoning ? html`
-                                    ${this.renderReasoningBlock(msg.reasoning, msg)}` : nothing}
-    
-                        ${msg.tool_calls && msg.tool_calls.length > 0 ? html`
-                                    ${this.renderToolCallsGroup(msg.tool_calls)}` : nothing}
-                        
-                    </div>` : nothing}
-                    
-                </div>
+                <hn-agent-chat-bubble
+                        author="assistant"
+                        .body=${assistantText ? html`${unsafeHTML(this.renderMarkdown(assistantText))}` : nothing}
+                        .footer=${hasFooter ? html`
+                                    ${msg.reasoning ? this.renderReasoningBlock(msg.reasoning, msg) : nothing}
+                                    ${msg.tool_calls && msg.tool_calls.length > 0 ? this.renderToolCallsGroup(msg.tool_calls) : nothing}` : nothing}>
+                </hn-agent-chat-bubble>
             `;
     }
     const attachments = msg.attachments ?? [];
     const userText = msg.content != null ? this.contentText(msg.content) : "";
     return html`
-            <div class="card card-success align-self-end ms-3" ${isLatestUser ? ref(this.latestUserBubbleRef) : nothing}>
-                <div class="card-header">
-
-                    <div class="card-header-body">
-                        <span class="card-subtitle">${roleLabel}</span>
-                    </div>
-                </div>
-                ${userText ? html`
-                            <div class="card-body"><p class="card-text">${userText}</p></div>` : nothing}
-
-
-                ${attachments.length > 0 ? html`
-                            <div class="card-footer">
+            <hn-agent-chat-bubble
+                    author=${role}
+                    .body=${userText ? html`<p class="card-text">${userText}</p>` : nothing}
+                    .footer=${attachments.length > 0 ? html`
                                 <hn-agent-attachment-chips
                                         readonly
                                         .attachments=${attachments}>
-                                </hn-agent-attachment-chips>
-                            </div>` : nothing}
-
-
-            </div>
+                                </hn-agent-attachment-chips>` : nothing}
+                    ${isLatestUser ? ref(this.latestUserBubbleRef) : nothing}>
+            </hn-agent-chat-bubble>
         `;
   }
   getToolCallsGroupId(tcs) {
@@ -463,24 +439,13 @@ let ChatElement = class extends LitElement {
   }
   renderStreamingBubble() {
     return html`
-            <div class="card card-default me-3">
-                <div class="card-header">
-                    <div class="card-header-body">
-                        <span class="card-subtitle">assistant</span>
-                    </div>
-                </div>
-
-                <div class="card-body">
-                    ${unsafeHTML(this.renderMarkdown(this.streamingBuffer))}
-                    <thinking-indicator></thinking-indicator>
-                </div>
-                
-
-                ${this.reasoningBuffer ? html`
-                    <div class="card-footer">
-                        ${this.renderReasoningBlock(this.reasoningBuffer, this)}
-                    </div>` : nothing}
-            </div>
+            <hn-agent-chat-bubble
+                    author="assistant"
+                    .body=${html`
+                        ${unsafeHTML(this.renderMarkdown(this.streamingBuffer))}
+                        <thinking-indicator></thinking-indicator>`}
+                    .footer=${this.reasoningBuffer ? this.renderReasoningBlock(this.reasoningBuffer, this) : nothing}>
+            </hn-agent-chat-bubble>
         `;
   }
   renderReasoningBlock(reasoning, key) {
