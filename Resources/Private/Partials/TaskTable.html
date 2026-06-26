@@ -51,7 +51,7 @@
                     <f:for each="{tasks}" as="task">
                         <tr title="id={task.uid}">
                             <td>{task.uid}</td>
-                            <td>{task.title}</td>
+                            <td class="col-title col-responsive nowrap">{task.title}</td>
                             <f:if condition="{showPage}">
                                 <td>
                                     <a href="{f:be.uri(route:'ai_agent_chat', parameters:'{id:task.pid}')}">{task.pageTitle}</a>

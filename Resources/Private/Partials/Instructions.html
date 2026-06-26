@@ -103,14 +103,14 @@
                             <f:for each="{instructions}" as="instruction">
                                 <tr title="id={instruction.uid}">
                                     <td>{instruction.uid}</td>
-                                    <td><strong>{instruction.title}</strong></td>
+                                    <td class="col-title col-responsive nowrap"><strong>{instruction.title}</strong></td>
                                     <td>
                                         <f:if condition="{instruction.mode} == 'on_demand'">
                                             <f:then><span class="badge badge-info"><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.badge.onDemand"/></span></f:then>
                                             <f:else><span class="badge badge-default"><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.badge.always"/></span></f:else>
                                         </f:if>
                                     </td>
-                                    <td class="text-muted"><em>{instruction.description}</em></td>
+                                    <td class="text-muted col-responsive nowrap"><em>{instruction.description}</em></td>
                                     <td>
                                         <button type="button"
                                                 class="btn btn-default btn-sm hn-instruction-show"
@@ -124,7 +124,7 @@
                                         <template id="instruction-content-{instruction.uid}">{instruction.instruction -> f:transform.html() -> f:sanitize.html()}</template>
                                     </td>
                                     <f:if condition="{canEditInstructions}">
-                                        <td>
+                                        <td class="col-control">
                                             <f:if condition="{isLiveWorkspace}">
                                                 <f:then>
                                                     <a href="{instruction.editUri}"
