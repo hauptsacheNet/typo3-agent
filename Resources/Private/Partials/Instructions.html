@@ -84,75 +84,56 @@
                             <col>
                             <col>
                             <col>
+                            <col>
                             <f:if condition="{canEditInstructions}">
                                 <col class="col-control">
                             </f:if>
                         </colgroup>
                         <thead>
-                        <tr>
-                            <th>
-                                <f:translate
-                                        key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.column.name"/>
-                            </th>
-                            <th>
-                                <f:translate
-                                        key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.column.whenToUse"/>
-                            </th>
-                            <th>
-                                <f:translate
-                                        key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.column.mode"/>
-                            </th>
-                            <th>
-                                <f:translate
-                                        key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.column.content"/>
-                            </th>
-                            <f:if condition="{canEditInstructions}">
-                                <th></th>
-                            </f:if>
-                        </tr>
+                            <tr>
+                                <th><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.column.id"/></th>
+                                <th><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.column.name"/></th>
+                                <th><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.column.mode"/></th>
+                                <th><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.column.whenToUse"/></th>
+                                <th><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.column.content"/></th>
+                                <f:if condition="{canEditInstructions}"><th></th></f:if>
+                            </tr>
                         </thead>
                         <tbody>
-                        <f:for each="{instructions}" as="instruction">
-                            <tr>
-                                <td class=""><strong>{instruction.title}</strong></td>
-                                <td class="col-title col-responsive text-muted"><em>{instruction.description}</em></td>
-                                <td>
-                                    <f:if condition="{instruction.mode} == 'on_demand'">
-                                        <f:then><span class="badge badge-info"><f:translate
-                                                key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.badge.onDemand"/></span>
-                                        </f:then>
-                                        <f:else><span class="badge badge-default"><f:translate
-                                                key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.badge.always"/></span>
-                                        </f:else>
-                                    </f:if>
-                                </td>
-                                <td>
-                                    <button type="button"
-                                            class="btn btn-default btn-sm hn-instruction-show"
-                                            title="{f:translate(key: 'LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.action.show')}"
-                                            data-content-target="instruction-content-{instruction.uid}"
-                                            data-modal-title="{instruction.title}"
-                                            data-close-label="{f:translate(key: 'LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.modal.close')}">
-                                        <core:icon identifier="actions-eye" size="small"/>
-                                        <f:translate
-                                                key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.action.show"/>
-                                    </button>
-
-                                    <template id="instruction-content-{instruction.uid}">{instruction.instruction ->
-                                        f:transform.html() -> f:sanitize.html()}
-                                    </template>
-                                </td>
-                                <f:if condition="{canEditInstructions}">
-                                    <td class="col-control">
-                                        <f:if condition="{isLiveWorkspace}">
-                                            <f:then>
-                                                <a href="{instruction.editUri}"
-                                                   class="btn btn-default btn-sm"
-                                                   title="{f:translate(key: 'LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.action.edit')}">
-                                                    <core:icon identifier="actions-open" size="small"/>
-                                                </a>
-                                            </f:then>
-                                            <f:else>
+                            <f:for each="{instructions}" as="instruction">
+                                <tr title="id={instruction.uid}">
+                                    <td>{instruction.uid}</td>
+                                    <td><strong>{instruction.title}</strong></td>
+                                    <td>
+                                        <f:if condition="{instruction.mode} == 'on_demand'">
+                                            <f:then><span class="badge badge-info"><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.badge.onDemand"/></span></f:then>
+                                            <f:else><span class="badge badge-default"><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.badge.always"/></span></f:else>
+                                        </f:if>
+                                    </td>
+                                    <td class="text-muted"><em>{instruction.description}</em></td>
+                                    <td>
+                                        <button type="button"
+                                                class="btn btn-default btn-sm hn-instruction-show"
+                                                title="{f:translate(key: 'LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.action.show')}"
+                                                data-content-target="instruction-content-{instruction.uid}"
+                                                data-modal-title="{instruction.title}"
+                                                data-close-label="{f:translate(key: 'LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.modal.close')}">
+                                            <core:icon identifier="actions-eye" size="small"/>
+                                            <f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.action.show"/>
+                                        </button>
+                                        <template id="instruction-content-{instruction.uid}">{instruction.instruction -> f:transform.html() -> f:sanitize.html()}</template>
+                                    </td>
+                                    <f:if condition="{canEditInstructions}">
+                                        <td>
+                                            <f:if condition="{isLiveWorkspace}">
+                                                <f:then>
+                                                    <a href="{instruction.editUri}"
+                                                       class="btn btn-default btn-sm"
+                                                       title="{f:translate(key: 'LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.action.edit')}">
+                                                        <core:icon identifier="actions-open" size="small"/>
+                                                    </a>
+                                                </f:then>
+                                                <f:else>
                                                     <span class="d-inline-block"
                                                           tabindex="0"
                                                           title="{f:translate(key: 'LLL:EXT:agent/Resources/Private/Language/locallang.xlf:instructions.action.disabled.workspace')}">
