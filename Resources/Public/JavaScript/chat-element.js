@@ -98,7 +98,7 @@ let ChatElement = class extends LitElement {
   }
   get preflightUri() {
     const ajaxUrls = TYPO3?.settings?.ajaxUrls;
-    return ajaxUrls?.["ai_agent_attachment_preflight"] ?? "";
+    return ajaxUrls?.["typo3_agent_tasks_attachment_preflight"] ?? "";
   }
   // -- Lifecycle -------------------------------------------------------------
   firstUpdated() {

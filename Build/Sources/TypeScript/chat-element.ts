@@ -91,7 +91,7 @@ export class ChatElement extends LitElement {
 
     private get preflightUri(): string {
         const ajaxUrls = (TYPO3?.settings as Record<string, unknown> | undefined)?.ajaxUrls as Record<string, string> | undefined;
-        return ajaxUrls?.['ai_agent_attachment_preflight'] ?? '';
+        return ajaxUrls?.['typo3_agent_tasks_attachment_preflight'] ?? '';
     }
 
     @property({

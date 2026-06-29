@@ -3,8 +3,8 @@
 use Hn\Agent\Controller\ChatController;
 
 return [
-    'ai_agent_attachment_preflight' => [
-        'path' => '/agent/attachment-preflight',
+    'typo3_agent_tasks_attachment_preflight' => [
+        'path' => '/typo3-agent-tasks/attachment-preflight',
         'target' => ChatController::class . '::attachmentPreflightAction',
     ],
 ];
