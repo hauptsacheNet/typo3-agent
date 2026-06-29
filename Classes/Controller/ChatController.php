@@ -123,7 +123,6 @@ class ChatController
             'collapsed' => $collapsed,
             'defaultUploadFolder' => $uploadContext['defaultUploadFolder'],
             'fileBrowserUri' => $uploadContext['fileBrowserUri'],
-            'preflightUri' => $uploadContext['preflightUri'],
             'instructions' => $instructions,
             'canEditInstructions' => $canEditInstructions,
             'newInstructionUri' => $newInstructionUri,
@@ -256,7 +255,6 @@ class ChatController
                 'task' => $taskUid,
                 'id' => $pageId,
             ]),
-            'preflightUri' => $uploadContext['preflightUri'],
         ])->renderResponse('Chat/Show');
     }
 

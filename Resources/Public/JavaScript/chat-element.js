@@ -36,7 +36,6 @@ let ChatElement = class extends LitElement {
     this.activeWorkspaceTitle = "";
     this.defaultUploadFolder = "";
     this.fileBrowserUri = "";
-    this.preflightUri = "";
     this.initialMessages = [];
     this.initialChanges = [];
     this.changes = [];
@@ -96,6 +95,10 @@ let ChatElement = class extends LitElement {
   // No Shadow DOM — use TYPO3 backend Bootstrap CSS
   createRenderRoot() {
     return this;
+  }
+  get preflightUri() {
+    const ajaxUrls = TYPO3?.settings?.ajaxUrls;
+    return ajaxUrls?.["ai_agent_attachment_preflight"] ?? "";
   }
   // -- Lifecycle -------------------------------------------------------------
   firstUpdated() {
@@ -894,9 +897,6 @@ __decorateClass([
 __decorateClass([
   property({ attribute: "file-browser-uri" })
 ], ChatElement.prototype, "fileBrowserUri", 2);
-__decorateClass([
-  property({ attribute: "preflight-uri" })
-], ChatElement.prototype, "preflightUri", 2);
 __decorateClass([
   property({
     attribute: "initial-messages",

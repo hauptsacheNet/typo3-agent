@@ -40,11 +40,11 @@ class PromptRenderer
 
     /**
      * Resolve the upload-context bundle (default upload folder, file browser
-     * URI, preflight URI) for the chat composer / new-task form. Also injects
-     * the DragUploader's inline language labels — they're read from
+     * URI) for the chat composer / new-task form. Also injects the
+     * DragUploader's inline language labels — they're read from
      * TYPO3.lang["file_upload.*"] but not loaded by the module shell.
      *
-     * @return array{defaultUploadFolder:string,fileBrowserUri:string,preflightUri:string}
+     * @return array{defaultUploadFolder:string,fileBrowserUri:string}
      */
     public function getUploadContext(int $pageId, string $tableName, string $browserFieldName): array
     {
@@ -62,7 +62,6 @@ class PromptRenderer
                 'mode' => 'file',
                 'bparams' => $browserFieldName . '|||*|',
             ]),
-            'preflightUri' => (string)$this->uriBuilder->buildUriFromRoute('ajax_ai_agent_attachment_preflight'),
         ];
     }
 
@@ -84,7 +83,7 @@ class PromptRenderer
         $this->pageRenderer->addCssFile('EXT:agent/Resources/Public/Css/agent-chat.css');
 
         return sprintf(
-            '<hn-agent-new-task action-uri="%s" table="%s" uid="%d" placeholder="%s" workspace-id="%d" workspace-title="%s" default-upload-folder="%s" file-browser-uri="%s" preflight-uri="%s"></hn-agent-new-task>',
+            '<hn-agent-new-task action-uri="%s" table="%s" uid="%d" placeholder="%s" workspace-id="%d" workspace-title="%s" default-upload-folder="%s" file-browser-uri="%s"></hn-agent-new-task>',
             htmlspecialchars($actionUri, ENT_QUOTES | ENT_HTML5),
             htmlspecialchars($tableName, ENT_QUOTES | ENT_HTML5),
             $uid,
@@ -93,7 +92,6 @@ class PromptRenderer
             htmlspecialchars($workspace['title'], ENT_QUOTES | ENT_HTML5),
             htmlspecialchars($upload['defaultUploadFolder'], ENT_QUOTES | ENT_HTML5),
             htmlspecialchars($upload['fileBrowserUri'], ENT_QUOTES | ENT_HTML5),
-            htmlspecialchars($upload['preflightUri'], ENT_QUOTES | ENT_HTML5),
         );
     }
 
@@ -119,7 +117,6 @@ class PromptRenderer
         $this->pageRenderer->addInlineSetting('Agent', 'workspaceTitle', $workspace['title']);
         $this->pageRenderer->addInlineSetting('Agent', 'defaultUploadFolder', $upload['defaultUploadFolder']);
         $this->pageRenderer->addInlineSetting('Agent', 'fileBrowserUri', $upload['fileBrowserUri']);
-        $this->pageRenderer->addInlineSetting('Agent', 'preflightUri', $upload['preflightUri']);
         $this->pageRenderer->addInlineLanguageLabelFile('EXT:agent/Resources/Private/Language/locallang.xlf');
         $this->pageRenderer->addCssFile('EXT:agent/Resources/Public/Css/agent-chat.css');
         $this->pageRenderer->loadJavaScriptModule('@hn/agent/auto-insert-new-task.js');

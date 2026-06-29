@@ -88,7 +88,11 @@ export class ChatElement extends LitElement {
     @property({attribute: 'active-workspace-title'}) activeWorkspaceTitle = '';
     @property({attribute: 'default-upload-folder'}) defaultUploadFolder = '';
     @property({attribute: 'file-browser-uri'}) fileBrowserUri = '';
-    @property({attribute: 'preflight-uri'}) preflightUri = '';
+
+    private get preflightUri(): string {
+        const ajaxUrls = (TYPO3?.settings as Record<string, unknown> | undefined)?.ajaxUrls as Record<string, string> | undefined;
+        return ajaxUrls?.['ai_agent_attachment_preflight'] ?? '';
+    }
 
     @property({
         attribute: 'initial-messages',

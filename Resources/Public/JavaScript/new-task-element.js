@@ -27,7 +27,6 @@ let NewTaskElement = class extends LitElement {
     this.workspaceTitle = "";
     this.defaultUploadFolder = "";
     this.fileBrowserUri = "";
-    this.preflightUri = "";
     this.message = "";
     this.attachments = [];
     this.uploadTriggerRef = createRef();
@@ -57,6 +56,10 @@ let NewTaskElement = class extends LitElement {
   // No Shadow DOM — use TYPO3 backend Bootstrap CSS
   createRenderRoot() {
     return this;
+  }
+  get preflightUri() {
+    const ajaxUrls = TYPO3?.settings?.ajaxUrls;
+    return ajaxUrls?.["ai_agent_attachment_preflight"] ?? "";
   }
   get isLive() {
     return this.workspaceId <= 0;
@@ -266,9 +269,6 @@ __decorateClass([
 __decorateClass([
   property({ attribute: "file-browser-uri" })
 ], NewTaskElement.prototype, "fileBrowserUri", 2);
-__decorateClass([
-  property({ attribute: "preflight-uri" })
-], NewTaskElement.prototype, "preflightUri", 2);
 __decorateClass([
   state()
 ], NewTaskElement.prototype, "message", 2);

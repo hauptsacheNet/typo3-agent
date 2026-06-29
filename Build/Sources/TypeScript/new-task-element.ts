@@ -24,7 +24,11 @@ export class NewTaskElement extends LitElement {
   @property({attribute: 'workspace-title'}) workspaceTitle = '';
   @property({attribute: 'default-upload-folder'}) defaultUploadFolder = '';
   @property({attribute: 'file-browser-uri'}) fileBrowserUri = '';
-  @property({attribute: 'preflight-uri'}) preflightUri = '';
+
+  private get preflightUri(): string {
+    const ajaxUrls = (TYPO3?.settings as Record<string, unknown> | undefined)?.ajaxUrls as Record<string, string> | undefined;
+    return ajaxUrls?.['ai_agent_attachment_preflight'] ?? '';
+  }
 
   @state() private message = '';
   @state() private attachments: Attachment[] = [];
