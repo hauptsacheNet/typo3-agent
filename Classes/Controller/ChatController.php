@@ -39,7 +39,6 @@ use TYPO3\CMS\Core\Imaging\IconSize;
  *  - web_typo3_agent_tasks.show         → showAction   (single chat view)
  *  - web_typo3_agent_tasks.new          → newAction    (POST: create chat)
  *  - web_typo3_agent_tasks.sendMessage  → sendMessageAction (POST: follow-up)
- *  - web_typo3_agent_tasks.switchWorkspace → switchWorkspaceAction (POST: switch BE workspace)
  */
 #[AsController]
 class ChatController
@@ -257,10 +256,6 @@ class ChatController
                 'task' => $taskUid,
                 'id' => $pageId,
             ]),
-            'switchWorkspaceUri' => (string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks.switchWorkspace', [
-                'task' => $taskUid,
-                'id' => $pageId,
-            ]),
             'preflightUri' => $uploadContext['preflightUri'],
         ])->renderResponse('Chat/Show');
     }
@@ -335,32 +330,6 @@ class ChatController
             'task' => $taskUid,
             'id' => $pageId,
         ]));
-    }
-
-    /**
-     * Switch the current backend user's active workspace to the workspace
-     * the given task belongs to. Persists the choice in user UC and redirects
-     * back to the chat view — must be opened as a top-frame navigation so the
-     * backend shell (incl. workspace toolbar) reloads.
-     */
-    public function switchWorkspaceAction(ServerRequestInterface $request): ResponseInterface
-    {
-        $pageId = $this->getPageId($request);
-        $taskUid = (int)($request->getQueryParams()['task'] ?? $request->getParsedBody()['task'] ?? 0);
-        $task = $taskUid > 0 ? $this->loadTaskForCurrentUser($taskUid) : null;
-        $targetWorkspace = (int)($task['workspace_id'] ?? 0);
-        $beUser = $GLOBALS['BE_USER'] ?? null;
-
-        if ($task !== null && $targetWorkspace > 0 && $beUser !== null && $beUser->checkWorkspace($targetWorkspace)) {
-            $beUser->setWorkspace($targetWorkspace);
-            $beUser->writeUC();
-        }
-
-        $redirectTarget = (string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks.show', [
-            'task' => $taskUid,
-            'id' => $pageId,
-        ]);
-        return new RedirectResponse($redirectTarget);
     }
 
     /**

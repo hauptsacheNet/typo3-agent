@@ -34,7 +34,6 @@ let ChatElement = class extends LitElement {
     this.taskWorkspaceTitle = "";
     this.activeWorkspaceId = 0;
     this.activeWorkspaceTitle = "";
-    this.switchWorkspaceUri = "";
     this.defaultUploadFolder = "";
     this.fileBrowserUri = "";
     this.preflightUri = "";
@@ -889,9 +888,6 @@ __decorateClass([
 __decorateClass([
   property({ attribute: "active-workspace-title" })
 ], ChatElement.prototype, "activeWorkspaceTitle", 2);
-__decorateClass([
-  property({ attribute: "switch-workspace-uri" })
-], ChatElement.prototype, "switchWorkspaceUri", 2);
 __decorateClass([
   property({ attribute: "default-upload-folder" })
 ], ChatElement.prototype, "defaultUploadFolder", 2);

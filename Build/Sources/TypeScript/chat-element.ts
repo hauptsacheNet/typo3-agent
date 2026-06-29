@@ -86,7 +86,6 @@ export class ChatElement extends LitElement {
     @property({attribute: 'task-workspace-title'}) taskWorkspaceTitle = '';
     @property({attribute: 'active-workspace-id', type: Number}) activeWorkspaceId = 0;
     @property({attribute: 'active-workspace-title'}) activeWorkspaceTitle = '';
-    @property({attribute: 'switch-workspace-uri'}) switchWorkspaceUri = '';
     @property({attribute: 'default-upload-folder'}) defaultUploadFolder = '';
     @property({attribute: 'file-browser-uri'}) fileBrowserUri = '';
     @property({attribute: 'preflight-uri'}) preflightUri = '';

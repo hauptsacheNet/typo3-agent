@@ -35,9 +35,6 @@ return [
                 'target' => ChatController::class . '::cancelMessageAction',
                 'methods' => ['POST'],
             ],
-            'switchWorkspace' => [
-                'target' => ChatController::class . '::switchWorkspaceAction',
-            ],
         ],
     ],
 ];
