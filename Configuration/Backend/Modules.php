@@ -3,11 +3,11 @@
 use Hn\Agent\Controller\ChatController;
 
 return [
-    'ai_agent_chat' => [
+    'web_typo3_agent_tasks' => [
         'parent' => 'web',
         'access' => 'user',
-        'path' => '/module/web/ai-agent-chat',
-        'iconIdentifier' => 'module-ai-agent-chat',
+        'path' => '/module/web/typo3-agent-tasks',
+        'iconIdentifier' => 'module-typo3-agent-tasks',
         'labels' => [
             'title' => 'LLL:EXT:agent/Resources/Private/Language/locallang.xlf:module.title',
             'description' => 'LLL:EXT:agent/Resources/Private/Language/locallang.xlf:module.description',

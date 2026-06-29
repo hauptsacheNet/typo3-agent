@@ -17,6 +17,7 @@ import DOMPurify from "dompurify";
 import DragUploader from "@typo3/backend/drag-uploader.js";
 import Modal from "@typo3/backend/modal.js";
 import { MessageUtility } from "@typo3/backend/utility/message-utility.js";
+import WorkspaceState from "@typo3/workspaces/workspace-state.js";
 import "./thinking-indicator.js";
 import "./chat-bubble.js";
 import "@hn/agent/attachment-chip-elements.js";
@@ -250,16 +251,27 @@ let ChatElement = class extends LitElement {
                         <div class="mb-2">
                             ${message}
                         </div>
-                        <a href=${this.switchWorkspaceUri}
-                           target="_top"
-                           class="btn btn-warning text-decoration-none ${this.switchWorkspaceUri ? "" : "disabled"}"
-                        <typo3-backend-icon identifier="apps-toolbar-menu-workspace" size="small"></typo3-backend-icon>
-                        ${buttonLabel}
-                        </a>
+                        <button type="button"
+                                class="btn btn-warning"
+                                ?disabled=${!this.taskWorkspaceId}
+                                @click=${() => this.handleSwitchWorkspace()}>
+                            <typo3-backend-icon identifier="apps-toolbar-menu-workspace" size="small"></typo3-backend-icon>
+                            ${buttonLabel}
+                        </button>
                     </div>
                 </div>
-
+            </div>
         `;
+  }
+  async handleSwitchWorkspace() {
+    if (!this.taskWorkspaceId) {
+      return;
+    }
+    try {
+      await WorkspaceState.switchWorkspace(this.taskWorkspaceId);
+    } catch (e) {
+      console.error("Workspace switch failed", e);
+    }
   }
   renderErrorMessage() {
     return html`

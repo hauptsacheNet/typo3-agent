@@ -7,6 +7,7 @@ import DOMPurify from 'dompurify';
 import DragUploader from '@typo3/backend/drag-uploader.js';
 import Modal from '@typo3/backend/modal.js';
 import {MessageUtility} from '@typo3/backend/utility/message-utility.js';
+import WorkspaceState from '@typo3/workspaces/workspace-state.js';
 import './thinking-indicator.js';
 import './chat-bubble.js';
 import '@hn/agent/attachment-chip-elements.js';
@@ -359,10 +360,10 @@ export class ChatElement extends LitElement {
             .replace('%s', taskTitle);
         const buttonLabel = buttonTemplate.replace('%s', taskTitle);
 
-        // Navigate the top-level backend window so the workspace selector in the
-        // toolbar reloads. target="_top" is set on the anchor for ctrl-click /
-        // accessibility, but the explicit click handler is what actually fires —
-        // the BE module iframe otherwise eats the navigation.
+        // Use TYPO3's WorkspaceState so the toolbar indicator and pagetree
+        // get the 'typo3:workspace:changed' event. Its built-in post-switch
+        // handler would push us to web_layout — we counter that by forcing
+        // navigation back to our chat URL right after.
         return html`
             <div class="callout callout-warning">
                 <div class="callout-icon">
@@ -376,16 +377,28 @@ export class ChatElement extends LitElement {
                         <div class="mb-2">
                             ${message}
                         </div>
-                        <a href=${this.switchWorkspaceUri}
-                           target="_top"
-                           class="btn btn-warning text-decoration-none ${this.switchWorkspaceUri ? '' : 'disabled'}"
-                        <typo3-backend-icon identifier="apps-toolbar-menu-workspace" size="small"></typo3-backend-icon>
-                        ${buttonLabel}
-                        </a>
+                        <button type="button"
+                                class="btn btn-warning"
+                                ?disabled=${!this.taskWorkspaceId}
+                                @click=${() => this.handleSwitchWorkspace()}>
+                            <typo3-backend-icon identifier="apps-toolbar-menu-workspace" size="small"></typo3-backend-icon>
+                            ${buttonLabel}
+                        </button>
                     </div>
                 </div>
-
+            </div>
         `;
+    }
+
+    private async handleSwitchWorkspace(): Promise<void> {
+        if (!this.taskWorkspaceId) {
+            return;
+        }
+        try {
+            await WorkspaceState.switchWorkspace(this.taskWorkspaceId);
+        } catch (e) {
+            console.error('Workspace switch failed', e);
+        }
     }
 
     private renderErrorMessage(): TemplateResult {

@@ -76,7 +76,7 @@ class PromptRenderer
             return '';
         }
 
-        $actionUri = (string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat.new', ['id' => $pageId]);
+        $actionUri = (string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks.new', ['id' => $pageId]);
         $workspace = $this->getCurrentWorkspaceInfo();
         $upload = $this->getUploadContext($pageId, $tableName, 'hn-agent-new-task');
 
@@ -107,7 +107,7 @@ class PromptRenderer
             return;
         }
 
-        $actionUri = (string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat.new', ['id' => $pageId]);
+        $actionUri = (string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks.new', ['id' => $pageId]);
         $workspace = $this->getCurrentWorkspaceInfo();
         $upload = $this->getUploadContext($pageId, $tableName, 'hn-agent-new-task');
 

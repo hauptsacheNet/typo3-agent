@@ -35,11 +35,11 @@ use TYPO3\CMS\Core\Imaging\IconSize;
  * task record whose `messages` field grows with every exchange.
  *
  * Actions are wired via sub-routes in Configuration/Backend/Modules.php:
- *  - ai_agent_chat              → indexAction  (chat list)
- *  - ai_agent_chat.show         → showAction   (single chat view)
- *  - ai_agent_chat.new          → newAction    (POST: create chat)
- *  - ai_agent_chat.sendMessage  → sendMessageAction (POST: follow-up)
- *  - ai_agent_chat.switchWorkspace → switchWorkspaceAction (POST: switch BE workspace)
+ *  - web_typo3_agent_tasks              → indexAction  (chat list)
+ *  - web_typo3_agent_tasks.show         → showAction   (single chat view)
+ *  - web_typo3_agent_tasks.new          → newAction    (POST: create chat)
+ *  - web_typo3_agent_tasks.sendMessage  → sendMessageAction (POST: follow-up)
+ *  - web_typo3_agent_tasks.switchWorkspace → switchWorkspaceAction (POST: switch BE workspace)
  */
 #[AsController]
 class ChatController
@@ -94,7 +94,7 @@ class ChatController
         $instructions = $this->instructionRepository->findActive();
         $canEditInstructions = (bool)$GLOBALS['BE_USER']->check('tables_modify', 'tx_agent_instruction');
         if ($canEditInstructions) {
-            $returnUrl = (string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat', ['id' => $pageId]);
+            $returnUrl = (string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks', ['id' => $pageId]);
             foreach ($instructions as &$instruction) {
                 $instruction['editUri'] = (string)$this->uriBuilder->buildUriFromRoute('record_edit', [
                     'edit' => ['tx_agent_instruction' => [$instruction['uid'] => 'edit']],
@@ -118,7 +118,7 @@ class ChatController
             'tasks' => $tasks,
             'subpageTasks' => $subpageTasks,
             'pageId' => $pageId,
-            'newUri' => (string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat.new', ['id' => $pageId]),
+            'newUri' => (string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks.new', ['id' => $pageId]),
             'placeholder' => $placeholder,
             'workspace' => $workspace,
             'collapsed' => $collapsed,
@@ -169,12 +169,12 @@ class ChatController
         $pageId = $this->getPageId($request);
         $taskUid = (int)($request->getQueryParams()['task'] ?? 0);
         if ($taskUid <= 0) {
-            return new RedirectResponse((string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat', ['id' => $pageId]));
+            return new RedirectResponse((string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks', ['id' => $pageId]));
         }
 
         $task = $this->loadTaskForCurrentUser($taskUid);
         if ($task === null) {
-            return new RedirectResponse((string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat', ['id' => $pageId]));
+            return new RedirectResponse((string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks', ['id' => $pageId]));
         }
 
         $this->pageRenderer->addInlineSetting('FormEngine', 'moduleUrl', (string)$this->uriBuilder->buildUriFromRoute('record_edit'));
@@ -245,19 +245,19 @@ class ChatController
             'activeWorkspace' => $this->getActiveWorkspaceInfo(),
             'defaultUploadFolder' => $uploadContext['defaultUploadFolder'],
             'fileBrowserUri' => $uploadContext['fileBrowserUri'],
-            'sendUri' => (string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat.sendMessage', [
+            'sendUri' => (string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks.sendMessage', [
                 'task' => $taskUid,
                 'id' => $pageId,
             ]),
-            'streamUri' => (string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat.streamMessage', [
+            'streamUri' => (string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks.streamMessage', [
                 'task' => $taskUid,
                 'id' => $pageId,
             ]),
-            'cancelUri' => (string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat.cancelMessage', [
+            'cancelUri' => (string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks.cancelMessage', [
                 'task' => $taskUid,
                 'id' => $pageId,
             ]),
-            'switchWorkspaceUri' => (string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat.switchWorkspace', [
+            'switchWorkspaceUri' => (string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks.switchWorkspace', [
                 'task' => $taskUid,
                 'id' => $pageId,
             ]),
@@ -295,13 +295,13 @@ class ChatController
         $message = trim((string)($body['message'] ?? ''));
         $rawAttachments = $this->parseAttachments($body['attachments'] ?? null);
         if ($message === '' && $rawAttachments === []) {
-            return new RedirectResponse((string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat', ['id' => $pageId]));
+            return new RedirectResponse((string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks', ['id' => $pageId]));
         }
 
         $workspaceId = (int)($GLOBALS['BE_USER']->workspace ?? 0);
         if ($workspaceId === 0) {
             // Live workspace blocked server-side too — UI normally prevents reaching this branch.
-            return new RedirectResponse((string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat', ['id' => $pageId]));
+            return new RedirectResponse((string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks', ['id' => $pageId]));
         }
 
         $contextTable = (string)($body['table'] ?? '');
@@ -331,7 +331,7 @@ class ChatController
             $workspaceId,
             $initialMessages,
         );
-        return new RedirectResponse((string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat.show', [
+        return new RedirectResponse((string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks.show', [
             'task' => $taskUid,
             'id' => $pageId,
         ]));
@@ -356,7 +356,7 @@ class ChatController
             $beUser->writeUC();
         }
 
-        $redirectTarget = (string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat.show', [
+        $redirectTarget = (string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks.show', [
             'task' => $taskUid,
             'id' => $pageId,
         ]);
@@ -411,7 +411,7 @@ class ChatController
             if ($this->isAjax($request)) {
                 return new JsonResponse(['error' => 'Invalid task or empty message'], 400);
             }
-            return new RedirectResponse((string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat'));
+            return new RedirectResponse((string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks'));
         }
 
         $error = null;
@@ -432,7 +432,7 @@ class ChatController
             ]);
         }
 
-        return new RedirectResponse((string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat.show', [
+        return new RedirectResponse((string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks.show', [
             'task' => $taskUid,
         ]));
     }
@@ -469,7 +469,7 @@ class ChatController
     {
         $buttonBar = $view->getDocHeaderComponent()->getButtonBar();
         $backButton = $buttonBar->makeLinkButton()
-            ->setHref((string)$this->uriBuilder->buildUriFromRoute('ai_agent_chat', ['id' => $pageId]))
+            ->setHref((string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks', ['id' => $pageId]))
             ->setTitle($GLOBALS['LANG']->sL('LLL:EXT:agent/Resources/Private/Language/locallang.xlf:button.backToTasks'))
             ->setShowLabelText(true)
             ->setIcon($this->iconFactory->getIcon('actions-view-go-back', IconSize::SMALL));

@@ -54,7 +54,7 @@
                             <td class="col-title col-responsive nowrap">{task.title}</td>
                             <f:if condition="{showPage}">
                                 <td class="col-title col-responsive nowrap">
-                                    <a href="{f:be.uri(route:'ai_agent_chat', parameters:'{id:task.pid}')}">{task.pageTitle}</a>
+                                    <a href="{f:be.uri(route:'web_typo3_agent_tasks', parameters:'{id:task.pid}')}">{task.pageTitle}</a>
                                 </td>
                             </f:if>
                             <td>
@@ -68,7 +68,7 @@
                             </td>
                             <td class="nowrap"><f:format.date format="Y-m-d H:i">@{task.tstamp}</f:format.date></td>
                             <td class="col-control">
-                                <a href="{f:be.uri(route:'ai_agent_chat.show', parameters:'{task:task.uid, id:pageId}')}"
+                                <a href="{f:be.uri(route:'web_typo3_agent_tasks.show', parameters:'{task:task.uid, id:pageId}')}"
                                    class="btn btn-sm btn-default">
                                     <core:icon identifier="actions-open" size="small"/>
                                 </a>
