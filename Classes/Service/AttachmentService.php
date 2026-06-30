@@ -25,7 +25,7 @@ use TYPO3\CMS\Core\Resource\ResourceFactory;
  *  - AgentService — to annotate user-attachment markers with notes like
  *    "zu groß" / "Format nicht unterstützt" so the LLM doesn't bother
  *    calling a viewer tool on files that wouldn't deliver bytes anyway.
- *  - ChatController::attachmentPreflightAction — for the chat-UI chip.
+ *  - AttachmentController::preflightAction — for the chat-UI chip.
  *  - GetFileInfoTool / ViewImageTool — share resolveWithFallback() so
  *    the LLM can pass sys_file_reference UIDs and still get the right
  *    file back.

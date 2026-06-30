@@ -16,15 +16,14 @@ use TYPO3\CMS\Core\Http\JsonResponse;
 use TYPO3\CMS\Core\Http\Response;
 
 /**
- * Realtime / JSON API for the chat UI.
+ * SSE-Lifecycle of the agent task — counterpart to {@see ChatController}
+ * (HTML pages) and {@see AttachmentController} (file-attachment AJAX).
  *
- * Counterpart of {@see ChatController} (which renders the HTML pages of the
- * backend module). Endpoints here are called by the chat web component via
- * fetch():
+ * Endpoints, wired in Configuration/Backend/Modules.php, are called by the
+ * chat web component via fetch():
  *
- *  - web_typo3_agent_tasks.streamMessage           → SSE: drives the agent loop
- *  - web_typo3_agent_tasks.cancelMessage           → atomic cancel
- *  - typo3_agent_tasks_attachment_preflight (Ajax) → file-attachment metadata
+ *  - web_typo3_agent_tasks.streamMessage → SSE: drives the agent loop
+ *  - web_typo3_agent_tasks.cancelMessage → atomic cancel
  */
 #[AsController]
 class ChatStreamController
@@ -106,29 +105,6 @@ class ChatStreamController
         $isAdmin = (bool)($GLOBALS['BE_USER']->user['admin'] ?? false);
         $cancelled = $this->repository->requestCancel($taskUid, $userId, $isAdmin);
         return new JsonResponse(['ok' => true, 'cancelled' => $cancelled]);
-    }
-
-    /**
-     * Pre-flight check for one attachment from the chat composer: tells the
-     * UI whether the file will be embedded as actual content for the LLM,
-     * and if not, why. Cheap (FAL metadata only, no getContents()).
-     */
-    public function attachmentPreflightAction(ServerRequestInterface $request): ResponseInterface
-    {
-        $params = $request->getQueryParams();
-        $uid = (int)($params['uid'] ?? 0);
-        $identifier = trim((string)($params['identifier'] ?? ''));
-        if ($uid <= 0 && $identifier === '') {
-            return new JsonResponse(['error' => 'uid or identifier required'], 400);
-        }
-        $ref = [];
-        if ($uid > 0) {
-            $ref['uid'] = $uid;
-        }
-        if ($identifier !== '') {
-            $ref['identifier'] = $identifier;
-        }
-        return new JsonResponse($this->attachmentService->preview($ref));
     }
 
     private function buildSseResponse(\Closure $emitter): ResponseInterface
