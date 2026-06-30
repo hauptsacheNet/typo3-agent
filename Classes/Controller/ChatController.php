@@ -8,7 +8,6 @@ use Doctrine\DBAL\ParameterType;
 use Hn\Agent\Domain\AgentInstructionRepository;
 use Hn\Agent\Domain\AgentTaskRepository;
 use Hn\Agent\Domain\TaskStatus;
-use Hn\Agent\Http\SseStream;
 use Hn\Agent\Renderer\PromptRenderer;
 use Hn\Agent\Service\AgentService;
 use Hn\Agent\Service\AttachmentService;
@@ -17,44 +16,43 @@ use Psr\Http\Message\ServerRequestInterface;
 use TYPO3\CMS\Backend\Attribute\AsController;
 use TYPO3\CMS\Backend\Routing\UriBuilder;
 use TYPO3\CMS\Backend\Template\ModuleTemplateFactory;
-use TYPO3\CMS\Core\Http\JsonResponse;
-use TYPO3\CMS\Core\Http\RedirectResponse;
-use TYPO3\CMS\Core\Http\Response;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Domain\Repository\PageRepository;
-use TYPO3\CMS\Core\Page\PageRenderer;
-use TYPO3\CMS\Core\Utility\GeneralUtility;
+use TYPO3\CMS\Core\Http\RedirectResponse;
 use TYPO3\CMS\Core\Imaging\IconFactory;
 use TYPO3\CMS\Core\Imaging\IconSize;
+use TYPO3\CMS\Core\Page\PageRenderer;
+use TYPO3\CMS\Core\Utility\GeneralUtility;
 
 /**
- * Backend module controller for chatting with the AI agent.
+ * Backend module controller for the HTML pages of the chat module.
  *
  * Reuses tx_agent_task as the conversation store: each chat is a single
  * task record whose `messages` field grows with every exchange.
  *
- * Actions are wired via sub-routes in Configuration/Backend/Modules.php:
- *  - web_typo3_agent_tasks                → indexAction         (chat list)
- *  - web_typo3_agent_tasks.show           → showAction          (single chat view)
- *  - web_typo3_agent_tasks.new            → newAction           (POST: create chat)
- *  - web_typo3_agent_tasks.streamMessage  → streamMessageAction (POST SSE: run agent / follow-up)
- *  - web_typo3_agent_tasks.cancelMessage  → cancelMessageAction (POST: cancel in-progress task)
+ * Realtime/JSON endpoints driven by the chat web component (streamMessage,
+ * cancelMessage, attachmentPreflight) live in {@see ChatStreamController}.
+ *
+ * Actions here are wired via sub-routes in Configuration/Backend/Modules.php:
+ *  - web_typo3_agent_tasks       → indexAction (chat list)
+ *  - web_typo3_agent_tasks.show  → showAction  (single chat view)
+ *  - web_typo3_agent_tasks.new   → newAction   (POST: create chat)
  */
 #[AsController]
 class ChatController
 {
     public function __construct(
-        private readonly ModuleTemplateFactory $moduleTemplateFactory,
-        private readonly UriBuilder            $uriBuilder,
-        private readonly IconFactory           $iconFactory,
-        private readonly AgentTaskRepository   $repository,
-        private readonly AgentService          $agentService,
-        private readonly AttachmentService     $attachmentService,
-        protected readonly PageRenderer        $pageRenderer,
-        private readonly PageRepository        $pageRepository,
-        private readonly ConnectionPool        $connectionPool,
-        private readonly PromptRenderer        $promptRenderer,
+        private readonly ModuleTemplateFactory      $moduleTemplateFactory,
+        private readonly UriBuilder                 $uriBuilder,
+        private readonly IconFactory                $iconFactory,
+        private readonly AgentTaskRepository        $repository,
+        private readonly AgentService               $agentService,
+        private readonly AttachmentService          $attachmentService,
+        protected readonly PageRenderer             $pageRenderer,
+        private readonly PageRepository             $pageRepository,
+        private readonly ConnectionPool             $connectionPool,
+        private readonly PromptRenderer             $promptRenderer,
         private readonly AgentInstructionRepository $instructionRepository,
     )
     {
@@ -131,38 +129,6 @@ class ChatController
         ])->renderResponse('Chat/Index');
     }
 
-    /**
-     * Returns all page UIDs below the given page, in tree order. When $pageId is 0
-     * the entire backend page tree is descended (all root pages and their subpages).
-     *
-     * @return int[]
-     */
-    private function collectDescendantPageIds(int $pageId): array
-    {
-        if ($pageId > 0) {
-            return $this->pageRepository->getDescendantPageIdsRecursive($pageId, 999);
-        }
-
-        $qb = $this->connectionPool->getQueryBuilderForTable('pages');
-        $rootPageIds = $qb
-            ->select('uid')
-            ->from('pages')
-            ->where($qb->expr()->eq('pid', $qb->createNamedParameter(0, ParameterType::INTEGER)))
-            ->orderBy('sorting', 'ASC')
-            ->executeQuery()
-            ->fetchFirstColumn();
-
-        $descendants = [];
-        foreach ($rootPageIds as $rootId) {
-            $rootId = (int)$rootId;
-            $descendants[] = $rootId;
-            foreach ($this->pageRepository->getDescendantPageIdsRecursive($rootId, 999) as $childId) {
-                $descendants[] = (int)$childId;
-            }
-        }
-        return $descendants;
-    }
-
     public function showAction(ServerRequestInterface $request): ResponseInterface
     {
         $pageId = $this->getPageId($request);
@@ -171,7 +137,9 @@ class ChatController
             return new RedirectResponse((string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks', ['id' => $pageId]));
         }
 
-        $task = $this->loadTaskForCurrentUser($taskUid);
+        $userId = (int)($GLOBALS['BE_USER']->user['uid'] ?? 0);
+        $isAdmin = (bool)($GLOBALS['BE_USER']->user['admin'] ?? false);
+        $task = $this->repository->findByUidForUser($taskUid, $userId, $isAdmin);
         if ($task === null) {
             return new RedirectResponse((string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks', ['id' => $pageId]));
         }
@@ -253,29 +221,6 @@ class ChatController
         ])->renderResponse('Chat/Show');
     }
 
-    /**
-     * Pre-flight check for one attachment from the chat composer: tells the
-     * UI whether the file will be embedded as actual content for the LLM,
-     * and if not, why. Cheap (FAL metadata only, no getContents()).
-     */
-    public function attachmentPreflightAction(ServerRequestInterface $request): ResponseInterface
-    {
-        $params = $request->getQueryParams();
-        $uid = (int)($params['uid'] ?? 0);
-        $identifier = trim((string)($params['identifier'] ?? ''));
-        if ($uid <= 0 && $identifier === '') {
-            return new JsonResponse(['error' => 'uid or identifier required'], 400);
-        }
-        $ref = [];
-        if ($uid > 0) {
-            $ref['uid'] = $uid;
-        }
-        if ($identifier !== '') {
-            $ref['identifier'] = $identifier;
-        }
-        return new JsonResponse($this->attachmentService->preview($ref));
-    }
-
     public function newAction(ServerRequestInterface $request): ResponseInterface
     {
         $pageId = $this->getPageId($request);
@@ -326,6 +271,38 @@ class ChatController
     }
 
     /**
+     * Returns all page UIDs below the given page, in tree order. When $pageId is 0
+     * the entire backend page tree is descended (all root pages and their subpages).
+     *
+     * @return int[]
+     */
+    private function collectDescendantPageIds(int $pageId): array
+    {
+        if ($pageId > 0) {
+            return $this->pageRepository->getDescendantPageIdsRecursive($pageId, 999);
+        }
+
+        $qb = $this->connectionPool->getQueryBuilderForTable('pages');
+        $rootPageIds = $qb
+            ->select('uid')
+            ->from('pages')
+            ->where($qb->expr()->eq('pid', $qb->createNamedParameter(0, ParameterType::INTEGER)))
+            ->orderBy('sorting', 'ASC')
+            ->executeQuery()
+            ->fetchFirstColumn();
+
+        $descendants = [];
+        foreach ($rootPageIds as $rootId) {
+            $rootId = (int)$rootId;
+            $descendants[] = $rootId;
+            foreach ($this->pageRepository->getDescendantPageIdsRecursive($rootId, 999) as $childId) {
+                $descendants[] = (int)$childId;
+            }
+        }
+        return $descendants;
+    }
+
+    /**
      * Resolve the currently active workspace of the logged-in backend user.
      * Pure read — no side effects.
      *
@@ -361,13 +338,6 @@ class ChatController
         ];
     }
 
-    private function loadTaskForCurrentUser(int $taskUid): ?array
-    {
-        $userId = (int)($GLOBALS['BE_USER']->user['uid'] ?? 0);
-        $isAdmin = (bool)($GLOBALS['BE_USER']->user['admin'] ?? false);
-        return $this->repository->findByUidForUser($taskUid, $userId, $isAdmin);
-    }
-
     private function addReloadButton($view, ServerRequestInterface $request): void
     {
         $docHeader = $view->getDocHeaderComponent();
@@ -396,83 +366,6 @@ class ChatController
     private function getPageId(ServerRequestInterface $request): int
     {
         return (int)($request->getQueryParams()['id'] ?? $request->getParsedBody()['id'] ?? 0);
-    }
-
-    public function streamMessageAction(ServerRequestInterface $request): ResponseInterface
-    {
-        $body = (array)$request->getParsedBody();
-        $taskUid = (int)($body['task'] ?? $request->getQueryParams()['task'] ?? 0);
-        $message = trim((string)($body['message'] ?? ''));
-        $attachments = $this->attachmentService->parseClientPayload($body['attachments'] ?? null);
-
-        $task = $taskUid > 0 ? $this->loadTaskForCurrentUser($taskUid) : null;
-        if ($task === null) {
-            return $this->buildSseResponse(static function (callable $send): void {
-                $send('error', [
-                    'error' => 'Invalid task',
-                    'status' => 3,
-                    'messages' => [],
-                ]);
-            });
-        }
-
-        // Initial processing: a freshly created (Pending) task with no new user input.
-        // The persisted messages already contain the initial conversation; AgentService::run()
-        // with $userMessage=null streams those and then drives the agent loop.
-        // Otherwise the request must carry a non-empty message or attachments.
-        $isInitialProcessing = (int)($task['status'] ?? 0) === TaskStatus::Pending->value
-            && $message === '' && $attachments === [];
-
-        if (!$isInitialProcessing && $message === '' && $attachments === []) {
-            return $this->buildSseResponse(static function (callable $send): void {
-                $send('error', [
-                    'error' => 'Empty message',
-                    'status' => 3,
-                    'messages' => [],
-                ]);
-            });
-        }
-
-        $agentService = $this->agentService;
-        $userMessage = $isInitialProcessing ? null : $message;
-
-        return $this->buildSseResponse(static function (callable $send) use ($agentService, $taskUid, $userMessage, $attachments): void {
-            try {
-                $messages = $agentService->run($taskUid, $userMessage, $send, $attachments);
-                $send('done', ['status' => 2, 'messages' => $messages]);
-            } catch (\Throwable $e) {
-                $send('error', ['error' => $e->getMessage(), 'status' => 3]);
-            }
-        });
-    }
-
-    /**
-     * Atomically transition an in-progress chat task to Cancelled. The
-     * agent loop sees the new status at its next iteration and exits
-     * without overwriting it. No-op (still 200) when the task is no
-     * longer running — fire-and-forget from the client.
-     */
-    public function cancelMessageAction(ServerRequestInterface $request): ResponseInterface
-    {
-        $body = (array)$request->getParsedBody();
-        $taskUid = (int)($body['task'] ?? $request->getQueryParams()['task'] ?? 0);
-        if ($taskUid <= 0) {
-            return new JsonResponse(['ok' => false, 'error' => 'Invalid task'], 400);
-        }
-        $userId = (int)($GLOBALS['BE_USER']->user['uid'] ?? 0);
-        $isAdmin = (bool)($GLOBALS['BE_USER']->user['admin'] ?? false);
-        $cancelled = $this->repository->requestCancel($taskUid, $userId, $isAdmin);
-        return new JsonResponse(['ok' => true, 'cancelled' => $cancelled]);
-    }
-
-    private function buildSseResponse(\Closure $emitter): ResponseInterface
-    {
-        return new Response(new SseStream($emitter), 200, [
-            'Content-Type' => 'text/event-stream; charset=utf-8',
-            'Content-Encoding' => 'none',
-            'Cache-Control' => 'no-cache',
-            'X-Accel-Buffering' => 'no',
-        ]);
     }
 
 }

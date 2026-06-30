@@ -1,6 +1,7 @@
 <?php
 
 use Hn\Agent\Controller\ChatController;
+use Hn\Agent\Controller\ChatStreamController;
 
 return [
     'web_typo3_agent_tasks' => [
@@ -24,11 +25,11 @@ return [
                 'methods' => ['POST'],
             ],
             'streamMessage' => [
-                'target' => ChatController::class . '::streamMessageAction',
+                'target' => ChatStreamController::class . '::streamMessageAction',
                 'methods' => ['POST'],
             ],
             'cancelMessage' => [
-                'target' => ChatController::class . '::cancelMessageAction',
+                'target' => ChatStreamController::class . '::cancelMessageAction',
                 'methods' => ['POST'],
             ],
         ],
