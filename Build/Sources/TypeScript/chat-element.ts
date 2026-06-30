@@ -7,7 +7,7 @@ import DOMPurify from 'dompurify';
 import DragUploader from '@typo3/backend/drag-uploader.js';
 import Modal from '@typo3/backend/modal.js';
 import {MessageUtility} from '@typo3/backend/utility/message-utility.js';
-import WorkspaceState from '@typo3/workspaces/workspace-state.js';
+import AjaxRequest from '@typo3/core/ajax/ajax-request.js';
 import './thinking-indicator.js';
 import './chat-bubble.js';
 import '@hn/agent/attachment-chip-elements.js';
@@ -363,10 +363,8 @@ export class ChatElement extends LitElement {
             .replace('%s', taskTitle);
         const buttonLabel = buttonTemplate.replace('%s', taskTitle);
 
-        // Use TYPO3's WorkspaceState so the toolbar indicator and pagetree
-        // get the 'typo3:workspace:changed' event. Its built-in post-switch
-        // handler would push us to web_layout — we counter that by forcing
-        // navigation back to our chat URL right after.
+        // Switch the workspace via the core AJAX endpoint, then full reload so
+        // the topbar indicator and pagetree pick up the new workspace context.
         return html`
             <div class="callout callout-warning">
                 <div class="callout-icon">
@@ -398,7 +396,14 @@ export class ChatElement extends LitElement {
             return;
         }
         try {
-            await WorkspaceState.switchWorkspace(this.taskWorkspaceId);
+            await new AjaxRequest(TYPO3.settings.ajaxUrls.workspace_switch).post({
+                workspaceId: this.taskWorkspaceId,
+                pageId: 0,
+            });
+            // Reload the TOP frame, not the iframe — otherwise the workspace
+            // toolbar indicator (which lives in the backend chrome) keeps
+            // showing the old workspace.
+            (window.top ?? window).location.reload();
         } catch (e) {
             console.error('Workspace switch failed', e);
         }

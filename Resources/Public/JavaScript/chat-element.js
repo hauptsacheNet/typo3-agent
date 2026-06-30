@@ -17,7 +17,7 @@ import DOMPurify from "dompurify";
 import DragUploader from "@typo3/backend/drag-uploader.js";
 import Modal from "@typo3/backend/modal.js";
 import { MessageUtility } from "@typo3/backend/utility/message-utility.js";
-import WorkspaceState from "@typo3/workspaces/workspace-state.js";
+import AjaxRequest from "@typo3/core/ajax/ajax-request.js";
 import "./thinking-indicator.js";
 import "./chat-bubble.js";
 import "@hn/agent/attachment-chip-elements.js";
@@ -270,7 +270,11 @@ let ChatElement = class extends LitElement {
       return;
     }
     try {
-      await WorkspaceState.switchWorkspace(this.taskWorkspaceId);
+      await new AjaxRequest(TYPO3.settings.ajaxUrls.workspace_switch).post({
+        workspaceId: this.taskWorkspaceId,
+        pageId: 0
+      });
+      (window.top ?? window).location.reload();
     } catch (e) {
       console.error("Workspace switch failed", e);
     }
