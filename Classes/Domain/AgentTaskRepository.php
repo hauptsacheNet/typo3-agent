@@ -134,8 +134,8 @@ class AgentTaskRepository
      *
      * @param array<int, array<string, mixed>>|null $initialMessages
      *        Pre-built initial conversation (system + synthetic context + user).
-     *        Persisted as JSON so processTask resumes from it on auto-start
-     *        instead of synthesizing.
+     *        Persisted as JSON so AgentService::run() resumes from it on
+     *        auto-start instead of synthesizing.
      */
     public function insert(int $pid, int $cruserId, string $title, string $prompt, string $contextTable = '', int $contextUid = 0, string $returnUrl = '', int $workspaceId = 0, ?array $initialMessages = null): int
     {

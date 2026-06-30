@@ -25,7 +25,6 @@ marked.setOptions({ breaks: true, gfm: true });
 let ChatElement = class extends LitElement {
   constructor() {
     super(...arguments);
-    this.sendUri = "";
     this.streamUri = "";
     this.cancelUri = "";
     this.autoStart = "";
@@ -519,11 +518,7 @@ let ChatElement = class extends LitElement {
     this.loading = true;
     this.scrollLatestUserMessageToTop();
     this.inputEl?.focus();
-    if (this.streamUri) {
-      this.sendStreaming(message, attachments).then(() => this.finishSend());
-    } else {
-      this.sendBlocking(message, attachments).then(() => this.finishSend());
-    }
+    this.sendStreaming(message, attachments).then(() => this.finishSend());
   }
   onDismissError() {
     this.errorMessage = "";
@@ -552,8 +547,7 @@ let ChatElement = class extends LitElement {
     const { message, attachments } = this.lastSubmission;
     this.errorMessage = "";
     this.loading = true;
-    const promise = this.streamUri ? this.sendStreaming(message, attachments) : this.sendBlocking(message, attachments);
-    promise.then(() => this.finishSend());
+    this.sendStreaming(message, attachments).then(() => this.finishSend());
   }
   addAttachment(att) {
     this.attachments = [...this.attachments, att];
@@ -633,31 +627,6 @@ let ChatElement = class extends LitElement {
     this.lastSubmission = { message: "", attachments: [] };
     await this.sendStreaming("");
     this.finishSend();
-  }
-  // -- Network: blocking -----------------------------------------------------
-  async sendBlocking(message, attachments = []) {
-    try {
-      const formData = new FormData();
-      formData.append("message", message);
-      this.appendAttachments(formData, attachments);
-      const response = await fetch(this.sendUri, {
-        method: "POST",
-        headers: {
-          "X-Requested-With": "XMLHttpRequest",
-          "Accept": "application/json"
-        },
-        body: formData
-      });
-      const data = await response.json();
-      if (!response.ok || data.error) {
-        this.errorMessage = data.error || `Request failed (${response.status})`;
-      }
-      if (Array.isArray(data.messages)) {
-        this.messages = data.messages;
-      }
-    } catch (err) {
-      this.errorMessage = err.message || String(err);
-    }
   }
   // -- Network: streaming (SSE) ----------------------------------------------
   async sendStreaming(message, attachments = []) {
@@ -868,9 +837,6 @@ let ChatElement = class extends LitElement {
     });
   }
 };
-__decorateClass([
-  property({ attribute: "send-uri" })
-], ChatElement.prototype, "sendUri", 2);
 __decorateClass([
   property({ attribute: "stream-uri" })
 ], ChatElement.prototype, "streamUri", 2);

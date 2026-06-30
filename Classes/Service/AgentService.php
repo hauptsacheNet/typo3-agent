@@ -39,102 +39,81 @@ class AgentService implements LoggerAwareInterface
     ) {}
 
     /**
-     * Process a single agent task by UID.
+     * Run the agent for an existing task — either to process its initial
+     * conversation (no $userMessage) or to append a follow-up message and
+     * continue the chat.
      *
-     * This is the main entry point for the agent loop. It:
-     * 1. Loads the task record
-     * 2. Sets up BE_USER context from cruser_id
-     * 3. Builds or resumes conversation messages
-     * 4. Runs the agent loop (LLM call → tool execution → repeat)
-     * 5. Saves result and status
+     * Initial-processing path ($userMessage === null):
+     *   - Claims the task atomically from its current status.
+     *   - For fresh (Pending) tasks the persisted messages already contain a
+     *     synthetic assistant turn with pre-loaded GetPage/ReadTable context;
+     *     those turns are streamed to the UI via $progress so live-stream and
+     *     reload-view render identically.
      *
+     * Follow-up path ($userMessage !== null):
+     *   - Appends a new user message (and optional attachment refs).
+     *   - Persists the new message + flips status to Pending, then claims from
+     *     Pending. saveState BEFORE claim is load-bearing — a concurrent worker
+     *     must see the new message together with the Pending-status it claims on.
+     *
+     * Both paths converge in runLoop() (LLM call → tool execution → repeat).
      * Messages are saved after every iteration for resumability.
      *
-     * @param int $taskUid The UID of the tx_agent_task record
-     * @param callable(string, array): void|null $progress Optional progress callback.
-     *        Invoked with (string $event, array $data) where $event is one of
-     *        'llm_start', 'assistant_message', 'tool_start', 'tool_result',
-     *        'content_delta', 'tool_call_delta'.
-     */
-    public function processTask(int $taskUid, ?callable $progress = null): void
-    {
-        $task = $this->repository->findByUid($taskUid);
-        if ($task === false) {
-            throw new \RuntimeException('Task with UID ' . $taskUid . ' not found.');
-        }
-
-        // Evaluate fresh-status BEFORE claim() flips it to InProgress.
-        // Pending = newAction just created the task and the agent has never run;
-        // the initial conversation (system + synthetic GetPage/ReadTable + user)
-        // has been built and persisted by newAction → buildInitialMessages.
-        $isFreshTask = (int)$task['status'] === TaskStatus::Pending->value;
-
-        // Atomically claim the task: only set to in_progress if it's still pending/failed
-        // This prevents race conditions when multiple agent:run processes run concurrently
-        $claimed = $this->repository->claim($taskUid, TaskStatus::from((int)$task['status']));
-        if (!$claimed) {
-            throw new \RuntimeException('Task #' . $taskUid . ' could not be claimed (already in progress by another process?).');
-        }
-
-        // Set up backend user context from task's cruser_id (and workspace, if persisted)
-        $this->setupBackendUserContext((int)($task['cruser_id'] ?? 0), (int)($task['workspace_id'] ?? 0));
-
-        $messages = $this->decodeMessages($task['messages'] ?? null) ?? [];
-
-        // For fresh tasks the persisted messages contain a synthetic assistant
-        // turn with pre-loaded context tool calls. These never pass through
-        // runLoop and would otherwise only become visible to the UI after a
-        // page reload — stream them explicitly so the chat renders them live.
-        if ($isFreshTask && $progress !== null) {
-            $this->emitInitialContextEvents($messages, $progress);
-        }
-
-        $this->runLoop($taskUid, $messages, $progress);
-    }
-
-    /**
-     * Continue an existing chat conversation by appending a new user message
-     * and running the agent loop.
-     *
-     * Used by the backend chat module to send follow-up messages.
-     *
      * @param int $taskUid
-     * @param string $userMessage The new user message to append
-     * @param callable(string, array): void|null $progress Optional progress callback, see processTask().
+     * @param string|null $userMessage Follow-up user message; null for initial processing.
+     * @param callable(string, array): void|null $progress Invoked with (string $event, array $data).
+     *        Events: 'llm_start', 'assistant_message', 'tool_start', 'tool_result',
+     *        'content_delta', 'tool_call_delta', 'user_message', 'reasoning_delta',
+     *        'change_tracked'.
      * @param array<int, array{uid?: int|string, identifier?: string, name?: string}> $attachments
-     *        Raw attachment refs from the client; FAL UIDs are preferred, combined identifiers are used as fallback.
-     * @return array The full updated messages array
+     *        Only consumed on the follow-up path.
+     * @return array The full updated messages array (after runLoop).
      */
-    public function continueChat(int $taskUid, string $userMessage, ?callable $progress = null, array $attachments = []): array
-    {
+    public function run(
+        int $taskUid,
+        ?string $userMessage = null,
+        ?callable $progress = null,
+        array $attachments = [],
+    ): array {
         $task = $this->repository->findByUid($taskUid);
         if ($task === false) {
             throw new \RuntimeException('Task with UID ' . $taskUid . ' not found.');
         }
 
-        // Set up backend user context from task's cruser_id (and workspace, if persisted)
         $this->setupBackendUserContext((int)($task['cruser_id'] ?? 0), (int)($task['workspace_id'] ?? 0));
 
-        // Resolve attachments to structured refs (uid/identifier/name/mime_type). FAL permission
-        // checks run against the task's user, not the request context — so this is done after the
-        // BE_USER setup above. The refs are persisted alongside the user message; the markdown
-        // block for the LLM is only built transiently in serializeForLlm() at call-site.
-        $attachmentRefs = $this->attachmentService->normalizeRefs($attachments);
-
         $messages = $this->decodeMessages($task['messages'] ?? null) ?? [];
-        $userMessageRecord = ['role' => 'user', 'content' => $userMessage];
-        if ($attachmentRefs !== []) {
-            $userMessageRecord['attachments'] = $attachmentRefs;
-        }
-        $messages[] = $userMessageRecord;
 
-        // Persist the user message + reset status to pending so claim succeeds
-        $this->repository->saveState($taskUid, $messages, TaskStatus::Pending);
+        if ($userMessage !== null) {
+            // Follow-up: resolve attachments under the task's BE_USER (not the request context),
+            // append the new user message, persist + reset to Pending so claim succeeds.
+            $attachmentRefs = $this->attachmentService->normalizeRefs($attachments);
+            $userMessageRecord = ['role' => 'user', 'content' => $userMessage];
+            if ($attachmentRefs !== []) {
+                $userMessageRecord['attachments'] = $attachmentRefs;
+            }
+            $messages[] = $userMessageRecord;
 
-        // Atomically claim with status=0 we just wrote
-        $claimed = $this->repository->claim($taskUid, TaskStatus::Pending);
-        if (!$claimed) {
-            throw new \RuntimeException('Task #' . $taskUid . ' could not be claimed (already in progress by another process?).');
+            $this->repository->saveState($taskUid, $messages, TaskStatus::Pending);
+
+            $claimed = $this->repository->claim($taskUid, TaskStatus::Pending);
+            if (!$claimed) {
+                throw new \RuntimeException('Task #' . $taskUid . ' could not be claimed (already in progress by another process?).');
+            }
+        } else {
+            // Initial processing. Evaluate fresh-status BEFORE claim() flips it to InProgress.
+            // Pending = newAction just created the task and the agent has never run; the initial
+            // conversation (system + synthetic GetPage/ReadTable + user) is already persisted.
+            $isFreshTask = (int)$task['status'] === TaskStatus::Pending->value;
+
+            $claimed = $this->repository->claim($taskUid, TaskStatus::from((int)$task['status']));
+            if (!$claimed) {
+                throw new \RuntimeException('Task #' . $taskUid . ' could not be claimed (already in progress by another process?).');
+            }
+
+            if ($isFreshTask && $progress !== null) {
+                $this->emitInitialContextEvents($messages, $progress);
+            }
         }
 
         return $this->runLoop($taskUid, $messages, $progress);
@@ -329,8 +308,8 @@ class AgentService implements LoggerAwareInterface
      * resolved attachments, if any).
      *
      * Invoked by ChatController::newAction (and persisted there into
-     * tx_agent_task.messages), so subsequent reads (processTask,
-     * continueChat) just decode the JSON instead of synthesizing.
+     * tx_agent_task.messages), so subsequent run() calls just decode the
+     * JSON instead of synthesizing.
      *
      * @param array<int, array{uid?: int|string, identifier?: string, name?: string}> $rawAttachments
      *        Raw attachment refs from the request — resolved against the current BE_USER's FAL permissions.

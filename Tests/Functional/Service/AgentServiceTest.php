@@ -257,7 +257,7 @@ class AgentServiceTest extends FunctionalTestCase
             ['role' => 'assistant', 'content' => 'Here are the pages: Home, About.'],
         ]);
 
-        $agentService->processTask($taskUid);
+        $agentService->run($taskUid);
 
         $task = $this->getTask($taskUid);
         self::assertSame(2, (int)$task['status'], 'Task should be ended (status=2)');
@@ -293,7 +293,7 @@ class AgentServiceTest extends FunctionalTestCase
             ['role' => 'assistant', 'content' => 'The page tree has: Home, About.'],
         ]);
 
-        $agentService->processTask($taskUid);
+        $agentService->run($taskUid);
 
         $task = $this->getTask($taskUid);
         self::assertSame(2, (int)$task['status']);
@@ -324,7 +324,7 @@ class AgentServiceTest extends FunctionalTestCase
             ['role' => 'assistant', 'content' => 'The pages are: Home and About.'],
         ]);
 
-        $agentService->processTask($taskUid);
+        $agentService->run($taskUid);
 
         $task = $this->getTask($taskUid);
         self::assertSame(2, (int)$task['status']);
@@ -358,7 +358,7 @@ class AgentServiceTest extends FunctionalTestCase
         );
 
         try {
-            $agentService->processTask($taskUid);
+            $agentService->run($taskUid);
             self::fail('Expected RuntimeException');
         } catch (\RuntimeException $e) {
             self::assertStringContainsString('API connection failed', $e->getMessage());
@@ -382,7 +382,7 @@ class AgentServiceTest extends FunctionalTestCase
             ['role' => 'assistant', 'content' => 'This is the Home page.'],
         ]);
 
-        $agentService->processTask($taskUid);
+        $agentService->run($taskUid);
 
         $task = $this->getTask($taskUid);
         $messages = $this->decodeMessages($task['messages']);
@@ -437,7 +437,7 @@ class AgentServiceTest extends FunctionalTestCase
         $attachments = [
             ['uid' => 999999, 'name' => 'phantom.pdf'],
         ];
-        $agentService->continueChat($taskUid, 'Look at this', null, $attachments);
+        $agentService->run($taskUid, 'Look at this', null, $attachments);
 
         // --- Persisted state: attachments structured, no markdown block in content
         $task = $this->getTask($taskUid);
@@ -570,7 +570,7 @@ class AgentServiceTest extends FunctionalTestCase
         $agentService = $this->buildAgentServiceCapturing($capturedMessages, $resourceFactory);
 
         $taskUid = $this->createTask('Image test', 'Initial');
-        $agentService->continueChat($taskUid, 'Was siehst du?', null, [['uid' => 101]]);
+        $agentService->run($taskUid, 'Was siehst du?', null, [['uid' => 101]]);
 
         self::assertNotEmpty($capturedMessages);
         $userMsg = $this->findLlmUserMessage($capturedMessages[0], 'Was siehst du?');
@@ -594,7 +594,7 @@ class AgentServiceTest extends FunctionalTestCase
         $agentService = $this->buildAgentServiceCapturing($capturedMessages, $resourceFactory);
 
         $taskUid = $this->createTask('PDF test', 'Initial');
-        $agentService->continueChat($taskUid, 'Fass zusammen.', null, [['uid' => 202]]);
+        $agentService->run($taskUid, 'Fass zusammen.', null, [['uid' => 202]]);
 
         $userMsg = $this->findLlmUserMessage($capturedMessages[0], 'Fass zusammen.');
         self::assertNotNull($userMsg);
@@ -615,7 +615,7 @@ class AgentServiceTest extends FunctionalTestCase
         $agentService = $this->buildAgentServiceCapturing($capturedMessages, $resourceFactory);
 
         $taskUid = $this->createTask('Oversize test', 'Initial');
-        $agentService->continueChat($taskUid, 'Trotzdem?', null, [['uid' => 303]]);
+        $agentService->run($taskUid, 'Trotzdem?', null, [['uid' => 303]]);
 
         $userMsg = $this->findLlmUserMessage($capturedMessages[0], 'Trotzdem?');
         self::assertNotNull($userMsg);
@@ -636,7 +636,7 @@ class AgentServiceTest extends FunctionalTestCase
         $agentService = $this->buildAgentServiceCapturing($capturedMessages, $resourceFactory);
 
         $taskUid = $this->createTask('Unsupported mime test', 'Initial');
-        $agentService->continueChat($taskUid, 'Schau mal.', null, [['uid' => 404]]);
+        $agentService->run($taskUid, 'Schau mal.', null, [['uid' => 404]]);
 
         $userMsg = $this->findLlmUserMessage($capturedMessages[0], 'Schau mal.');
         self::assertNotNull($userMsg);
@@ -713,7 +713,7 @@ class AgentServiceTest extends FunctionalTestCase
             [['role' => 'assistant', 'content' => 'Done.']],
         );
 
-        $agentService->processTask($taskUid, $progress);
+        $agentService->run($taskUid, null, $progress);
 
         // Fresh tasks emit a `user_message` event up front so the UI can render
         // the prompt in the same slot it occupies in the persisted state.
@@ -775,7 +775,7 @@ class AgentServiceTest extends FunctionalTestCase
             new InstructionTextFormatter(),
             new ChangeTracker($this->connectionPool, new AgentTaskRepository($this->connectionPool)),
         );
-        $agentService->processTask($taskUid);
+        $agentService->run($taskUid);
 
         self::assertNotEmpty($capturedMessages, 'LlmService received a payload');
         $llmMessages = $capturedMessages[0];
@@ -860,7 +860,7 @@ class AgentServiceTest extends FunctionalTestCase
             new InstructionTextFormatter(),
             new ChangeTracker($this->connectionPool, new AgentTaskRepository($this->connectionPool)),
         );
-        $agentService->processTask($taskUid);
+        $agentService->run($taskUid);
 
         $llmMessages = $capturedMessages[0];
 
@@ -937,7 +937,7 @@ class AgentServiceTest extends FunctionalTestCase
             new InstructionTextFormatter(),
             new ChangeTracker($this->connectionPool, new AgentTaskRepository($this->connectionPool)),
         );
-        $agentService->processTask($taskUid);
+        $agentService->run($taskUid);
 
         $llmMessages = $capturedMessages[0];
 

@@ -31,41 +31,10 @@ class LlmService implements LoggerAwareInterface
      */
     public function chatCompletion(array $messages, array $tools = [], ?string $modelOverride = null): array
     {
-        $config = $this->getConfig();
-        $apiUrl = rtrim($config['apiUrl'], '/') . '/chat/completions';
+        $body = $this->buildRequestBody($messages, $tools, false, $modelOverride);
+        $response = $this->executeRequest($body, false);
 
-        $body = [
-            'model' => $modelOverride ?? $config['model'],
-            'messages' => $messages,
-        ];
-
-        if (!empty($tools)) {
-            $body['tools'] = $tools;
-        }
-
-        $this->applyReasoning($body, $config);
-
-        $response = $this->requestFactory->request($apiUrl, 'POST', [
-            'headers' => [
-                'Authorization' => 'Bearer ' . $config['apiKey'],
-                'Content-Type' => 'application/json',
-            ],
-            'json' => $body,
-            'connect_timeout' => 10,
-            'timeout' => 120,
-            'http_errors' => false,
-        ]);
-
-        $statusCode = $response->getStatusCode();
         $responseBody = (string)$response->getBody();
-
-        if ($statusCode < 200 || $statusCode >= 300) {
-            $this->logApiFailure($apiUrl, $statusCode, $response, $body, $responseBody);
-            throw new \RuntimeException(
-                'LLM API returned HTTP ' . $statusCode . ': ' . $responseBody
-            );
-        }
-
         $data = json_decode($responseBody, true);
         if (!is_array($data)) {
             throw new \RuntimeException('LLM API returned invalid JSON: ' . $responseBody);
@@ -97,34 +66,67 @@ class LlmService implements LoggerAwareInterface
         array $tools = [],
         ?callable $onDelta = null,
     ): array {
+        $body = $this->buildRequestBody($messages, $tools, true);
+        $response = $this->executeRequest($body, true);
+
+        return $this->parseSseStream(
+            $response->getBody(),
+            $onDelta ?? static function (string $deltaType, array $payload): void {},
+        );
+    }
+
+    /**
+     * Assemble the request body. The stream flag controls whether `stream: true`
+     * is added; model/messages/tools/reasoning are shared between both modes.
+     *
+     * @return array<string, mixed>
+     */
+    private function buildRequestBody(array $messages, array $tools, bool $stream, ?string $modelOverride = null): array
+    {
         $config = $this->getConfig();
-        $apiUrl = rtrim($config['apiUrl'], '/') . '/chat/completions';
-
         $body = [
-            'model' => $config['model'],
+            'model' => $modelOverride ?? $config['model'],
             'messages' => $messages,
-            'stream' => true,
         ];
-
+        if ($stream) {
+            $body['stream'] = true;
+        }
         if (!empty($tools)) {
             $body['tools'] = $tools;
         }
-
         $this->applyReasoning($body, $config);
+        return $body;
+    }
+
+    /**
+     * POST to the chat-completions endpoint and return the raw response.
+     * Throws RuntimeException on non-2xx; logs full provider error detail.
+     * In streaming mode, the response body is held open for the SSE parser.
+     */
+    private function executeRequest(array $body, bool $stream): ResponseInterface
+    {
+        $config = $this->getConfig();
+        $apiUrl = rtrim($config['apiUrl'], '/') . '/chat/completions';
+
+        $options = [
+            'headers' => [
+                'Authorization' => 'Bearer ' . $config['apiKey'],
+                'Content-Type' => 'application/json',
+            ],
+            'json' => $body,
+            'connect_timeout' => 10,
+            'http_errors' => false,
+        ];
+        if ($stream) {
+            $options['headers']['Accept'] = 'text/event-stream';
+            $options['stream'] = true;
+            $options['read_timeout'] = 60;
+        } else {
+            $options['timeout'] = 120;
+        }
 
         try {
-            $response = $this->requestFactory->request($apiUrl, 'POST', [
-                'headers' => [
-                    'Authorization' => 'Bearer ' . $config['apiKey'],
-                    'Content-Type' => 'application/json',
-                    'Accept' => 'text/event-stream',
-                ],
-                'json' => $body,
-                'stream' => true,
-                'connect_timeout' => 10,
-                'read_timeout' => 60,
-                'http_errors' => false,
-            ]);
+            $response = $this->requestFactory->request($apiUrl, 'POST', $options);
         } catch (BadResponseException $e) {
             $errResp = $e->getResponse();
             $errBody = (string)$errResp->getBody();
@@ -145,10 +147,7 @@ class LlmService implements LoggerAwareInterface
             );
         }
 
-        return $this->parseSseStream(
-            $response->getBody(),
-            $onDelta ?? static function (string $deltaType, array $payload): void {},
-        );
+        return $response;
     }
 
     /**

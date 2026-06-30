@@ -80,7 +80,7 @@ class AttachmentService implements LoggerAwareInterface
      * @param array<string, mixed> $ref
      * @return array{kind: 'image'|'pdf'|'spreadsheet'|'document'|'presentation'|'unsupported'|'oversize'|'unresolvable', mime: string, size: int, file: ?File, reason: ?string}
      */
-    public function classify(array $ref): array
+    private function classify(array $ref): array
     {
         if (!empty($ref['unresolvable'])) {
             return ['kind' => 'unresolvable', 'mime' => '', 'size' => 0, 'file' => null, 'reason' => 'Datei nicht auflösbar'];
@@ -140,7 +140,7 @@ class AttachmentService implements LoggerAwareInterface
      *
      * @param array{uid?: int|string, identifier?: string} $ref
      */
-    public function resolveFile(array $ref): ?File
+    private function resolveFile(array $ref): ?File
     {
         $uid = (int)($ref['uid'] ?? 0);
         $identifier = trim((string)($ref['identifier'] ?? ''));
@@ -175,6 +175,45 @@ class AttachmentService implements LoggerAwareInterface
             return sprintf('%.1f KiB', $bytes / 1024);
         }
         return $bytes . ' B';
+    }
+
+    /**
+     * Decode a JSON-encoded attachments payload as sent by the chat client.
+     * The client posts a JSON string via FormData; each item is shaped
+     * `{uid?: int, identifier?: string, name?: string}`. Anything else
+     * (missing, empty, non-string, non-JSON, non-list) yields an empty array.
+     *
+     * @return list<array{uid?: int, identifier?: string, name?: string}>
+     */
+    public function parseClientPayload(mixed $raw): array
+    {
+        if (!is_string($raw) || $raw === '') {
+            return [];
+        }
+        $decoded = json_decode($raw, true);
+        if (!is_array($decoded)) {
+            return [];
+        }
+        $out = [];
+        foreach ($decoded as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            $entry = [];
+            if (isset($item['uid']) && (int)$item['uid'] > 0) {
+                $entry['uid'] = (int)$item['uid'];
+            }
+            if (isset($item['identifier']) && is_string($item['identifier']) && $item['identifier'] !== '') {
+                $entry['identifier'] = $item['identifier'];
+            }
+            if (isset($item['name']) && is_string($item['name'])) {
+                $entry['name'] = $item['name'];
+            }
+            if ($entry !== []) {
+                $out[] = $entry;
+            }
+        }
+        return $out;
     }
 
     /**

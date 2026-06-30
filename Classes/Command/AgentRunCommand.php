@@ -73,7 +73,7 @@ class AgentRunCommand extends Command
         };
 
         try {
-            $this->agentService->processTask($taskUid, $progress);
+            $this->agentService->run($taskUid, null, $progress);
             $output->writeln('Task #' . $taskUid . ' completed.');
             return Command::SUCCESS;
         } catch (\Throwable $e) {
@@ -114,7 +114,7 @@ class AgentRunCommand extends Command
             $output->writeln('Processing: <info>' . $task['title'] . '</info> (#' . $task['uid'] . ')');
 
             try {
-                $this->agentService->processTask((int)$task['uid'], $progress);
+                $this->agentService->run((int)$task['uid'], null, $progress);
                 $output->writeln('  Status: <info>ended</info>');
             } catch (\Throwable $e) {
                 $output->writeln('  Status: <error>failed</error> — ' . $e->getMessage());

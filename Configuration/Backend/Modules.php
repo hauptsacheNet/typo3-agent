@@ -23,10 +23,6 @@ return [
                 'target' => ChatController::class . '::newAction',
                 'methods' => ['POST'],
             ],
-            'sendMessage' => [
-                'target' => ChatController::class . '::sendMessageAction',
-                'methods' => ['POST'],
-            ],
             'streamMessage' => [
                 'target' => ChatController::class . '::streamMessageAction',
                 'methods' => ['POST'],

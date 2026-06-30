@@ -35,10 +35,11 @@ use TYPO3\CMS\Core\Imaging\IconSize;
  * task record whose `messages` field grows with every exchange.
  *
  * Actions are wired via sub-routes in Configuration/Backend/Modules.php:
- *  - web_typo3_agent_tasks              → indexAction  (chat list)
- *  - web_typo3_agent_tasks.show         → showAction   (single chat view)
- *  - web_typo3_agent_tasks.new          → newAction    (POST: create chat)
- *  - web_typo3_agent_tasks.sendMessage  → sendMessageAction (POST: follow-up)
+ *  - web_typo3_agent_tasks                → indexAction         (chat list)
+ *  - web_typo3_agent_tasks.show           → showAction          (single chat view)
+ *  - web_typo3_agent_tasks.new            → newAction           (POST: create chat)
+ *  - web_typo3_agent_tasks.streamMessage  → streamMessageAction (POST SSE: run agent / follow-up)
+ *  - web_typo3_agent_tasks.cancelMessage  → cancelMessageAction (POST: cancel in-progress task)
  */
 #[AsController]
 class ChatController
@@ -241,10 +242,6 @@ class ChatController
             'activeWorkspace' => $this->getActiveWorkspaceInfo(),
             'defaultUploadFolder' => $uploadContext['defaultUploadFolder'],
             'fileBrowserUri' => $uploadContext['fileBrowserUri'],
-            'sendUri' => (string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks.sendMessage', [
-                'task' => $taskUid,
-                'id' => $pageId,
-            ]),
             'streamUri' => (string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks.streamMessage', [
                 'task' => $taskUid,
                 'id' => $pageId,
@@ -284,7 +281,7 @@ class ChatController
         $pageId = $this->getPageId($request);
         $body = (array)$request->getParsedBody();
         $message = trim((string)($body['message'] ?? ''));
-        $rawAttachments = $this->parseAttachments($body['attachments'] ?? null);
+        $rawAttachments = $this->attachmentService->parseClientPayload($body['attachments'] ?? null);
         if ($message === '' && $rawAttachments === []) {
             return new RedirectResponse((string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks', ['id' => $pageId]));
         }
@@ -364,51 +361,6 @@ class ChatController
         ];
     }
 
-    public function sendMessageAction(ServerRequestInterface $request): ResponseInterface
-    {
-        $body = (array)$request->getParsedBody();
-        $taskUid = (int)($body['task'] ?? $request->getQueryParams()['task'] ?? 0);
-        $message = trim((string)($body['message'] ?? ''));
-        $attachments = $this->parseAttachments($body['attachments'] ?? null);
-
-        $task = $taskUid > 0 ? $this->loadTaskForCurrentUser($taskUid) : null;
-        if ($task === null || ($message === '' && $attachments === [])) {
-            if ($this->isAjax($request)) {
-                return new JsonResponse(['error' => 'Invalid task or empty message'], 400);
-            }
-            return new RedirectResponse((string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks'));
-        }
-
-        $error = null;
-        try {
-            $messages = $this->agentService->continueChat($taskUid, $message, null, $attachments);
-        } catch (\Throwable $e) {
-            $error = $e->getMessage();
-            $reloaded = $this->loadTaskForCurrentUser($taskUid);
-            $messages = $this->agentService->decodeMessages($reloaded['messages'] ?? null) ?? [];
-        }
-
-        if ($this->isAjax($request)) {
-            $reloaded = $this->loadTaskForCurrentUser($taskUid);
-            return new JsonResponse([
-                'messages' => $messages,
-                'status' => (int)($reloaded['status'] ?? 3),
-                'error' => $error,
-            ]);
-        }
-
-        return new RedirectResponse((string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks.show', [
-            'task' => $taskUid,
-        ]));
-    }
-
-    private function isAjax(ServerRequestInterface $request): bool
-    {
-        $accept = $request->getHeaderLine('Accept');
-        $xhr = $request->getHeaderLine('X-Requested-With');
-        return str_contains($accept, 'application/json') || strcasecmp($xhr, 'XMLHttpRequest') === 0;
-    }
-
     private function loadTaskForCurrentUser(int $taskUid): ?array
     {
         $userId = (int)($GLOBALS['BE_USER']->user['uid'] ?? 0);
@@ -451,7 +403,7 @@ class ChatController
         $body = (array)$request->getParsedBody();
         $taskUid = (int)($body['task'] ?? $request->getQueryParams()['task'] ?? 0);
         $message = trim((string)($body['message'] ?? ''));
-        $attachments = $this->parseAttachments($body['attachments'] ?? null);
+        $attachments = $this->attachmentService->parseClientPayload($body['attachments'] ?? null);
 
         $task = $taskUid > 0 ? $this->loadTaskForCurrentUser($taskUid) : null;
         if ($task === null) {
@@ -464,6 +416,10 @@ class ChatController
             });
         }
 
+        // Initial processing: a freshly created (Pending) task with no new user input.
+        // The persisted messages already contain the initial conversation; AgentService::run()
+        // with $userMessage=null streams those and then drives the agent loop.
+        // Otherwise the request must carry a non-empty message or attachments.
         $isInitialProcessing = (int)($task['status'] ?? 0) === TaskStatus::Pending->value
             && $message === '' && $attachments === [];
 
@@ -478,21 +434,11 @@ class ChatController
         }
 
         $agentService = $this->agentService;
+        $userMessage = $isInitialProcessing ? null : $message;
 
-        if ($isInitialProcessing) {
-            return $this->buildSseResponse(static function (callable $send) use ($agentService, $taskUid): void {
-                try {
-                    $agentService->processTask($taskUid, $send);
-                    $send('done', ['status' => 2]);
-                } catch (\Throwable $e) {
-                    $send('error', ['error' => $e->getMessage(), 'status' => 3]);
-                }
-            });
-        }
-
-        return $this->buildSseResponse(static function (callable $send) use ($agentService, $taskUid, $message, $attachments): void {
+        return $this->buildSseResponse(static function (callable $send) use ($agentService, $taskUid, $userMessage, $attachments): void {
             try {
-                $messages = $agentService->continueChat($taskUid, $message, $send, $attachments);
+                $messages = $agentService->run($taskUid, $userMessage, $send, $attachments);
                 $send('done', ['status' => 2, 'messages' => $messages]);
             } catch (\Throwable $e) {
                 $send('error', ['error' => $e->getMessage(), 'status' => 3]);
@@ -517,44 +463,6 @@ class ChatController
         $isAdmin = (bool)($GLOBALS['BE_USER']->user['admin'] ?? false);
         $cancelled = $this->repository->requestCancel($taskUid, $userId, $isAdmin);
         return new JsonResponse(['ok' => true, 'cancelled' => $cancelled]);
-    }
-
-    /**
-     * Decode the attachments payload from the request body. The client always
-     * sends a JSON-encoded array via FormData; each item shaped
-     * `{uid?: int, identifier?: string, name?: string}`.
-     *
-     * @return array<int, array{uid?: int, identifier?: string, name?: string}>
-     */
-    private function parseAttachments(mixed $raw): array
-    {
-        if (!is_string($raw) || $raw === '') {
-            return [];
-        }
-        $decoded = json_decode($raw, true);
-        if (!is_array($decoded)) {
-            return [];
-        }
-        $out = [];
-        foreach ($decoded as $item) {
-            if (!is_array($item)) {
-                continue;
-            }
-            $entry = [];
-            if (isset($item['uid']) && (int)$item['uid'] > 0) {
-                $entry['uid'] = (int)$item['uid'];
-            }
-            if (isset($item['identifier']) && is_string($item['identifier']) && $item['identifier'] !== '') {
-                $entry['identifier'] = $item['identifier'];
-            }
-            if (isset($item['name']) && is_string($item['name'])) {
-                $entry['name'] = $item['name'];
-            }
-            if ($entry !== []) {
-                $out[] = $entry;
-            }
-        }
-        return $out;
     }
 
     private function buildSseResponse(\Closure $emitter): ResponseInterface
