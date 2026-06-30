@@ -27,15 +27,15 @@ function init(): void {
   const backend = backendInstance as any;
   backend.getWorkspaceInfos = function () {
     const settings = { ...this.settings, id: -1, depth: 99 };
-    // Feature-Detection statt Versions-Switch: in TYPO3 v14 wurde
-    // generateRemotePayload zu generateRemotePayloadBody umbenannt
-    // (EXT:workspaces ist seit v13 @internal, daher kein Changelog-Eintrag).
-    const buildPayload = typeof this.generateRemotePayloadBody === 'function'
-      ? this.generateRemotePayloadBody.bind(this)
-      : this.generateRemotePayload.bind(this);
-    this.sendRemoteRequest(
-      buildPayload('getWorkspaceInfos', settings),
-    ).then(async (response: any) => {
+    // v13/v14-Unterscheidung: v13 hat generateRemotePayload (wrappt action="RemoteServer"
+    // und ruft intern generateRemotePayloadBody(action, method, data)). In v14 wurde
+    // generateRemotePayload entfernt und generateRemotePayloadBody auf (method, data)
+    // umsigniert (kein action-Feld mehr). Beide Methoden existieren in v13 mit
+    // unterschiedlichen Signaturen, daher discriminiert die Existenz des Wrappers.
+    const payload = typeof this.generateRemotePayload === 'function'
+      ? this.generateRemotePayload('getWorkspaceInfos', settings)
+      : this.generateRemotePayloadBody('getWorkspaceInfos', settings);
+    this.sendRemoteRequest(payload).then(async (response: any) => {
       this.renderWorkspaceInfos((await response.resolve())[0].result);
       updateDrawerBadge();
     });
