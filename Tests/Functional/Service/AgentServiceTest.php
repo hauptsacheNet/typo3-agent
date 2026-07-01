@@ -6,6 +6,7 @@ namespace Hn\Agent\Tests\Functional\Service;
 
 use Hn\Agent\Domain\AgentInstructionRepository;
 use Hn\Agent\Domain\AgentTaskRepository;
+use Hn\Agent\Domain\TaskStateMachine;
 use Hn\Agent\Service\AgentService;
 use Hn\Agent\Service\AttachmentService;
 use Hn\Agent\Service\ChangeTracker;
@@ -144,6 +145,7 @@ class AgentServiceTest extends FunctionalTestCase
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
+            new TaskStateMachine(new AgentTaskRepository($this->connectionPool)),
             new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class), $this->connectionPool),
             new AgentInstructionRepository($this->connectionPool),
             new InstructionTextFormatter(),
@@ -351,6 +353,7 @@ class AgentServiceTest extends FunctionalTestCase
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
+            new TaskStateMachine(new AgentTaskRepository($this->connectionPool)),
             new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class), $this->connectionPool),
             new AgentInstructionRepository($this->connectionPool),
             new InstructionTextFormatter(),
@@ -425,6 +428,7 @@ class AgentServiceTest extends FunctionalTestCase
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
+            new TaskStateMachine(new AgentTaskRepository($this->connectionPool)),
             new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class), $this->connectionPool),
             new AgentInstructionRepository($this->connectionPool),
             new InstructionTextFormatter(),
@@ -497,6 +501,7 @@ class AgentServiceTest extends FunctionalTestCase
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
+            new TaskStateMachine(new AgentTaskRepository($this->connectionPool)),
             new AttachmentService($resourceFactory, $this->connectionPool),
             new AgentInstructionRepository($this->connectionPool),
             new InstructionTextFormatter(),
@@ -770,6 +775,7 @@ class AgentServiceTest extends FunctionalTestCase
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
+            new TaskStateMachine(new AgentTaskRepository($this->connectionPool)),
             new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class), $this->connectionPool),
             new AgentInstructionRepository($this->connectionPool),
             new InstructionTextFormatter(),
@@ -855,6 +861,7 @@ class AgentServiceTest extends FunctionalTestCase
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
+            new TaskStateMachine(new AgentTaskRepository($this->connectionPool)),
             new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class), $this->connectionPool),
             new AgentInstructionRepository($this->connectionPool),
             new InstructionTextFormatter(),
@@ -932,6 +939,7 @@ class AgentServiceTest extends FunctionalTestCase
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
+            new TaskStateMachine(new AgentTaskRepository($this->connectionPool)),
             new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class), $this->connectionPool),
             new AgentInstructionRepository($this->connectionPool),
             new InstructionTextFormatter(),

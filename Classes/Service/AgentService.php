@@ -6,6 +6,8 @@ namespace Hn\Agent\Service;
 
 use Hn\Agent\Domain\AgentInstructionRepository;
 use Hn\Agent\Domain\AgentTaskRepository;
+use Hn\Agent\Domain\TaskEvent;
+use Hn\Agent\Domain\TaskStateMachine;
 use Hn\Agent\Domain\TaskStatus;
 use Hn\McpServer\MCP\ToolRegistry;
 use Hn\McpServer\Service\WorkspaceContextService;
@@ -32,6 +34,7 @@ class AgentService implements LoggerAwareInterface
         private readonly ExtensionConfiguration $extensionConfiguration,
         private readonly ConnectionPool $connectionPool,
         private readonly AgentTaskRepository $repository,
+        private readonly TaskStateMachine $stateMachine,
         private readonly AttachmentService $attachmentService,
         private readonly AgentInstructionRepository $instructionRepository,
         private readonly InstructionTextFormatter $instructionTextFormatter,
@@ -52,9 +55,9 @@ class AgentService implements LoggerAwareInterface
      *
      * Follow-up path ($userMessage !== null):
      *   - Appends a new user message (and optional attachment refs).
-     *   - Persists the new message + flips status to Pending, then claims from
-     *     Pending. saveState BEFORE claim is load-bearing — a concurrent worker
-     *     must see the new message together with the Pending-status it claims on.
+     *   - Persists the new message via saveMessages(), then acquires the
+     *     lease via claim(). The lease CAS (status != InProgress) guards
+     *     against concurrent follow-ups.
      *
      * Both paths converge in runLoop() (LLM call → tool execution → repeat).
      * Messages are saved after every iteration for resumability.
@@ -86,7 +89,7 @@ class AgentService implements LoggerAwareInterface
 
         if ($userMessage !== null) {
             // Follow-up: resolve attachments under the task's BE_USER (not the request context),
-            // append the new user message, persist + reset to Pending so claim succeeds.
+            // append the new user message, persist, then claim the lease.
             $attachmentRefs = $this->attachmentService->normalizeRefs($attachments);
             $userMessageRecord = ['role' => 'user', 'content' => $userMessage];
             if ($attachmentRefs !== []) {
@@ -94,19 +97,19 @@ class AgentService implements LoggerAwareInterface
             }
             $messages[] = $userMessageRecord;
 
-            $this->repository->saveState($taskUid, $messages, TaskStatus::Pending);
+            $this->repository->saveMessages($taskUid, $messages);
 
-            $claimed = $this->repository->claim($taskUid, TaskStatus::Pending);
+            $claimed = $this->repository->claim($taskUid);
             if (!$claimed) {
                 throw new \RuntimeException('Task #' . $taskUid . ' could not be claimed (already in progress by another process?).');
             }
         } else {
-            // Initial processing. Evaluate fresh-status BEFORE claim() flips it to InProgress.
-            // Pending = newAction just created the task and the agent has never run; the initial
-            // conversation (system + synthetic GetPage/ReadTable + user) is already persisted.
+            // Initial processing. Pending = newAction just created the task and the agent
+            // has never run; the initial conversation (system + synthetic GetPage/ReadTable
+            // + user) is already persisted.
             $isFreshTask = (int)$task['status'] === TaskStatus::Pending->value;
 
-            $claimed = $this->repository->claim($taskUid, TaskStatus::from((int)$task['status']));
+            $claimed = $this->repository->claim($taskUid);
             if (!$claimed) {
                 throw new \RuntimeException('Task #' . $taskUid . ' could not be claimed (already in progress by another process?).');
             }
@@ -139,10 +142,11 @@ class AgentService implements LoggerAwareInterface
 
             for ($iteration = 0; $iteration < $maxIterations; $iteration++) {
                 // Cooperative cancellation point. The cancel endpoint flips
-                // status from InProgress to Cancelled with an atomic UPDATE;
-                // we see that on the next iteration and bail without writing
-                // a terminal saveState (which would overwrite the Cancelled
-                // status the cancel endpoint just set).
+                // status from InProgress to Cancelled via TaskStateMachine;
+                // we see that on the next iteration and bail. The terminal
+                // trigger()'s CAS on `status = InProgress` would also no-op
+                // over a Cancelled row, but this early return avoids the
+                // wasted LLM iteration.
                 $current = $this->repository->findByUid($taskUid);
                 if ($current === false || (int)$current['status'] !== TaskStatus::InProgress->value) {
                     return $messages;
@@ -267,17 +271,19 @@ class AgentService implements LoggerAwareInterface
             if ($reachedLimit) {
                 $result = '[Agent stopped: reached maximum of ' . $maxIterations . ' iterations]'
                     . ($result !== '' ? "\n\n" . $result : '');
-                $this->repository->finalize($taskUid, $messages, TaskStatus::Failed, $result);
-            } else {
-                $this->repository->finalize($taskUid, $messages, TaskStatus::Ended, $result);
             }
+            $this->repository->saveMessages($taskUid, $messages);
+            $this->repository->saveResult($taskUid, $result);
+            $this->stateMachine->trigger($taskUid, $reachedLimit ? TaskEvent::Fail : TaskEvent::End);
 
             return $messages;
         } catch (\Throwable $e) {
-            // Preserve progress on failure. CAS-guarded: if the task was
-            // cancelled externally before the exception fired, leave it
-            // Cancelled rather than overwriting with Failed.
-            $this->repository->finalize($taskUid, $messages, TaskStatus::Failed, 'Error: ' . $e->getMessage());
+            // Preserve progress on failure. State-Machine-CAS-guarded: if the
+            // task was cancelled externally before the exception fired, leave
+            // it Cancelled rather than overwriting with Failed.
+            $this->repository->saveMessages($taskUid, $messages);
+            $this->repository->saveResult($taskUid, 'Error: ' . $e->getMessage());
+            $this->stateMachine->trigger($taskUid, TaskEvent::Fail);
             throw $e;
         }
     }

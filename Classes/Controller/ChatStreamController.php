@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Hn\Agent\Controller;
 
 use Hn\Agent\Domain\AgentTaskRepository;
+use Hn\Agent\Domain\TaskEvent;
+use Hn\Agent\Domain\TaskStateMachine;
 use Hn\Agent\Domain\TaskStatus;
 use Hn\Agent\Http\SseStream;
 use Hn\Agent\Service\AgentService;
@@ -32,6 +34,7 @@ class ChatStreamController
         private readonly AgentTaskRepository $repository,
         private readonly AgentService        $agentService,
         private readonly AttachmentService   $attachmentService,
+        private readonly TaskStateMachine    $stateMachine,
     ) {}
 
     public function streamMessageAction(ServerRequestInterface $request): ResponseInterface
@@ -101,9 +104,7 @@ class ChatStreamController
         if ($taskUid <= 0) {
             return new JsonResponse(['ok' => false, 'error' => 'Invalid task'], 400);
         }
-        $userId = (int)($GLOBALS['BE_USER']->user['uid'] ?? 0);
-        $isAdmin = (bool)($GLOBALS['BE_USER']->user['admin'] ?? false);
-        $cancelled = $this->repository->requestCancel($taskUid, $userId, $isAdmin);
+        $cancelled = $this->stateMachine->trigger($taskUid, TaskEvent::Cancel);
         return new JsonResponse(['ok' => true, 'cancelled' => $cancelled]);
     }
 
