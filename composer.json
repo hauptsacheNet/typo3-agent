@@ -7,6 +7,10 @@
         {
             "name": "Marco Pfeiffer",
             "email": "marco@hauptsache.net"
+        },
+        {
+            "name": "Kay Wienöbst",
+            "email": "kay@hauptsache.net"
         }
     ],
     "require": {
