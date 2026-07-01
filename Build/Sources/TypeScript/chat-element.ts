@@ -1,16 +1,16 @@
 import {html, LitElement, nothing, type TemplateResult} from 'lit';
-import {customElement, property, query, state} from 'lit/decorators.js';
+import {customElement, property, state} from 'lit/decorators.js';
 import {unsafeHTML} from 'lit/directives/unsafe-html.js';
 import {createRef, ref, type Ref} from 'lit/directives/ref.js';
 import {marked} from 'marked';
 import DOMPurify from 'dompurify';
-import DragUploader from '@typo3/backend/drag-uploader.js';
-import Modal from '@typo3/backend/modal.js';
-import {MessageUtility} from '@typo3/backend/utility/message-utility.js';
 import AjaxRequest from '@typo3/core/ajax/ajax-request.js';
+import type {Attachment} from '@hn/agent/attachment.js';
 import './thinking-indicator.js';
 import './chat-bubble.js';
 import '@hn/agent/attachment-chip-elements.js';
+import '@hn/agent/message-composer.js';
+import type {MessageComposerElement} from '@hn/agent/message-composer.js';
 
 marked.setOptions({breaks: true, gfm: true});
 
@@ -51,20 +51,6 @@ interface SseParsed {
     data: Record<string, unknown>;
 }
 
-interface Attachment {
-    uid?: number;
-    identifier?: string;
-    name: string;
-    mime_type?: string;
-    iconHtml?: string;
-    unresolvable?: boolean;
-    // Pre-flight result (populated async after add; undefined while loading).
-    // True when the LLM can fetch the file's bytes via the ReadFile tool.
-    readableByLlm?: boolean;
-    reason?: string;
-    size?: number;
-}
-
 // ---- Component -------------------------------------------------------------
 
 @customElement('hn-agent-chat')
@@ -87,11 +73,6 @@ export class ChatElement extends LitElement {
     @property({attribute: 'active-workspace-title'}) activeWorkspaceTitle = '';
     @property({attribute: 'default-upload-folder'}) defaultUploadFolder = '';
     @property({attribute: 'file-browser-uri'}) fileBrowserUri = '';
-
-    private get preflightUri(): string {
-        const ajaxUrls = (TYPO3?.settings as Record<string, unknown> | undefined)?.ajaxUrls as Record<string, string> | undefined;
-        return ajaxUrls?.['typo3_agent_tasks_attachment_preflight'] ?? '';
-    }
 
     @property({
         attribute: 'initial-messages',
@@ -127,14 +108,12 @@ export class ChatElement extends LitElement {
 
     @state() private changes: TrackedChange[] = [];
     @state() private messages: ChatMessage[] = [];
-    @state() private inputValue = '';
     @state() private loading = false;
     @state() private errorMessage = '';
     @state() private thinking = false;
     @state() private streamingBuffer = '';
     @state() private reasoningBuffer = '';
     @state() private isStreaming = false;
-    @state() private attachments: Attachment[] = [];
     @state() private lastSubmission: { message: string; attachments: Attachment[] } | null = null;
 
     // Active SSE fetch's AbortController while a stream is in flight, null otherwise.
@@ -143,33 +122,9 @@ export class ChatElement extends LitElement {
     // SseStream's connection_aborted() check on the next flush.
     private abortController: AbortController | null = null;
 
-    @query('textarea') private inputEl!: HTMLTextAreaElement;
-    // DragUploader dispatches `uploadSuccess` on its `data-dropzone-trigger`
-    // element (not the wrapper, and not bubbling) — so we have to listen on
-    // the trigger button itself.
-    private uploadTriggerRef: Ref<HTMLElement> = createRef();
-    private uploadZoneRef: Ref<HTMLElement> = createRef();
-
+    private composerRef: Ref<MessageComposerElement> = createRef();
     private messagesContainerRef: Ref<HTMLElement> = createRef();
     private latestUserBubbleRef: Ref<HTMLElement> = createRef();
-
-    private elementBrowserListener = (e: MessageEvent): void => {
-        if (!MessageUtility.verifyOrigin(e.origin)) return;
-        const data = e.data as { actionName?: string; fieldName?: string; value?: string; label?: string };
-        if (data.actionName !== 'typo3:elementBrowser:elementAdded') return;
-        if (data.fieldName !== 'hn-agent-chat') return;
-        const raw = (data.value ?? '').toString();
-        if (!raw) return;
-        // File-mode element browser sends the sys_file UID as a plain numeric
-        // string in `value`. A combined identifier ("1:/path/file.png") would
-        // contain a colon — pass that through as `identifier` instead.
-        const numericUid = /^\d+$/.test(raw) ? parseInt(raw, 10) : 0;
-        if (numericUid > 0) {
-            this.addAttachment({uid: numericUid, name: data.label || `sys_file:${numericUid}`});
-        } else {
-            this.addAttachment({identifier: raw, name: data.label || raw});
-        }
-    };
 
     private onKeydownGlobal = (e: KeyboardEvent): void => {
         if (e.key !== 'Escape') return;
@@ -181,47 +136,23 @@ export class ChatElement extends LitElement {
         this.onStop();
     };
 
-    private uploadSuccessListener = (e: Event): void => {
-        const detail = (e as CustomEvent).detail as unknown as [unknown, {
-            upload?: Array<{ uid: number; name: string; id: string; icon?: string }>
-        }];
-        const payload = Array.isArray(detail) ? detail[1] : undefined;
-        const file = payload?.upload?.[0];
-        if (!file) return;
-        this.addAttachment({uid: file.uid, identifier: file.id, name: file.name, iconHtml: file.icon});
-    };
-
     // -- Lifecycle -------------------------------------------------------------
 
     override firstUpdated(): void {
         this.messages = this.mergeToolResults(this.initialMessages);
         this.changes = [...this.initialChanges];
 
-        // Manual single-instance init. The auto-discovery in DragUploader.init()
-        // races (MutationObserver + DocumentService.ready both pick up the same
-        // .t3js-drag-uploader element when Lit's render microtask interleaves with
-        // the ready() promise resolution), producing duplicate dropzones and
-        // double file-picker pops. Instantiating ourselves — without the
-        // `t3js-drag-uploader` marker class in the template — sidesteps both
-        // paths.
-        const zoneEl = this.uploadZoneRef.value;
-        if (zoneEl) {
-            new DragUploader(zoneEl);
-        }
-        this.uploadTriggerRef.value?.addEventListener('uploadSuccess', this.uploadSuccessListener);
         document.addEventListener('keydown', this.onKeydownGlobal);
 
         if ((this.autoStart === '1' || this.autoStart === 'true') && this.streamUri && !this.isWorkspaceMismatch()) {
             this.doAutoStart();
         }
 
-        this.inputEl?.focus();
+        this.composerRef.value?.focus();
     }
 
     override disconnectedCallback(): void {
         super.disconnectedCallback();
-        this.uploadTriggerRef.value?.removeEventListener('uploadSuccess', this.uploadSuccessListener);
-        window.removeEventListener('message', this.elementBrowserListener);
         document.removeEventListener('keydown', this.onKeydownGlobal);
     }
 
@@ -235,9 +166,6 @@ export class ChatElement extends LitElement {
     override render() {
         const mismatch = this.isWorkspaceMismatch();
         const inputDisabled = this.loading || mismatch;
-        const canSubmit = !inputDisabled && (this.inputValue.trim() !== '' || this.attachments.length > 0);
-        const uploadEnabled = !!this.defaultUploadFolder;
-        const pickEnabled = !!this.fileBrowserUri;
         const showHeader = mismatch || !!this.errorMessage
         return html`
             ${showHeader ? html`
@@ -261,88 +189,25 @@ export class ChatElement extends LitElement {
                 </div>
             </div>
             <div class="chat-footer">
-
-
-                <div
-                        class="chat-upload-zone"
-                        ${ref(this.uploadZoneRef)}
-                        data-target-folder=${this.defaultUploadFolder}
-                        data-max-file-size="0"
-                        data-dropzone-target=".chat-upload-anchor"
-                        data-dropzone-trigger=".chat-upload-trigger"
-                        data-default-action="rename">
-
-
-                    <form class="task-form" @submit=${this.onSubmit}>
-            <textarea
-                    class="message-control"
-                    name="message"
-                    rows="2"
-                    placeholder="Type a follow-up message\u2026"
-                    .value=${this.inputValue}
-                    @input=${this.onInput}
-                    @keydown=${this.onKeydown}
-            ></textarea>
-
-                        ${this.attachments.length > 0
-                                ? html`
-                                    <hn-agent-attachment-chips
-                                            .attachments=${this.attachments}
-                                            @remove=${(e: CustomEvent<{
-                                                index: number
-                                            }>) => this.removeAttachment(e.detail.index)}>
-                                    </hn-agent-attachment-chips>
-                                `
-                                : nothing}
-
-                        <div class="chat-upload-anchor" style="display:none"></div>
-                        <div class="w-100 d-flex flex-row">
-                            ${this.renderAttachmentsBar(uploadEnabled, pickEnabled, inputDisabled)}
-                            <div class="ms-auto">
-                                ${this.loading
-                                        ? html`
-                                            <button type="button"
-                                                    class="btn btn-sm"
-                                                    title="Antwort abbrechen"
-                                                    ?disabled=${this.abortController === null}
-                                                    @click=${this.onStop}>
-                                                <typo3-backend-icon identifier="actions-close" size="small"/>
-                                            </button>`
-                                        : html`
-                                            <button type="submit" class="btn btn-sm" ?disabled=${!canSubmit}>
-                                                <typo3-backend-icon
-                                                        identifier="actions-arrow-down-start-alt"
-                                                        size="small"/>
-                                            </button>`}
-                            </div>
-                        </div>
-                    </form>
-
-
-                </div>
-            </div>
-        `;
-    }
-
-    private renderAttachmentsBar(uploadEnabled: boolean, pickEnabled: boolean, inputDisabled: boolean): TemplateResult {
-        return html`
-            <div>
-                <button type="button"
-                        class="chat-upload-trigger btn btn-sm btn-default"
-                        ${ref(this.uploadTriggerRef)}
-                        ?disabled=${inputDisabled || !uploadEnabled}
-                        title=${uploadEnabled ? 'Datei hochladen' : 'Kein Upload-Ordner verf\u00fcgbar'}>
-                    <typo3-backend-icon identifier="actions-upload" size="small"/>
-                    Hochladen
-                </button>
-                <button type="button"
-                        class="btn btn-sm btn-default"
-                        ?disabled=${inputDisabled || !pickEnabled}
-                        @click=${this.onPickClick}>
-                    <typo3-backend-icon identifier="actions-folder" size="small"/>
-                    Ausw\u00e4hlen
-                </button>
-
+                <hn-agent-message-composer
+                        ${ref(this.composerRef)}
+                        ?disabled=${inputDisabled}
+                        placeholder="Type a follow-up message\u2026"
+                        default-upload-folder=${this.defaultUploadFolder}
+                        file-browser-uri=${this.fileBrowserUri}
+                        field-name="hn-agent-chat"
+                        @submit=${this.onComposerSubmit}>
+                    ${this.loading
+                        ? html`
+                            <button slot="action" type="button"
+                                    class="btn btn-sm"
+                                    title="Antwort abbrechen"
+                                    ?disabled=${this.abortController === null}
+                                    @click=${this.onStop}>
+                                <typo3-backend-icon identifier="actions-close" size="small"/>
+                            </button>`
+                        : nothing}
+                </hn-agent-message-composer>
             </div>
         `;
     }
@@ -670,11 +535,9 @@ export class ChatElement extends LitElement {
 
     // -- Event handlers --------------------------------------------------------
 
-    private onSubmit(e: Event): void {
-        e.preventDefault();
+    private onComposerSubmit(e: CustomEvent<{message: string; attachments: Attachment[]}>): void {
         if (this.isWorkspaceMismatch()) return;
-        const message = this.inputValue.trim();
-        const attachments = this.attachments;
+        const {message, attachments} = e.detail;
         if (!message && attachments.length === 0) return;
 
         this.errorMessage = '';
@@ -682,11 +545,9 @@ export class ChatElement extends LitElement {
         const optimistic: ChatMessage = {role: 'user', content: message};
         if (attachments.length > 0) optimistic.attachments = attachments;
         this.messages = [...this.messages, optimistic];
-        this.inputValue = '';
-        this.attachments = [];
         this.loading = true;
         this.scrollLatestUserMessageToTop();
-        this.inputEl?.focus();
+        this.composerRef.value?.focus();
 
         this.sendStreaming(message, attachments).then(() => this.finishSend());
     }
@@ -731,81 +592,12 @@ export class ChatElement extends LitElement {
         this.sendStreaming(message, attachments).then(() => this.finishSend());
     }
 
-    private addAttachment(att: Attachment): void {
-        this.attachments = [...this.attachments, att];
-        if (this.preflightUri && (att.uid !== undefined || att.identifier)) {
-            void this.preflightAttachment(att);
-        }
-    }
-
-    private async preflightAttachment(att: Attachment): Promise<void> {
-        try {
-            const url = new URL(this.preflightUri, window.location.origin);
-            if (att.uid !== undefined) url.searchParams.set('uid', String(att.uid));
-            if (att.identifier) url.searchParams.set('identifier', att.identifier);
-            const response = await fetch(url.toString(), {headers: {'Accept': 'application/json'}});
-            if (!response.ok) return;
-            const info = await response.json() as {
-                uid?: number; identifier?: string; name?: string;
-                mime?: string; size?: number;
-                readableByLlm: boolean; reason?: string | null;
-            };
-            this.attachments = this.attachments.map(a => {
-                const sameUid = info.uid !== undefined && a.uid === info.uid;
-                const sameIdent = !!info.identifier && a.identifier === info.identifier;
-                if (!sameUid && !sameIdent) return a;
-                return {
-                    ...a,
-                    mime_type: info.mime || a.mime_type,
-                    size: typeof info.size === 'number' ? info.size : a.size,
-                    readableByLlm: info.readableByLlm,
-                    reason: info.reason ?? undefined,
-                };
-            });
-        } catch {
-            // silent — chip just stays without status indicator
-        }
-    }
-
-    private removeAttachment(index: number): void {
-        this.attachments = this.attachments.filter((_, i) => i !== index);
-    }
-
-    private onPickClick(): void {
-        if (!this.fileBrowserUri) return;
-        // Listener is attached fresh each open and removed on modal close to avoid
-        // duplicate handling between sessions.
-        window.addEventListener('message', this.elementBrowserListener);
-        const modal = Modal.advanced({
-            type: Modal.types.iframe,
-            content: this.fileBrowserUri,
-            size: Modal.sizes.large,
-        });
-        modal.addEventListener('typo3-modal-hide', () => {
-            window.removeEventListener('message', this.elementBrowserListener);
-        });
-    }
-
-    private onInput(e: Event): void {
-        this.inputValue = (e.target as HTMLTextAreaElement).value;
-    }
-
-    private onKeydown(e: KeyboardEvent): void {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            if (this.loading || this.isWorkspaceMismatch()) {
-                return;
-            }
-            (e.target as HTMLTextAreaElement).closest('form')?.requestSubmit();
-        }
-    }
-
     private finishSend(): void {
         this.loading = false;
         if (this.errorMessage === '') {
             this.lastSubmission = null;
         }
-        this.inputEl?.focus();
+        this.composerRef.value?.focus();
     }
 
     private appendAttachments(formData: FormData, attachments: Attachment[]): void {

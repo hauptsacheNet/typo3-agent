@@ -9,18 +9,16 @@ var __decorateClass = (decorators, target, key, kind) => {
   return result;
 };
 import { html, LitElement, nothing } from "lit";
-import { customElement, property, query, state } from "lit/decorators.js";
+import { customElement, property, state } from "lit/decorators.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { createRef, ref } from "lit/directives/ref.js";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
-import DragUploader from "@typo3/backend/drag-uploader.js";
-import Modal from "@typo3/backend/modal.js";
-import { MessageUtility } from "@typo3/backend/utility/message-utility.js";
 import AjaxRequest from "@typo3/core/ajax/ajax-request.js";
 import "./thinking-indicator.js";
 import "./chat-bubble.js";
 import "@hn/agent/attachment-chip-elements.js";
+import "@hn/agent/message-composer.js";
 marked.setOptions({ breaks: true, gfm: true });
 let ChatElement = class extends LitElement {
   constructor() {
@@ -39,54 +37,27 @@ let ChatElement = class extends LitElement {
     this.initialChanges = [];
     this.changes = [];
     this.messages = [];
-    this.inputValue = "";
     this.loading = false;
     this.errorMessage = "";
     this.thinking = false;
     this.streamingBuffer = "";
     this.reasoningBuffer = "";
     this.isStreaming = false;
-    this.attachments = [];
     this.lastSubmission = null;
     // Active SSE fetch's AbortController while a stream is in flight, null otherwise.
     // The Stop button calls .abort() on it; the reader loop in sendStreaming sees the
     // AbortError and exits cleanly. PHP-side, the disconnect is picked up by
     // SseStream's connection_aborted() check on the next flush.
     this.abortController = null;
-    // DragUploader dispatches `uploadSuccess` on its `data-dropzone-trigger`
-    // element (not the wrapper, and not bubbling) — so we have to listen on
-    // the trigger button itself.
-    this.uploadTriggerRef = createRef();
-    this.uploadZoneRef = createRef();
+    this.composerRef = createRef();
     this.messagesContainerRef = createRef();
     this.latestUserBubbleRef = createRef();
-    this.elementBrowserListener = (e) => {
-      if (!MessageUtility.verifyOrigin(e.origin)) return;
-      const data = e.data;
-      if (data.actionName !== "typo3:elementBrowser:elementAdded") return;
-      if (data.fieldName !== "hn-agent-chat") return;
-      const raw = (data.value ?? "").toString();
-      if (!raw) return;
-      const numericUid = /^\d+$/.test(raw) ? parseInt(raw, 10) : 0;
-      if (numericUid > 0) {
-        this.addAttachment({ uid: numericUid, name: data.label || `sys_file:${numericUid}` });
-      } else {
-        this.addAttachment({ identifier: raw, name: data.label || raw });
-      }
-    };
     this.onKeydownGlobal = (e) => {
       if (e.key !== "Escape") return;
       if (e.defaultPrevented) return;
       if (!this.loading || this.abortController === null) return;
       e.preventDefault();
       this.onStop();
-    };
-    this.uploadSuccessListener = (e) => {
-      const detail = e.detail;
-      const payload = Array.isArray(detail) ? detail[1] : void 0;
-      const file = payload?.upload?.[0];
-      if (!file) return;
-      this.addAttachment({ uid: file.uid, identifier: file.id, name: file.name, iconHtml: file.icon });
     };
     this.toolCallsGroupIds = /* @__PURE__ */ new WeakMap();
     this.reasoningGroupIds = /* @__PURE__ */ new WeakMap();
@@ -95,29 +66,18 @@ let ChatElement = class extends LitElement {
   createRenderRoot() {
     return this;
   }
-  get preflightUri() {
-    const ajaxUrls = TYPO3?.settings?.ajaxUrls;
-    return ajaxUrls?.["typo3_agent_tasks_attachment_preflight"] ?? "";
-  }
   // -- Lifecycle -------------------------------------------------------------
   firstUpdated() {
     this.messages = this.mergeToolResults(this.initialMessages);
     this.changes = [...this.initialChanges];
-    const zoneEl = this.uploadZoneRef.value;
-    if (zoneEl) {
-      new DragUploader(zoneEl);
-    }
-    this.uploadTriggerRef.value?.addEventListener("uploadSuccess", this.uploadSuccessListener);
     document.addEventListener("keydown", this.onKeydownGlobal);
     if ((this.autoStart === "1" || this.autoStart === "true") && this.streamUri && !this.isWorkspaceMismatch()) {
       this.doAutoStart();
     }
-    this.inputEl?.focus();
+    this.composerRef.value?.focus();
   }
   disconnectedCallback() {
     super.disconnectedCallback();
-    this.uploadTriggerRef.value?.removeEventListener("uploadSuccess", this.uploadSuccessListener);
-    window.removeEventListener("message", this.elementBrowserListener);
     document.removeEventListener("keydown", this.onKeydownGlobal);
   }
   isWorkspaceMismatch() {
@@ -128,9 +88,6 @@ let ChatElement = class extends LitElement {
   render() {
     const mismatch = this.isWorkspaceMismatch();
     const inputDisabled = this.loading || mismatch;
-    const canSubmit = !inputDisabled && (this.inputValue.trim() !== "" || this.attachments.length > 0);
-    const uploadEnabled = !!this.defaultUploadFolder;
-    const pickEnabled = !!this.fileBrowserUri;
     const showHeader = mismatch || !!this.errorMessage;
     return html`
             ${showHeader ? html`
@@ -154,81 +111,23 @@ let ChatElement = class extends LitElement {
                 </div>
             </div>
             <div class="chat-footer">
-
-
-                <div
-                        class="chat-upload-zone"
-                        ${ref(this.uploadZoneRef)}
-                        data-target-folder=${this.defaultUploadFolder}
-                        data-max-file-size="0"
-                        data-dropzone-target=".chat-upload-anchor"
-                        data-dropzone-trigger=".chat-upload-trigger"
-                        data-default-action="rename">
-
-
-                    <form class="task-form" @submit=${this.onSubmit}>
-            <textarea
-                    class="message-control"
-                    name="message"
-                    rows="2"
-                    placeholder="Type a follow-up message\u2026"
-                    .value=${this.inputValue}
-                    @input=${this.onInput}
-                    @keydown=${this.onKeydown}
-            ></textarea>
-
-                        ${this.attachments.length > 0 ? html`
-                                    <hn-agent-attachment-chips
-                                            .attachments=${this.attachments}
-                                            @remove=${(e) => this.removeAttachment(e.detail.index)}>
-                                    </hn-agent-attachment-chips>
-                                ` : nothing}
-
-                        <div class="chat-upload-anchor" style="display:none"></div>
-                        <div class="w-100 d-flex flex-row">
-                            ${this.renderAttachmentsBar(uploadEnabled, pickEnabled, inputDisabled)}
-                            <div class="ms-auto">
-                                ${this.loading ? html`
-                                            <button type="button"
-                                                    class="btn btn-sm"
-                                                    title="Antwort abbrechen"
-                                                    ?disabled=${this.abortController === null}
-                                                    @click=${this.onStop}>
-                                                <typo3-backend-icon identifier="actions-close" size="small"/>
-                                            </button>` : html`
-                                            <button type="submit" class="btn btn-sm" ?disabled=${!canSubmit}>
-                                                <typo3-backend-icon
-                                                        identifier="actions-arrow-down-start-alt"
-                                                        size="small"/>
-                                            </button>`}
-                            </div>
-                        </div>
-                    </form>
-
-
-                </div>
-            </div>
-        `;
-  }
-  renderAttachmentsBar(uploadEnabled, pickEnabled, inputDisabled) {
-    return html`
-            <div>
-                <button type="button"
-                        class="chat-upload-trigger btn btn-sm btn-default"
-                        ${ref(this.uploadTriggerRef)}
-                        ?disabled=${inputDisabled || !uploadEnabled}
-                        title=${uploadEnabled ? "Datei hochladen" : "Kein Upload-Ordner verf\xFCgbar"}>
-                    <typo3-backend-icon identifier="actions-upload" size="small"/>
-                    Hochladen
-                </button>
-                <button type="button"
-                        class="btn btn-sm btn-default"
-                        ?disabled=${inputDisabled || !pickEnabled}
-                        @click=${this.onPickClick}>
-                    <typo3-backend-icon identifier="actions-folder" size="small"/>
-                    Ausw\u00e4hlen
-                </button>
-
+                <hn-agent-message-composer
+                        ${ref(this.composerRef)}
+                        ?disabled=${inputDisabled}
+                        placeholder="Type a follow-up message\u2026"
+                        default-upload-folder=${this.defaultUploadFolder}
+                        file-browser-uri=${this.fileBrowserUri}
+                        field-name="hn-agent-chat"
+                        @submit=${this.onComposerSubmit}>
+                    ${this.loading ? html`
+                            <button slot="action" type="button"
+                                    class="btn btn-sm"
+                                    title="Antwort abbrechen"
+                                    ?disabled=${this.abortController === null}
+                                    @click=${this.onStop}>
+                                <typo3-backend-icon identifier="actions-close" size="small"/>
+                            </button>` : nothing}
+                </hn-agent-message-composer>
             </div>
         `;
   }
@@ -502,22 +401,18 @@ let ChatElement = class extends LitElement {
     return DOMPurify.sanitize(marked.parse(text ?? ""));
   }
   // -- Event handlers --------------------------------------------------------
-  onSubmit(e) {
-    e.preventDefault();
+  onComposerSubmit(e) {
     if (this.isWorkspaceMismatch()) return;
-    const message = this.inputValue.trim();
-    const attachments = this.attachments;
+    const { message, attachments } = e.detail;
     if (!message && attachments.length === 0) return;
     this.errorMessage = "";
     this.lastSubmission = { message, attachments };
     const optimistic = { role: "user", content: message };
     if (attachments.length > 0) optimistic.attachments = attachments;
     this.messages = [...this.messages, optimistic];
-    this.inputValue = "";
-    this.attachments = [];
     this.loading = true;
     this.scrollLatestUserMessageToTop();
-    this.inputEl?.focus();
+    this.composerRef.value?.focus();
     this.sendStreaming(message, attachments).then(() => this.finishSend());
   }
   onDismissError() {
@@ -549,68 +444,12 @@ let ChatElement = class extends LitElement {
     this.loading = true;
     this.sendStreaming(message, attachments).then(() => this.finishSend());
   }
-  addAttachment(att) {
-    this.attachments = [...this.attachments, att];
-    if (this.preflightUri && (att.uid !== void 0 || att.identifier)) {
-      void this.preflightAttachment(att);
-    }
-  }
-  async preflightAttachment(att) {
-    try {
-      const url = new URL(this.preflightUri, window.location.origin);
-      if (att.uid !== void 0) url.searchParams.set("uid", String(att.uid));
-      if (att.identifier) url.searchParams.set("identifier", att.identifier);
-      const response = await fetch(url.toString(), { headers: { "Accept": "application/json" } });
-      if (!response.ok) return;
-      const info = await response.json();
-      this.attachments = this.attachments.map((a) => {
-        const sameUid = info.uid !== void 0 && a.uid === info.uid;
-        const sameIdent = !!info.identifier && a.identifier === info.identifier;
-        if (!sameUid && !sameIdent) return a;
-        return {
-          ...a,
-          mime_type: info.mime || a.mime_type,
-          size: typeof info.size === "number" ? info.size : a.size,
-          readableByLlm: info.readableByLlm,
-          reason: info.reason ?? void 0
-        };
-      });
-    } catch {
-    }
-  }
-  removeAttachment(index) {
-    this.attachments = this.attachments.filter((_, i) => i !== index);
-  }
-  onPickClick() {
-    if (!this.fileBrowserUri) return;
-    window.addEventListener("message", this.elementBrowserListener);
-    const modal = Modal.advanced({
-      type: Modal.types.iframe,
-      content: this.fileBrowserUri,
-      size: Modal.sizes.large
-    });
-    modal.addEventListener("typo3-modal-hide", () => {
-      window.removeEventListener("message", this.elementBrowserListener);
-    });
-  }
-  onInput(e) {
-    this.inputValue = e.target.value;
-  }
-  onKeydown(e) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      if (this.loading || this.isWorkspaceMismatch()) {
-        return;
-      }
-      e.target.closest("form")?.requestSubmit();
-    }
-  }
   finishSend() {
     this.loading = false;
     if (this.errorMessage === "") {
       this.lastSubmission = null;
     }
-    this.inputEl?.focus();
+    this.composerRef.value?.focus();
   }
   appendAttachments(formData, attachments) {
     if (attachments.length === 0) return;
@@ -905,9 +744,6 @@ __decorateClass([
 ], ChatElement.prototype, "messages", 2);
 __decorateClass([
   state()
-], ChatElement.prototype, "inputValue", 2);
-__decorateClass([
-  state()
 ], ChatElement.prototype, "loading", 2);
 __decorateClass([
   state()
@@ -926,13 +762,7 @@ __decorateClass([
 ], ChatElement.prototype, "isStreaming", 2);
 __decorateClass([
   state()
-], ChatElement.prototype, "attachments", 2);
-__decorateClass([
-  state()
 ], ChatElement.prototype, "lastSubmission", 2);
-__decorateClass([
-  query("textarea")
-], ChatElement.prototype, "inputEl", 2);
 ChatElement = __decorateClass([
   customElement("hn-agent-chat")
 ], ChatElement);
