@@ -19,14 +19,12 @@ let MessageComposerElement = class extends LitElement {
   constructor() {
     super(...arguments);
     this.placeholder = "";
-    this.defaultUploadFolder = "";
-    this.fileBrowserUri = "";
     this.fieldName = "hn-agent-message-composer";
     this.disabled = false;
+    this.loading = false;
     this.submitTitle = "";
     this.message = "";
     this.attachments = [];
-    this.hasSlottedAction = false;
     this.uploadTriggerRef = createRef();
     this.uploadZoneRef = createRef();
     this.elementBrowserListener = (e) => {
@@ -64,16 +62,6 @@ let MessageComposerElement = class extends LitElement {
       new DragUploader(zoneEl);
     }
     this.uploadTriggerRef.value?.addEventListener("uploadSuccess", this.uploadSuccessListener);
-    this.detectSlottedAction();
-  }
-  updated() {
-    this.detectSlottedAction();
-  }
-  detectSlottedAction() {
-    const slotted = this.querySelector(':scope > [slot="action"]') !== null;
-    if (slotted !== this.hasSlottedAction) {
-      this.hasSlottedAction = slotted;
-    }
   }
   disconnectedCallback() {
     super.disconnectedCallback();
@@ -87,14 +75,14 @@ let MessageComposerElement = class extends LitElement {
     this.message = e.target.value;
   }
   onKeydown(e) {
-    if (this.disabled) return;
+    if (this.disabled || this.loading) return;
     if (e.key === "Enter" && !e.shiftKey && this.canSubmit()) {
       e.preventDefault();
       this.formEl?.requestSubmit();
     }
   }
   canSubmit() {
-    return !this.disabled && (this.message.trim() !== "" || this.attachments.length > 0);
+    return !this.disabled && !this.loading && (this.message.trim() !== "" || this.attachments.length > 0);
   }
   addAttachment(att) {
     this.attachments = [...this.attachments, att];
@@ -128,12 +116,27 @@ let MessageComposerElement = class extends LitElement {
   removeAttachment(index) {
     this.attachments = this.attachments.filter((_, i) => i !== index);
   }
+  get agentSettings() {
+    const settings = TYPO3?.settings?.Agent;
+    return settings ?? {};
+  }
+  get defaultUploadFolder() {
+    return this.agentSettings.defaultUploadFolder ?? "";
+  }
+  get fileBrowserUri() {
+    const baseUri = this.agentSettings.elementBrowserUrl;
+    if (!baseUri) return "";
+    const bparams = `${this.fieldName}|||*|`;
+    const separator = baseUri.includes("?") ? "&" : "?";
+    return `${baseUri}${separator}mode=file&bparams=${encodeURIComponent(bparams)}`;
+  }
   onPickClick() {
-    if (!this.fileBrowserUri || this.disabled) return;
+    const uri = this.fileBrowserUri;
+    if (!uri || this.disabled) return;
     window.addEventListener("message", this.elementBrowserListener);
     const modal = Modal.advanced({
       type: Modal.types.iframe,
-      content: this.fileBrowserUri,
+      content: uri,
       size: Modal.sizes.large
     });
     modal.addEventListener("typo3-modal-hide", () => {
@@ -155,9 +158,12 @@ let MessageComposerElement = class extends LitElement {
       composed: true
     }));
   }
+  onStopClick() {
+    this.dispatchEvent(new CustomEvent("stop", { bubbles: true, composed: true }));
+  }
   render() {
     const uploadEnabled = !!this.defaultUploadFolder;
-    const pickEnabled = !!this.fileBrowserUri;
+    const pickEnabled = this.fileBrowserUri !== "";
     return html`
       <div
           class="chat-upload-zone"
@@ -172,7 +178,7 @@ let MessageComposerElement = class extends LitElement {
               class="message-control"
               name="message"
               placeholder=${this.placeholder}
-              ?disabled=${this.disabled}
+              ?disabled=${this.disabled || this.loading}
               .value=${this.message}
               @input=${this.onInput}
               @keydown=${this.onKeydown}
@@ -190,9 +196,8 @@ let MessageComposerElement = class extends LitElement {
 
           <div class="w-100 d-flex flex-row">
             ${this.renderAttachmentsBar(uploadEnabled, pickEnabled)}
-            <div class="composer-action-slot ms-auto">
-              <slot name="action"></slot>
-              ${this.hasSlottedAction ? nothing : this.renderDefaultSubmit()}
+            <div class="ms-auto">
+              ${this.loading ? this.renderStopButton() : this.renderDefaultSubmit()}
             </div>
           </div>
         </form>
@@ -213,20 +218,31 @@ let MessageComposerElement = class extends LitElement {
       </button>
     `;
   }
+  renderStopButton() {
+    return html`
+      <button type="button"
+              class="btn btn-sm"
+              title="Antwort abbrechen"
+              ?disabled=${this.disabled}
+              @click=${this.onStopClick}>
+        <typo3-backend-icon identifier="actions-close" size="small"/>
+      </button>
+    `;
+  }
   renderAttachmentsBar(uploadEnabled, pickEnabled) {
     return html`
       <div>
         <button type="button"
                 class="chat-upload-trigger btn btn-sm btn-default"
                 ${ref(this.uploadTriggerRef)}
-                ?disabled=${this.disabled || !uploadEnabled}
+                ?disabled=${this.disabled || this.loading || !uploadEnabled}
                 title=${uploadEnabled ? "Datei hochladen" : "Kein Upload-Ordner verf\xFCgbar"}>
           <typo3-backend-icon identifier="actions-upload" size="small"/>
           Hochladen
         </button>
         <button type="button"
                 class="btn btn-sm btn-default"
-                ?disabled=${this.disabled || !pickEnabled}
+                ?disabled=${this.disabled || this.loading || !pickEnabled}
                 @click=${this.onPickClick}>
           <typo3-backend-icon identifier="actions-folder" size="small"/>
           Auswählen
@@ -239,17 +255,14 @@ __decorateClass([
   property()
 ], MessageComposerElement.prototype, "placeholder", 2);
 __decorateClass([
-  property({ attribute: "default-upload-folder" })
-], MessageComposerElement.prototype, "defaultUploadFolder", 2);
-__decorateClass([
-  property({ attribute: "file-browser-uri" })
-], MessageComposerElement.prototype, "fileBrowserUri", 2);
-__decorateClass([
   property({ attribute: "field-name" })
 ], MessageComposerElement.prototype, "fieldName", 2);
 __decorateClass([
   property({ type: Boolean, reflect: true })
 ], MessageComposerElement.prototype, "disabled", 2);
+__decorateClass([
+  property({ type: Boolean, reflect: true })
+], MessageComposerElement.prototype, "loading", 2);
 __decorateClass([
   property({ attribute: "submit-title" })
 ], MessageComposerElement.prototype, "submitTitle", 2);
@@ -259,9 +272,6 @@ __decorateClass([
 __decorateClass([
   state()
 ], MessageComposerElement.prototype, "attachments", 2);
-__decorateClass([
-  state()
-], MessageComposerElement.prototype, "hasSlottedAction", 2);
 __decorateClass([
   query("form")
 ], MessageComposerElement.prototype, "formEl", 2);

@@ -21,8 +21,6 @@ let NewTaskElement = class extends LitElement {
     this.returnUrl = "";
     this.workspaceId = 0;
     this.workspaceTitle = "";
-    this.defaultUploadFolder = "";
-    this.fileBrowserUri = "";
     this.submitting = false;
     this.errorMessage = "";
   }
@@ -77,8 +75,6 @@ let NewTaskElement = class extends LitElement {
         <hn-agent-message-composer
             ?disabled=${this.submitting}
             placeholder=${this.placeholder}
-            default-upload-folder=${this.defaultUploadFolder}
-            file-browser-uri=${this.fileBrowserUri}
             field-name="hn-agent-new-task"
             @submit=${this.onComposerSubmit}>
         </hn-agent-message-composer>
@@ -122,12 +118,6 @@ __decorateClass([
 __decorateClass([
   property({ attribute: "workspace-title" })
 ], NewTaskElement.prototype, "workspaceTitle", 2);
-__decorateClass([
-  property({ attribute: "default-upload-folder" })
-], NewTaskElement.prototype, "defaultUploadFolder", 2);
-__decorateClass([
-  property({ attribute: "file-browser-uri" })
-], NewTaskElement.prototype, "fileBrowserUri", 2);
 __decorateClass([
   state()
 ], NewTaskElement.prototype, "submitting", 2);

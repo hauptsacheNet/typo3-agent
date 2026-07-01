@@ -31,8 +31,6 @@ let ChatElement = class extends LitElement {
     this.taskWorkspaceTitle = "";
     this.activeWorkspaceId = 0;
     this.activeWorkspaceTitle = "";
-    this.defaultUploadFolder = "";
-    this.fileBrowserUri = "";
     this.initialMessages = [];
     this.initialChanges = [];
     this.changes = [];
@@ -87,7 +85,6 @@ let ChatElement = class extends LitElement {
   // -- Render ----------------------------------------------------------------
   render() {
     const mismatch = this.isWorkspaceMismatch();
-    const inputDisabled = this.loading || mismatch;
     const showHeader = mismatch || !!this.errorMessage;
     return html`
             ${showHeader ? html`
@@ -113,20 +110,12 @@ let ChatElement = class extends LitElement {
             <div class="chat-footer">
                 <hn-agent-message-composer
                         ${ref(this.composerRef)}
-                        ?disabled=${inputDisabled}
+                        ?disabled=${mismatch}
+                        ?loading=${this.loading}
                         placeholder="Type a follow-up message\u2026"
-                        default-upload-folder=${this.defaultUploadFolder}
-                        file-browser-uri=${this.fileBrowserUri}
                         field-name="hn-agent-chat"
-                        @submit=${this.onComposerSubmit}>
-                    ${this.loading ? html`
-                            <button slot="action" type="button"
-                                    class="btn btn-sm"
-                                    title="Antwort abbrechen"
-                                    ?disabled=${this.abortController === null}
-                                    @click=${this.onStop}>
-                                <typo3-backend-icon identifier="actions-close" size="small"/>
-                            </button>` : nothing}
+                        @submit=${this.onComposerSubmit}
+                        @stop=${this.onStop}>
                 </hn-agent-message-composer>
             </div>
         `;
@@ -700,12 +689,6 @@ __decorateClass([
 __decorateClass([
   property({ attribute: "active-workspace-title" })
 ], ChatElement.prototype, "activeWorkspaceTitle", 2);
-__decorateClass([
-  property({ attribute: "default-upload-folder" })
-], ChatElement.prototype, "defaultUploadFolder", 2);
-__decorateClass([
-  property({ attribute: "file-browser-uri" })
-], ChatElement.prototype, "fileBrowserUri", 2);
 __decorateClass([
   property({
     attribute: "initial-messages",

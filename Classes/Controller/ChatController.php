@@ -87,7 +87,7 @@ class ChatController
             'instructions' => (bool)($collapsedTables['agent-instructions'] ?? false),
         ];
 
-        $uploadContext = $this->promptRenderer->getUploadContext($pageId, '', 'hn-agent-new-task');
+        $this->promptRenderer->registerUploadContext($pageId, '');
 
         $instructions = $this->instructionRepository->findActive();
         $canEditInstructions = (bool)$GLOBALS['BE_USER']->check('tables_modify', 'tx_agent_instruction');
@@ -120,8 +120,6 @@ class ChatController
             'placeholder' => $placeholder,
             'workspace' => $workspace,
             'collapsed' => $collapsed,
-            'defaultUploadFolder' => $uploadContext['defaultUploadFolder'],
-            'fileBrowserUri' => $uploadContext['fileBrowserUri'],
             'instructions' => $instructions,
             'canEditInstructions' => $canEditInstructions,
             'newInstructionUri' => $newInstructionUri,
@@ -192,7 +190,7 @@ class ChatController
         $isNewTask = (int)($task['status'] ?? 0) === TaskStatus::Pending->value;
         $changes = $this->repository->getChanges($taskUid);
 
-        $uploadContext = $this->promptRenderer->getUploadContext($pageId, $contextTable, 'hn-agent-chat');
+        $this->promptRenderer->registerUploadContext($pageId, $contextTable);
 
         return $view->assignMultiple([
             'task' => $task,
@@ -208,8 +206,6 @@ class ChatController
             'returnUrl' => $returnUrl,
             'taskWorkspace' => $this->getWorkspaceInfoById((int)($task['workspace_id'] ?? 0)),
             'activeWorkspace' => $this->getActiveWorkspaceInfo(),
-            'defaultUploadFolder' => $uploadContext['defaultUploadFolder'],
-            'fileBrowserUri' => $uploadContext['fileBrowserUri'],
             'streamUri' => (string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks.streamMessage', [
                 'task' => $taskUid,
                 'id' => $pageId,

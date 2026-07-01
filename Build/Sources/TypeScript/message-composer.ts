@@ -15,15 +15,13 @@ export class MessageComposerElement extends LitElement {
   }
 
   @property() placeholder = '';
-  @property({attribute: 'default-upload-folder'}) defaultUploadFolder = '';
-  @property({attribute: 'file-browser-uri'}) fileBrowserUri = '';
   @property({attribute: 'field-name'}) fieldName = 'hn-agent-message-composer';
   @property({type: Boolean, reflect: true}) disabled = false;
+  @property({type: Boolean, reflect: true}) loading = false;
   @property({attribute: 'submit-title'}) submitTitle = '';
 
   @state() private message = '';
   @state() private attachments: Attachment[] = [];
-  @state() private hasSlottedAction = false;
 
   @query('form') private formEl!: HTMLFormElement;
   @query('textarea') private textareaEl!: HTMLTextAreaElement;
@@ -72,18 +70,6 @@ export class MessageComposerElement extends LitElement {
       new DragUploader(zoneEl);
     }
     this.uploadTriggerRef.value?.addEventListener('uploadSuccess', this.uploadSuccessListener);
-    this.detectSlottedAction();
-  }
-
-  override updated(): void {
-    this.detectSlottedAction();
-  }
-
-  private detectSlottedAction(): void {
-    const slotted = this.querySelector(':scope > [slot="action"]') !== null;
-    if (slotted !== this.hasSlottedAction) {
-      this.hasSlottedAction = slotted;
-    }
   }
 
   override disconnectedCallback(): void {
@@ -101,7 +87,7 @@ export class MessageComposerElement extends LitElement {
   }
 
   private onKeydown(e: KeyboardEvent): void {
-    if (this.disabled) return;
+    if (this.disabled || this.loading) return;
     if (e.key === 'Enter' && !e.shiftKey && this.canSubmit()) {
       e.preventDefault();
       this.formEl?.requestSubmit();
@@ -109,7 +95,7 @@ export class MessageComposerElement extends LitElement {
   }
 
   private canSubmit(): boolean {
-    return !this.disabled && (this.message.trim() !== '' || this.attachments.length > 0);
+    return !this.disabled && !this.loading && (this.message.trim() !== '' || this.attachments.length > 0);
   }
 
   private addAttachment(att: Attachment): void {
@@ -152,12 +138,30 @@ export class MessageComposerElement extends LitElement {
     this.attachments = this.attachments.filter((_, i) => i !== index);
   }
 
+  private get agentSettings(): Record<string, string> {
+    const settings = (TYPO3?.settings as Record<string, unknown> | undefined)?.Agent;
+    return (settings ?? {}) as Record<string, string>;
+  }
+
+  private get defaultUploadFolder(): string {
+    return this.agentSettings.defaultUploadFolder ?? '';
+  }
+
+  private get fileBrowserUri(): string {
+    const baseUri = this.agentSettings.elementBrowserUrl;
+    if (!baseUri) return '';
+    const bparams = `${this.fieldName}|||*|`;
+    const separator = baseUri.includes('?') ? '&' : '?';
+    return `${baseUri}${separator}mode=file&bparams=${encodeURIComponent(bparams)}`;
+  }
+
   private onPickClick(): void {
-    if (!this.fileBrowserUri || this.disabled) return;
+    const uri = this.fileBrowserUri;
+    if (!uri || this.disabled) return;
     window.addEventListener('message', this.elementBrowserListener);
     const modal = Modal.advanced({
       type: Modal.types.iframe,
-      content: this.fileBrowserUri,
+      content: uri,
       size: Modal.sizes.large,
     });
     modal.addEventListener('typo3-modal-hide', () => {
@@ -183,9 +187,13 @@ export class MessageComposerElement extends LitElement {
     }));
   }
 
+  private onStopClick(): void {
+    this.dispatchEvent(new CustomEvent('stop', {bubbles: true, composed: true}));
+  }
+
   override render() {
     const uploadEnabled = !!this.defaultUploadFolder;
-    const pickEnabled = !!this.fileBrowserUri;
+    const pickEnabled = this.fileBrowserUri !== '';
 
     return html`
       <div
@@ -201,7 +209,7 @@ export class MessageComposerElement extends LitElement {
               class="message-control"
               name="message"
               placeholder=${this.placeholder}
-              ?disabled=${this.disabled}
+              ?disabled=${this.disabled || this.loading}
               .value=${this.message}
               @input=${this.onInput}
               @keydown=${this.onKeydown}
@@ -221,9 +229,8 @@ export class MessageComposerElement extends LitElement {
 
           <div class="w-100 d-flex flex-row">
             ${this.renderAttachmentsBar(uploadEnabled, pickEnabled)}
-            <div class="composer-action-slot ms-auto">
-              <slot name="action"></slot>
-              ${this.hasSlottedAction ? nothing : this.renderDefaultSubmit()}
+            <div class="ms-auto">
+              ${this.loading ? this.renderStopButton() : this.renderDefaultSubmit()}
             </div>
           </div>
         </form>
@@ -248,20 +255,32 @@ export class MessageComposerElement extends LitElement {
     `;
   }
 
+  private renderStopButton(): TemplateResult {
+    return html`
+      <button type="button"
+              class="btn btn-sm"
+              title="Antwort abbrechen"
+              ?disabled=${this.disabled}
+              @click=${this.onStopClick}>
+        <typo3-backend-icon identifier="actions-close" size="small"/>
+      </button>
+    `;
+  }
+
   private renderAttachmentsBar(uploadEnabled: boolean, pickEnabled: boolean): TemplateResult {
     return html`
       <div>
         <button type="button"
                 class="chat-upload-trigger btn btn-sm btn-default"
                 ${ref(this.uploadTriggerRef)}
-                ?disabled=${this.disabled || !uploadEnabled}
+                ?disabled=${this.disabled || this.loading || !uploadEnabled}
                 title=${uploadEnabled ? 'Datei hochladen' : 'Kein Upload-Ordner verfügbar'}>
           <typo3-backend-icon identifier="actions-upload" size="small"/>
           Hochladen
         </button>
         <button type="button"
                 class="btn btn-sm btn-default"
-                ?disabled=${this.disabled || !pickEnabled}
+                ?disabled=${this.disabled || this.loading || !pickEnabled}
                 @click=${this.onPickClick}>
           <typo3-backend-icon identifier="actions-folder" size="small"/>
           Auswählen

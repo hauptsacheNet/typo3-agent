@@ -71,8 +71,6 @@ export class ChatElement extends LitElement {
     @property({attribute: 'task-workspace-title'}) taskWorkspaceTitle = '';
     @property({attribute: 'active-workspace-id', type: Number}) activeWorkspaceId = 0;
     @property({attribute: 'active-workspace-title'}) activeWorkspaceTitle = '';
-    @property({attribute: 'default-upload-folder'}) defaultUploadFolder = '';
-    @property({attribute: 'file-browser-uri'}) fileBrowserUri = '';
 
     @property({
         attribute: 'initial-messages',
@@ -165,7 +163,6 @@ export class ChatElement extends LitElement {
 
     override render() {
         const mismatch = this.isWorkspaceMismatch();
-        const inputDisabled = this.loading || mismatch;
         const showHeader = mismatch || !!this.errorMessage
         return html`
             ${showHeader ? html`
@@ -191,22 +188,12 @@ export class ChatElement extends LitElement {
             <div class="chat-footer">
                 <hn-agent-message-composer
                         ${ref(this.composerRef)}
-                        ?disabled=${inputDisabled}
+                        ?disabled=${mismatch}
+                        ?loading=${this.loading}
                         placeholder="Type a follow-up message\u2026"
-                        default-upload-folder=${this.defaultUploadFolder}
-                        file-browser-uri=${this.fileBrowserUri}
                         field-name="hn-agent-chat"
-                        @submit=${this.onComposerSubmit}>
-                    ${this.loading
-                        ? html`
-                            <button slot="action" type="button"
-                                    class="btn btn-sm"
-                                    title="Antwort abbrechen"
-                                    ?disabled=${this.abortController === null}
-                                    @click=${this.onStop}>
-                                <typo3-backend-icon identifier="actions-close" size="small"/>
-                            </button>`
-                        : nothing}
+                        @submit=${this.onComposerSubmit}
+                        @stop=${this.onStop}>
                 </hn-agent-message-composer>
             </div>
         `;

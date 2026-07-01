@@ -18,8 +18,6 @@ export class NewTaskElement extends LitElement {
   @property({attribute: 'return-url'}) returnUrl = '';
   @property({attribute: 'workspace-id', type: Number}) workspaceId = 0;
   @property({attribute: 'workspace-title'}) workspaceTitle = '';
-  @property({attribute: 'default-upload-folder'}) defaultUploadFolder = '';
-  @property({attribute: 'file-browser-uri'}) fileBrowserUri = '';
 
   @state() private submitting = false;
   @state() private errorMessage = '';
@@ -80,8 +78,6 @@ export class NewTaskElement extends LitElement {
         <hn-agent-message-composer
             ?disabled=${this.submitting}
             placeholder=${this.placeholder}
-            default-upload-folder=${this.defaultUploadFolder}
-            file-browser-uri=${this.fileBrowserUri}
             field-name="hn-agent-new-task"
             @submit=${this.onComposerSubmit}>
         </hn-agent-message-composer>

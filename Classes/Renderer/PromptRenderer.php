@@ -39,14 +39,18 @@ class PromptRenderer
     }
 
     /**
-     * Resolve the upload-context bundle (default upload folder, file browser
-     * URI) for the chat composer / new-task form. Also injects the
-     * DragUploader's inline language labels — they're read from
-     * TYPO3.lang["file_upload.*"] but not loaded by the module shell.
-     *
-     * @return array{defaultUploadFolder:string,fileBrowserUri:string}
+     * Registriert alles, was der Message-Composer im Modul-Iframe braucht, um
+     * Upload & File-Picking betreiben zu können — als Inline-Settings, die der
+     * Composer im JS liest:
+     *   - `TYPO3.settings.Agent.defaultUploadFolder` (kontextabhängig via
+     *     DefaultUploadFolderResolver aus pageId + tableName + BE_USER auf-
+     *     gelöst).
+     *   - `TYPO3.settings.Agent.elementBrowserUrl` (Basis-URL des Element-
+     *     Browsers; der Core setzt sie nur im äußeren Backend-Shell, nicht im
+     *     Modul-Iframe).
+     *   - DragUploader-Sprach-Labels (`TYPO3.lang["file_upload.*"]`).
      */
-    public function getUploadContext(int $pageId, string $tableName, string $browserFieldName): array
+    public function registerUploadContext(int $pageId, string $tableName): void
     {
         $beUser = $GLOBALS['BE_USER'] ?? null;
         $uploadFolder = $beUser instanceof BackendUserAuthentication
@@ -55,14 +59,12 @@ class PromptRenderer
         $defaultUploadFolder = $uploadFolder instanceof Folder ? $uploadFolder->getCombinedIdentifier() : '';
 
         $this->pageRenderer->addInlineLanguageLabelFile('EXT:core/Resources/Private/Language/locallang_core.xlf', 'file_upload');
-
-        return [
-            'defaultUploadFolder' => $defaultUploadFolder,
-            'fileBrowserUri' => (string)$this->uriBuilder->buildUriFromRoute('wizard_element_browser', [
-                'mode' => 'file',
-                'bparams' => $browserFieldName . '|||*|',
-            ]),
-        ];
+        $this->pageRenderer->addInlineSetting('Agent', 'defaultUploadFolder', $defaultUploadFolder);
+        $this->pageRenderer->addInlineSetting(
+            'Agent',
+            'elementBrowserUrl',
+            (string)$this->uriBuilder->buildUriFromRoute('wizard_element_browser'),
+        );
     }
 
     /**
@@ -77,21 +79,19 @@ class PromptRenderer
 
         $actionUri = (string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks.new', ['id' => $pageId]);
         $workspace = $this->getCurrentWorkspaceInfo();
-        $upload = $this->getUploadContext($pageId, $tableName, 'hn-agent-new-task');
+        $this->registerUploadContext($pageId, $tableName);
 
         $this->pageRenderer->addInlineLanguageLabelFile('EXT:agent/Resources/Private/Language/locallang.xlf');
         $this->pageRenderer->addCssFile('EXT:agent/Resources/Public/Css/agent-chat.css');
 
         return sprintf(
-            '<hn-agent-new-task action-uri="%s" table="%s" uid="%d" placeholder="%s" workspace-id="%d" workspace-title="%s" default-upload-folder="%s" file-browser-uri="%s"></hn-agent-new-task>',
+            '<hn-agent-new-task action-uri="%s" table="%s" uid="%d" placeholder="%s" workspace-id="%d" workspace-title="%s"></hn-agent-new-task>',
             htmlspecialchars($actionUri, ENT_QUOTES | ENT_HTML5),
             htmlspecialchars($tableName, ENT_QUOTES | ENT_HTML5),
             $uid,
             htmlspecialchars($placeholder, ENT_QUOTES | ENT_HTML5),
             $workspace['id'],
             htmlspecialchars($workspace['title'], ENT_QUOTES | ENT_HTML5),
-            htmlspecialchars($upload['defaultUploadFolder'], ENT_QUOTES | ENT_HTML5),
-            htmlspecialchars($upload['fileBrowserUri'], ENT_QUOTES | ENT_HTML5),
         );
     }
 
@@ -107,7 +107,7 @@ class PromptRenderer
 
         $actionUri = (string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks.new', ['id' => $pageId]);
         $workspace = $this->getCurrentWorkspaceInfo();
-        $upload = $this->getUploadContext($pageId, $tableName, 'hn-agent-new-task');
+        $this->registerUploadContext($pageId, $tableName);
 
         $this->pageRenderer->addInlineSetting('Agent', 'newTaskUri', $actionUri);
         $this->pageRenderer->addInlineSetting('Agent', 'table', $tableName);
@@ -115,8 +115,6 @@ class PromptRenderer
         $this->pageRenderer->addInlineSetting('Agent', 'placeholder', $placeholder);
         $this->pageRenderer->addInlineSetting('Agent', 'workspaceId', (string)$workspace['id']);
         $this->pageRenderer->addInlineSetting('Agent', 'workspaceTitle', $workspace['title']);
-        $this->pageRenderer->addInlineSetting('Agent', 'defaultUploadFolder', $upload['defaultUploadFolder']);
-        $this->pageRenderer->addInlineSetting('Agent', 'fileBrowserUri', $upload['fileBrowserUri']);
         $this->pageRenderer->addInlineLanguageLabelFile('EXT:agent/Resources/Private/Language/locallang.xlf');
         $this->pageRenderer->addCssFile('EXT:agent/Resources/Public/Css/agent-chat.css');
         $this->pageRenderer->loadJavaScriptModule('@hn/agent/auto-insert-new-task.js');
