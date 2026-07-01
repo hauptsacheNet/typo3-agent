@@ -6,6 +6,7 @@
 
     <f:asset.module identifier="@hn/agent/new-task-element.js"/>
     <f:asset.module identifier="@hn/agent/instruction-content-modal.js"/>
+    <f:asset.module identifier="@hn/agent/user-filter.js"/>
     <f:asset.module identifier="@typo3/backend/recordlist.js"/>
     <f:asset.css identifier="hn-agent-chat" href="EXT:agent/Resources/Public/Css/agent-chat.css"/>
     <hn-agent-new-task action-uri="{newUri}"
@@ -29,11 +30,34 @@
     }"/>
 
 
+    <f:if condition="{isAdmin} && {taskCreators}">
+        <div class="mb-3" style="max-width: 20rem;">
+            <label for="agent-filter-user" class="form-label">
+                <f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:index.filter.user.label"/>
+            </label>
+            <select id="agent-filter-user" class="form-select" data-agent-user-filter>
+                <option value="0">
+                    <f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:index.filter.user.all"/>
+                </option>
+                <f:for each="{taskCreators}" as="creator">
+                    <option value="{creator.uid}"
+                            {f:if(condition: '{creator.uid} == {filterUserId}', then: 'selected="selected"')}>
+                        <f:if condition="{creator.realName}">
+                            <f:then>{creator.realName} ({creator.username})</f:then>
+                            <f:else>{creator.username}</f:else>
+                        </f:if>
+                    </option>
+                </f:for>
+            </select>
+        </div>
+    </f:if>
+
     <f:if condition="{tasks}">
         <f:then>
             <f:render partial="TaskTable" arguments="{
                 tasks: tasks,
                 pageId: pageId,
+                showUser: isAdmin,
                 identifier: 'agent-tasks-current',
                 headingLabel: 'LLL:EXT:agent/Resources/Private/Language/locallang.xlf:index.section.current',
                 collapsed: collapsed.current
@@ -51,6 +75,7 @@
             tasks: subpageTasks,
             pageId: pageId,
             showPage: 1,
+            showUser: isAdmin,
             identifier: 'agent-tasks-subpages',
             headingLabel: 'LLL:EXT:agent/Resources/Private/Language/locallang.xlf:index.section.subpages',
             collapsed: collapsed.subpages

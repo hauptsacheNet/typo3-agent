@@ -65,10 +65,50 @@ class ChatController
         $view->setTitle($GLOBALS['LANG']->sL('LLL:EXT:agent/Resources/Private/Language/locallang.xlf:index.heading'));
 
         $userId = (int)($GLOBALS['BE_USER']->user['uid'] ?? 0);
-        $tasks = $this->repository->findTasksForUser($userId, [$pageId]);
+        $isAdmin = (bool)($GLOBALS['BE_USER']->user['admin'] ?? false);
 
         $descendantPageIds = $this->collectDescendantPageIds($pageId);
-        $subpageTasks = $this->repository->findTasksForUser($userId, $descendantPageIds);
+
+        // Admins: default to "all users", optional narrowing via ?filterUser=<uid>.
+        // Non-admins always see only their own tasks.
+        $filterUserId = (int)($request->getQueryParams()['filterUser'] ?? 0);
+        if ($isAdmin) {
+            $effectiveUserId = $filterUserId > 0 ? $filterUserId : null;
+            $taskCreators = $this->repository->findTaskCreatorsOnPages(array_merge([$pageId], $descendantPageIds));
+        } else {
+            $effectiveUserId = $userId;
+            $filterUserId = 0;
+            $taskCreators = [];
+        }
+
+        $tasks = $this->repository->findTasksForUser($effectiveUserId, [$pageId]);
+        $subpageTasks = $this->repository->findTasksForUser($effectiveUserId, $descendantPageIds);
+
+        // Enrich tasks with a display label for the creator so the admin
+        // view can show a user column. Non-admins never see the column, so
+        // the enrichment is skipped for them.
+        if ($isAdmin && $taskCreators !== []) {
+            $userLabels = [];
+            foreach ($taskCreators as $creator) {
+                $realName = trim((string)($creator['realName'] ?? ''));
+                $username = (string)($creator['username'] ?? '');
+                $userLabels[(int)$creator['uid']] = $realName !== ''
+                    ? $realName . ' (' . $username . ')'
+                    : $username;
+            }
+            $applyLabel = static function (array &$row) use ($userLabels): void {
+                $uid = (int)($row['cruser_id'] ?? 0);
+                $row['userLabel'] = $userLabels[$uid] ?? ('User #' . $uid);
+            };
+            foreach ($tasks as &$task) {
+                $applyLabel($task);
+            }
+            unset($task);
+            foreach ($subpageTasks as &$task) {
+                $applyLabel($task);
+            }
+            unset($task);
+        }
 
         $this->addReloadButton($view, $request);
 
@@ -124,6 +164,9 @@ class ChatController
             'canEditInstructions' => $canEditInstructions,
             'newInstructionUri' => $newInstructionUri,
             'isLiveWorkspace' => (bool)$workspace['isLive'],
+            'isAdmin' => $isAdmin,
+            'taskCreators' => $taskCreators,
+            'filterUserId' => $filterUserId,
         ])->renderResponse('Chat/Index');
     }
 

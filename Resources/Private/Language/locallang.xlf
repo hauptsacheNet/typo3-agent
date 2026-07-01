@@ -33,6 +33,18 @@
             <trans-unit id="index.column.page" resname="index.column.page">
                 <source>Page</source>
             </trans-unit>
+            <trans-unit id="index.column.user" resname="index.column.user">
+                <source>User</source>
+            </trans-unit>
+            <trans-unit id="index.filter.user.label" resname="index.filter.user.label">
+                <source>User</source>
+            </trans-unit>
+            <trans-unit id="index.filter.user.all" resname="index.filter.user.all">
+                <source>All users</source>
+            </trans-unit>
+            <trans-unit id="index.filter.submit" resname="index.filter.submit">
+                <source>Filter</source>
+            </trans-unit>
             <trans-unit id="status.pending" resname="status.pending">
                 <source>Pending</source>
             </trans-unit>

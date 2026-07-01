@@ -716,7 +716,7 @@ class AgentService implements LoggerAwareInterface
             $data = (string)($item['data'] ?? '');
             if ($data === '') {
                 continue;
-            }
+        }
             $dataUri = 'data:' . $mime . ';base64,' . $data;
             if (str_starts_with($mime, 'image/')) {
                 $blocks[] = ['type' => 'image_url', 'image_url' => ['url' => $dataUri]];

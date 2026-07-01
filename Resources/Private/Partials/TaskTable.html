@@ -31,6 +31,7 @@
                     <col style="width:3em">
                     <col>
                     <f:if condition="{showPage}"><col></f:if>
+                    <f:if condition="{showUser}"><col></f:if>
                     <col>
                     <col>
                     <col class="col-control">
@@ -41,6 +42,9 @@
                         <th>Title</th>
                         <f:if condition="{showPage}">
                             <th><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:index.column.page"/></th>
+                        </f:if>
+                        <f:if condition="{showUser}">
+                            <th><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:index.column.user"/></th>
                         </f:if>
                         <th>Status</th>
                         <th>Updated</th>
@@ -56,6 +60,9 @@
                                 <td class="col-title col-responsive nowrap">
                                     <a href="{f:be.uri(route:'web_typo3_agent_tasks', parameters:'{id:task.pid}')}">{task.pageTitle}</a>
                                 </td>
+                            </f:if>
+                            <f:if condition="{showUser}">
+                                <td class="nowrap">{task.userLabel}</td>
                             </f:if>
                             <td>
                                 <f:switch expression="{task.status}">

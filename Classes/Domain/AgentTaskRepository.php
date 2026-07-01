@@ -53,29 +53,33 @@ class AgentTaskRepository
     }
 
     /**
-     * Load tasks for a backend user, restricted to one or more page UIDs.
+     * Load tasks restricted to one or more page UIDs.
      * Empty $pageIds yields an empty result (no query is dispatched).
      *
+     * `$userId` filters by creator; pass null to load tasks of all users
+     * (only intended for admin views).
+     *
      * @param int[] $pageIds
-     * @return array<int, array{uid:int,pid:int,title:string,status:int,tstamp:int,crdate:int,pageTitle:string}>
+     * @return array<int, array{uid:int,pid:int,title:string,status:int,tstamp:int,crdate:int,cruser_id:int,pageTitle:string}>
      */
-    public function findTasksForUser(int $userId, array $pageIds, int $limit = 500): array
+    public function findTasksForUser(?int $userId, array $pageIds, int $limit = 500): array
     {
         if ($pageIds === []) {
             return [];
         }
         $qb = $this->connectionPool->getQueryBuilderForTable(self::TABLE);
-        $tasks = $qb
-            ->select('uid', 'pid', 'title', 'status', 'tstamp', 'crdate')
+        $qb
+            ->select('uid', 'pid', 'title', 'status', 'tstamp', 'crdate', 'cruser_id')
             ->from(self::TABLE)
             ->where(
-                $qb->expr()->eq('cruser_id', $qb->createNamedParameter($userId, ParameterType::INTEGER)),
                 $qb->expr()->in('pid', $qb->createNamedParameter($pageIds, \Doctrine\DBAL\ArrayParameterType::INTEGER)),
             )
             ->orderBy('tstamp', 'DESC')
-            ->setMaxResults($limit)
-            ->executeQuery()
-            ->fetchAllAssociative();
+            ->setMaxResults($limit);
+        if ($userId !== null) {
+            $qb->andWhere($qb->expr()->eq('cruser_id', $qb->createNamedParameter($userId, ParameterType::INTEGER)));
+        }
+        $tasks = $qb->executeQuery()->fetchAllAssociative();
 
         $titleCache = [];
         foreach ($tasks as &$task) {
@@ -90,6 +94,35 @@ class AgentTaskRepository
         }
         unset($task);
         return $tasks;
+    }
+
+    /**
+     * Distinct list of backend users that created at least one task on the
+     * given pages. Used to populate the admin's user-filter dropdown.
+     *
+     * @param int[] $pageIds
+     * @return array<int, array{uid:int,username:string,realName:string}>
+     */
+    public function findTaskCreatorsOnPages(array $pageIds): array
+    {
+        if ($pageIds === []) {
+            return [];
+        }
+        $qb = $this->connectionPool->getQueryBuilderForTable(self::TABLE);
+        $qb->getRestrictions()->removeAll();
+        return $qb
+            ->select('u.uid', 'u.username', 'u.realName')
+            ->from(self::TABLE, 't')
+            ->join('t', 'be_users', 'u', $qb->expr()->eq('u.uid', $qb->quoteIdentifier('t.cruser_id')))
+            ->where(
+                $qb->expr()->in('t.pid', $qb->createNamedParameter($pageIds, \Doctrine\DBAL\ArrayParameterType::INTEGER)),
+                $qb->expr()->eq('u.deleted', 0),
+            )
+            ->groupBy('u.uid', 'u.username', 'u.realName')
+            ->orderBy('u.realName', 'ASC')
+            ->addOrderBy('u.username', 'ASC')
+            ->executeQuery()
+            ->fetchAllAssociative();
     }
 
     /**
