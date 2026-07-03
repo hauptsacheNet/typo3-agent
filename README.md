@@ -1,6 +1,6 @@
 # TYPO3 AI Agent Extension
 
-Integrates an AI agent directly into TYPO3 by calling the MCP ToolRegistry natively from PHP and communicating with an OpenAI-compatible LLM API. Editors create task records in the List module, and a CLI command processes them through an agent loop.
+Integrates an AI agent directly into TYPO3 by calling the MCP `ToolRegistry` natively from PHP and talking to an OpenAI-compatible LLM API. Editors work with the agent through a dedicated backend chat module; a CLI command additionally processes pending task records for scheduled/batch runs.
 
 ## Installation
 
@@ -14,6 +14,8 @@ Then activate the extension in TYPO3 backend or via CLI:
 bin/typo3 extension:activate agent
 ```
 
+For non-composer TYPO3 installations the TER package bundles the required PHP libraries (PhpOffice, `smalot/pdfparser`); a fallback autoloader in `ext_localconf.php` loads them when no composer autoloader has already provided them.
+
 ## Configuration
 
 Go to **Settings > Extension Configuration > agent** and configure:
@@ -22,16 +24,19 @@ Go to **Settings > Extension Configuration > agent** and configure:
 |---------|---------|-------------|
 | `apiUrl` | `https://openrouter.ai/api/v1/` | OpenAI-compatible API base URL |
 | `apiKey` | *(empty)* | API key for authentication |
-| `model` | `anthropic/claude-haiku-4-5` | Model identifier |
+| `model` | `anthropic/claude-haiku-4.5` | Model identifier (dropdown: Claude Opus 4.8 / Claude Haiku 4.5) |
 | `systemPrompt` | *(built-in)* | System prompt for the agent |
 | `maxIterations` | `20` | Safety limit for the agent loop |
+| `reasoningEffort` | `medium` | Extended-reasoning strength (`off`, `low`, `medium`, `high`) |
 
 ### Provider Examples
+
+The `model` field ships as a curated dropdown. To use another provider or model ID, adjust `ext_conf_template.txt` (or ship a site-specific override).
 
 **OpenRouter** (default — access to many models):
 ```
 apiUrl: https://openrouter.ai/api/v1/
-model: anthropic/claude-haiku-4-5
+model: anthropic/claude-haiku-4.5
 ```
 
 **OpenAI**:
@@ -48,7 +53,32 @@ model: your-model-id
 
 ## Usage
 
-### Creating Tasks
+### Backend Chat Module
+
+The primary UX is the **Web > TYPO3 Agent Tasks** backend module. It offers:
+
+- An **overview of the agent instructions** that shape the assistant's behavior (see the Agent Instructions section below).
+- An **overview of chats scoped to the current page**, 
+- An **overview of chats on any subpage** 
+- An **individual chat view** that shows the full conversation together with the **associated workspace changes** — the records the agent touched in the current workspace.
+
+### Attachments & Multimodal
+
+Files can be dragged onto the composer or picked via the file browser. The chat UI pre-flights each attachment against an allowlist and size cap so users see up-front whether a file will be embedded as content for the LLM or only referenced by metadata.
+
+| Kind | Formats | Size cap |
+|------|---------|----------|
+| Image | PNG, JPEG, WebP, GIF | 5 MB |
+| PDF | PDF | 50 MB |
+| Spreadsheet | XLSX, ODS, XLS, CSV | 25 MB |
+| Document | DOCX, ODT, RTF, TXT, Markdown, HTML | 25 MB |
+| Presentation | PPTX, ODP | 25 MB |
+
+Attachments enter the conversation as multimodal tool messages via the MCP tools listed under **Architecture** below (image bytes for `ViewImageTool`, extracted text/pages for the PDF and Office tools).
+
+### Creating Tasks Directly (List Module / CLI)
+
+For scheduled or automated runs — batch seeding, cron-driven workflows, external triggers — you can also create task records directly:
 
 1. Open the **List module** in TYPO3 backend
 2. Navigate to the page you want the agent to work on
@@ -112,7 +142,7 @@ visible in the List module and in the chat info panel.
 chat (both the chat list and individual chats), and — like any record — in the
 **List module**.
 
-### Running the Agent
+### Running the Agent from the CLI
 
 Process all pending tasks:
 
@@ -134,12 +164,15 @@ bin/typo3 agent:run --limit=5
 
 ### Task Lifecycle
 
+State transitions run through `Classes/Domain/TaskStateMachine.php`.
+
 | Status | Value | Description |
 |--------|-------|-------------|
 | Pending | 0 | Ready to be picked up by `agent:run` |
 | In Progress | 1 | Currently being processed |
 | Ended | 2 | Agent finished, result available |
 | Failed | 3 | Error occurred, messages preserved |
+| Cancelled | 4 | Run was canceled before completion |
 
 ### Resuming Failed Tasks
 
@@ -155,17 +188,33 @@ Or resume directly: `bin/typo3 agent:run --task=42`
 
 The `agent:run` command is schedulable — you can set it up as a recurring task in the TYPO3 Scheduler to automatically process pending tasks.
 
+### Workspaces
+
+Agent tasks are workspace-aware: each task record stores a `workspace_id` (set automatically) and the agent runs against that workspace's data. Two event listeners hook into the workspace lifecycle: one clears change tracking on publish, the other filters the workspace diff view to the records the task actually touched. In the chat UI, the workspace-changes drawer surfaces those tracked records inline.
+
 ## Architecture
 
-The extension uses the `ToolRegistry` from `hn/typo3-mcp-server` to access TYPO3 tools (GetPage, GetPageTree, Search, ReadTable, WriteTable, etc.) natively from PHP without MCP protocol overhead.
+The extension uses the `ToolRegistry` from `hn/typo3-mcp-server` to access the core TYPO3 tools (GetPage, GetPageTree, Search, ReadTable, WriteTable, …) natively from PHP without MCP protocol overhead.
 
-The `messages` JSON field in each task record stores the full OpenAI messages array — the complete conversation state. This enables resumability and future chat-like interfaces.
+On top of that it registers its own MCP tools under `Classes/MCP/Tool/`:
+
+- `GetInstructionTool` — progressive disclosure of on-demand instruction bodies.
+- `GetFileInfoTool` — cheap FAL metadata lookup.
+- `ViewImageTool`, `ViewPdfPageTool` — image and PDF-page bytes returned as multimodal content.
+- `ReadPdfTextTool` — extracts text from PDF attachments via `smalot/pdfparser`.
+- `ReadSpreadsheetTool`, `ReadDocumentTool`, `ReadPresentationTool` — structured content extraction from Office and OpenDocument files via PhpOffice.
+
+The `messages` JSON field in each task record stores the full OpenAI messages array — the complete conversation state. This enables resumability, the SSE streaming loop, and the chat UI's message history.
 
 ## Development
 
-Run the functional tests:
+Run the functional tests (SQLite via `typo3/testing-framework`):
 
 ```bash
 composer install
 composer test
 ```
+
+The `bin/typo3 agent:repro-multimodal` command (see `Classes/Command/ReproMultimodalCommand.php`) probes which LLM providers accept multimodal tool results — useful when adding or debugging providers.
+
+TER release builds run through `composer build:ter` (see `Build/build-ter.sh`) and a matching GitHub Actions workflow. Functional tests also run in CI across the supported PHP and TYPO3 matrix.
