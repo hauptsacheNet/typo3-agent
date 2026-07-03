@@ -40,8 +40,10 @@ return [
         ],
         'iconfile' => 'EXT:agent/Resources/Public/Icons/Extension.svg',
         'searchFields' => 'title,description,instruction',
+        'rootLevel' => -1,
         'security' => [
             'ignorePageTypeRestriction' => true,
+            'ignoreRootLevelRestriction' => true,
         ],
     ],
     'types' => [
