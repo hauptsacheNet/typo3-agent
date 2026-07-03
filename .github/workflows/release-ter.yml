@@ -1,0 +1,85 @@
+name: Release to TER
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (without v prefix)'
+        required: false
+        default: '0.0.0-dev'
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  release:
+    name: Build and publish to TER
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: zip
+          coverage: none
+
+      - name: Determine and validate version
+        id: version
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            VERSION="${TAG_NAME#v}"
+          else
+            VERSION="${INPUT_VERSION}"
+          fi
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
+            echo "Error: Invalid version format: $VERSION" >&2
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Install tailor
+        run: composer global require typo3/tailor:^1 --prefer-dist --no-progress
+
+      - name: Set version in ext_emconf.php
+        run: php ~/.composer/vendor/bin/tailor set-version "${{ steps.version.outputs.version }}" --no-docs
+
+      - name: Build TER zip
+        run: composer build:ter
+
+      - name: Upload zip as build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent_${{ steps.version.outputs.version }}
+          path: dist/*.zip
+
+      - name: Attach zip to GitHub release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG_NAME" dist/*.zip --clobber
+
+      - name: Publish to TER
+        if: github.event_name == 'release'
+        env:
+          TYPO3_API_TOKEN: ${{ secrets.TYPO3_API_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          RELEASE_BODY: ${{ github.event.release.body }}
+        run: |
+          COMMENT_FILE="$(mktemp)"
+          printf '%s' "$RELEASE_BODY" > "$COMMENT_FILE"
+          php ~/.composer/vendor/bin/tailor ter:publish \
+            --path .build/agent \
+            --comment "$(cat "$COMMENT_FILE")" \
+            "$VERSION" \
+            agent
+          rm -f "$COMMENT_FILE"
