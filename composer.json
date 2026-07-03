@@ -21,7 +21,8 @@
         "phpoffice/phpword": "^1.4",
         "smalot/pdfparser": "^2.12",
         "typo3/cms-backend": "^13.4|^14.3",
-        "typo3/cms-core": "^13.4|^14.3"
+        "typo3/cms-core": "^13.4|^14.3",
+        "typo3/cms-workspaces": "^13.4 || ^14.3"
     },
     "require-dev": {
         "typo3/testing-framework": "^9.2.0",
@@ -48,7 +49,8 @@
         ],
         "test:functional": [
             "phpunit -c phpunit.xml.dist"
-        ]
+        ],
+        "build:ter": "bash Build/build-ter.sh"
     },
     "config": {
         "allow-plugins": {

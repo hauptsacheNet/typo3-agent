@@ -14,6 +14,7 @@ $EM_CONF[$_EXTKEY] = [
             'typo3' => '13.4.0-14.99.99',
             'php' => '8.1.0-8.4.99',
             'mcp_server' => '0.1.0-0.99.99',
+            'workspaces' => '13.4.0-14.99.99',
         ],
         'conflicts' => [],
         'suggests' => [],
