@@ -4,7 +4,7 @@ apiUrl = https://openrouter.ai/api/v1/
 # cat=basic/api/020; type=string; label=API Key: Bearer token for the LLM API
 apiKey =
 
-# cat=basic/api/030; type=options[Claude Opus 4.8 (Anthropic)=anthropic/claude-opus-4.8,Claude Haiku 4.5 (Anthropic)=anthropic/claude-haiku-4.5]; label=Model: LLM-Modell auswählen
+# cat=basic/api/030; type=user[Hn\Agent\Configuration\ModelFieldRenderer->render]; label=Model: LLM-Modell (Slug wie 'anthropic/claude-haiku-4.5'; Autocomplete lädt aus dem /v1/models-Endpoint des konfigurierten Providers)
 model = anthropic/claude-haiku-4.5
 
 # cat=basic/agent/040; type=text; label=System Prompt: Initial system prompt for the agent
