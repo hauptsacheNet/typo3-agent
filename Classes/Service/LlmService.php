@@ -79,9 +79,12 @@ class LlmService implements LoggerAwareInterface
      * Assemble the request body. The stream flag controls whether `stream: true`
      * is added; model/messages/tools/reasoning are shared between both modes.
      *
+     * Visibility is protected so unit tests can assert the assembled body
+     * (server tools, reasoning) via a test-only subclass without live HTTP.
+     *
      * @return array<string, mixed>
      */
-    private function buildRequestBody(array $messages, array $tools, bool $stream, ?string $modelOverride = null): array
+    protected function buildRequestBody(array $messages, array $tools, bool $stream, ?string $modelOverride = null): array
     {
         $config = $this->getConfig();
         $body = [
@@ -94,8 +97,33 @@ class LlmService implements LoggerAwareInterface
         if (!empty($tools)) {
             $body['tools'] = $tools;
         }
+        $this->applyServerTools($body, $config);
         $this->applyReasoning($body, $config);
         return $body;
+    }
+
+    /**
+     * Append OpenRouter's server-side tools to the request when enabled.
+     *
+     * Server tools carry a `openrouter:<name>` type and are executed by
+     * OpenRouter itself: the model may call them, OpenRouter runs them and
+     * feeds the result straight back into the model's context. The client
+     * never receives a tool_call to execute, so the agent loop needs no
+     * counterpart handler — enabling the tool is purely additive here.
+     *
+     * `web_fetch` lets the agent retrieve and read the content of a URL.
+     *
+     * @param array<string, mixed> $body
+     * @param array{webFetch: bool} $config
+     */
+    private function applyServerTools(array &$body, array $config): void
+    {
+        if (empty($config['webFetch'])) {
+            return;
+        }
+        $tools = $body['tools'] ?? [];
+        $tools[] = ['type' => 'openrouter:web_fetch'];
+        $body['tools'] = $tools;
     }
 
     /**
@@ -397,7 +425,7 @@ class LlmService implements LoggerAwareInterface
     /**
      * Resolve and validate extension configuration. Fills defaults.
      *
-     * @return array{apiUrl: string, apiKey: string, model: string, reasoningEffort: string}
+     * @return array{apiUrl: string, apiKey: string, model: string, reasoningEffort: string, webFetch: bool}
      */
     private function getConfig(): array
     {
@@ -411,6 +439,7 @@ class LlmService implements LoggerAwareInterface
             'apiKey' => (string)$apiKey,
             'model' => (string)($config['model'] ?? 'anthropic/claude-haiku-4-5'),
             'reasoningEffort' => (string)($config['reasoningEffort'] ?? 'off'),
+            'webFetch' => (bool)($config['webFetch'] ?? true),
         ];
     }
 
