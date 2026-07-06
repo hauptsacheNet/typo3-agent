@@ -28,6 +28,7 @@ Go to **Settings > Extension Configuration > agent** and configure:
 | `systemPrompt` | *(built-in)* | System prompt for the agent |
 | `maxIterations` | `20` | Safety limit for the agent loop |
 | `reasoningEffort` | `medium` | Extended-reasoning strength (`off`, `low`, `medium`, `high`) |
+| `webFetch` | `1` | Enable OpenRouter's server-side `web_fetch` tool so the agent can retrieve and read URLs (executed by OpenRouter, no local handler needed) |
 
 ### Provider Examples
 
