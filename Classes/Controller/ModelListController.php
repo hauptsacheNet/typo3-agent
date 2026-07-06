@@ -46,7 +46,10 @@ class ModelListController
             return new JsonResponse(['models' => [], 'error' => 'apiUrl or apiKey not configured.']);
         }
 
-        $cacheId = 'agent_models_' . md5($apiUrl);
+        // Include apiKey so correcting a typo'd key (or switching accounts on
+        // the same provider URL) doesn't keep serving the previous account's
+        // model list for up to CACHE_LIFETIME.
+        $cacheId = 'agent_models_' . md5($apiUrl . "\0" . $apiKey);
         $cached = $this->cache->get($cacheId);
         if (is_array($cached)) {
             return new JsonResponse(['models' => $cached, 'cached' => true]);
