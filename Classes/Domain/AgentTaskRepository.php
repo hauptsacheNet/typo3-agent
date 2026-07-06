@@ -148,6 +148,34 @@ class AgentTaskRepository
     }
 
     /**
+     * Bulk-Reset für PHP-Timeout-Recovery: setzt alle InProgress-Tasks, deren
+     * `tstamp` länger als `$staleAfterSeconds` zurückliegt, atomar auf Pending
+     * zurück. Der reguläre Pending-Scan greift sie danach wieder auf, und
+     * `AgentService::run()` setzt aus den persistierten `messages` fort.
+     *
+     * Parallele Aufrufe sind unkritisch: nach dem ersten UPDATE greift die
+     * WHERE-Bedingung `status = InProgress` nicht mehr, doppelter Reclaim
+     * ist ausgeschlossen.
+     *
+     * @return int Anzahl reclaimter Tasks
+     */
+    public function reclaimStaleInProgressTasks(int $staleAfterSeconds): int
+    {
+        $qb = $this->connectionPool->getQueryBuilderForTable(self::TABLE);
+        return $qb
+            ->update(self::TABLE)
+            ->set('status', TaskStatus::Pending->value, true, ParameterType::INTEGER)
+            ->set('tstamp', time(), true, ParameterType::INTEGER)
+            ->where(
+                $qb->expr()->eq('status', $qb->createNamedParameter(TaskStatus::InProgress->value, ParameterType::INTEGER)),
+                $qb->expr()->lt('tstamp', $qb->createNamedParameter(time() - $staleAfterSeconds, ParameterType::INTEGER)),
+                $qb->expr()->eq('deleted', 0),
+                $qb->expr()->eq('hidden', 0),
+            )
+            ->executeStatement();
+    }
+
+    /**
      * Lease-Akquise: atomar von jedem inaktiven Status nach InProgress.
      * CAS-Prädikat `status != InProgress` verhindert, dass zwei Prozesse
      * denselben Task gleichzeitig bearbeiten. Gibt true zurück, wenn die

@@ -33,6 +33,7 @@ class AgentRunCommand extends Command
         $this->setHelp('Picks up pending agent tasks and processes them through the LLM agent loop. Can also resume failed or in-progress tasks by UID.');
         $this->addOption('task', 't', InputOption::VALUE_REQUIRED, 'Process a specific task by UID (any status except ended)');
         $this->addOption('limit', 'l', InputOption::VALUE_REQUIRED, 'Maximum number of pending tasks to process', '10');
+        $this->addOption('timeout-seconds', 's', InputOption::VALUE_REQUIRED, 'Alter (Sekunden), ab dem InProgress-Tasks als PHP-timeout-gestrandet gelten und vor dem Pending-Scan auf Pending zurückgesetzt werden', '300');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
@@ -46,6 +47,12 @@ class AgentRunCommand extends Command
 
         if ($specificTask !== null) {
             return $this->processSpecificTask((int)$specificTask, $output);
+        }
+
+        $timeoutSeconds = (int)$input->getOption('timeout-seconds');
+        $reclaimed = $this->repository->reclaimStaleInProgressTasks($timeoutSeconds);
+        if ($reclaimed > 0) {
+            $output->writeln(sprintf('Reclaimed %d stale InProgress task(s) (older than %ds).', $reclaimed, $timeoutSeconds));
         }
 
         return $this->processPendingTasks($limit, $output);
