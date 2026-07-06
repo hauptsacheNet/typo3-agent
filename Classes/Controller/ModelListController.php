@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Hn\Agent\Controller;
 
-use GuzzleHttp\Exception\GuzzleException;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use TYPO3\CMS\Backend\Attribute\AsController;
@@ -64,7 +63,9 @@ class ModelListController
                 'timeout' => 15,
                 'http_errors' => false,
             ]);
-        } catch (GuzzleException $e) {
+        } catch (\Throwable $e) {
+            // Guzzle transport errors *and* \InvalidArgumentException from a
+            // malformed apiUrl end up here — keep the UI's text input usable.
             return new JsonResponse(['models' => [], 'error' => 'Provider unreachable: ' . $e->getMessage()]);
         }
 
