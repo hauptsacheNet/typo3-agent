@@ -2,6 +2,9 @@
   "private": true,
   "name": "hn-agent-build",
   "scripts": {
+    "playwright:run": "playwright test",
+    "playwright:open": "playwright test --ui",
+    "playwright:report": "playwright show-report",
     "build": "esbuild ./Sources/TypeScript/*.ts --outdir=../Resources/Public/JavaScript --format=esm --sourcemap --target=es2022 --tsconfig=tsconfig.json",
     "watch": "esbuild ./Sources/TypeScript/*.ts --outdir=../Resources/Public/JavaScript --format=esm --sourcemap --target=es2022 --tsconfig=tsconfig.json --watch",
     "check": "tsc --project tsconfig.json",
@@ -14,6 +17,7 @@
     "prepare-types:v14": "npm run setup-types:v14 && npm run generate-dts"
   },
   "devDependencies": {
+    "@playwright/test": "1.52.0",
     "dompurify": "^3.4.2",
     "esbuild": "^0.25.0",
     "lit": "^3.2.0",

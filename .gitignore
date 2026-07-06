@@ -18,5 +18,14 @@
 /Build/.typo3-core-types
 /Build/.typo3-core-dts
 
+# Playwright
+/Build/playwright-report
+/Build/test-results
+/Build/tests/playwright/.auth
+
+# LLM test artifacts
+/.Build
+/.env.local
+
 # other
 *.local
