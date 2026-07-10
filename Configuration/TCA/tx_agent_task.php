@@ -7,6 +7,7 @@ return [
         'tstamp' => 'tstamp',
         'crdate' => 'crdate',
         'delete' => 'deleted',
+        'versioningWS_alwaysAllowLiveEdit' => true,
         'default_sortby' => 'crdate DESC',
         'enablecolumns' => [
             'disabled' => 'hidden',

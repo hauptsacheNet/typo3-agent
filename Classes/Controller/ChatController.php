@@ -110,6 +110,24 @@ class ChatController
             unset($task);
         }
 
+        $returnUrl = (string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks', ['id' => $pageId]);
+        $applyDeleteUri = function (array &$row) use ($returnUrl): void {
+            $row['deleteUri'] = (string)$this->uriBuilder->buildUriFromRoute('tce_db', [
+                'cmd' => ['tx_agent_task' => [(int)$row['uid'] => ['delete' => 1]]],
+                'redirect' => $returnUrl,
+            ]);
+        };
+        foreach ($tasks as &$task) {
+            $applyDeleteUri($task);
+        }
+        unset($task);
+        foreach ($subpageTasks as &$task) {
+            $applyDeleteUri($task);
+        }
+        unset($task);
+
+        $this->pageRenderer->loadJavaScriptModule('@hn/agent/delete-confirm.js');
+
         $this->addReloadButton($view, $request);
 
         $languageService = $GLOBALS['LANG'];
@@ -132,11 +150,14 @@ class ChatController
         $instructions = $this->instructionRepository->findActive();
         $canEditInstructions = (bool)$GLOBALS['BE_USER']->check('tables_modify', 'tx_agent_instruction');
         if ($canEditInstructions) {
-            $returnUrl = (string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks', ['id' => $pageId]);
             foreach ($instructions as &$instruction) {
                 $instruction['editUri'] = (string)$this->uriBuilder->buildUriFromRoute('record_edit', [
                     'edit' => ['tx_agent_instruction' => [$instruction['uid'] => 'edit']],
                     'returnUrl' => $returnUrl,
+                ]);
+                $instruction['deleteUri'] = (string)$this->uriBuilder->buildUriFromRoute('tce_db', [
+                    'cmd' => ['tx_agent_instruction' => [(int)$instruction['uid'] => ['delete' => 1]]],
+                    'redirect' => $returnUrl,
                 ]);
             }
             unset($instruction);
@@ -163,7 +184,6 @@ class ChatController
             'instructions' => $instructions,
             'canEditInstructions' => $canEditInstructions,
             'newInstructionUri' => $newInstructionUri,
-            'isLiveWorkspace' => (bool)$workspace['isLive'],
             'isAdmin' => $isAdmin,
             'taskCreators' => $taskCreators,
             'filterUserId' => $filterUserId,
