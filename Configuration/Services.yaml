@@ -12,3 +12,12 @@ services:
 
   Hn\Agent\Service\AgentService:
     public: true
+
+  cache.agent_models:
+    class: TYPO3\CMS\Core\Cache\Frontend\FrontendInterface
+    factory: ['@TYPO3\CMS\Core\Cache\CacheManager', 'getCache']
+    arguments: ['agent_models']
+
+  Hn\Agent\Controller\ModelListController:
+    arguments:
+      $cache: '@cache.agent_models'
