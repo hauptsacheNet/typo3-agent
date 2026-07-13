@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 namespace Hn\Agent\Renderer;
 
+use Hn\Agent\Resource\AgentUploadFolderResolver;
 use TYPO3\CMS\Backend\Routing\UriBuilder;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
 use TYPO3\CMS\Core\Page\PageRenderer;
-use TYPO3\CMS\Core\Resource\DefaultUploadFolderResolver;
 use TYPO3\CMS\Core\Resource\Folder;
 
 class PromptRenderer
@@ -16,7 +16,7 @@ class PromptRenderer
     public function __construct(
         private readonly UriBuilder $uriBuilder,
         private readonly PageRenderer $pageRenderer,
-        private readonly DefaultUploadFolderResolver $defaultUploadFolderResolver,
+        private readonly AgentUploadFolderResolver $agentUploadFolderResolver,
     ) {}
 
     /**
@@ -54,7 +54,7 @@ class PromptRenderer
     {
         $beUser = $GLOBALS['BE_USER'] ?? null;
         $uploadFolder = $beUser instanceof BackendUserAuthentication
-            ? $this->defaultUploadFolderResolver->resolve($beUser, $pageId, $tableName !== '' ? $tableName : null)
+            ? $this->agentUploadFolderResolver->resolve($beUser, $pageId, $tableName !== '' ? $tableName : null)
             : false;
         $defaultUploadFolder = $uploadFolder instanceof Folder ? $uploadFolder->getCombinedIdentifier() : '';
 
