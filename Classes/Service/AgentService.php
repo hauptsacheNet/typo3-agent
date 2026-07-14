@@ -271,6 +271,7 @@ class AgentService implements LoggerAwareInterface
         $config = $this->extensionConfiguration->get('agent');
         $systemPrompt = $config['systemPrompt'] ?? 'You are a helpful TYPO3 CMS assistant.';
         $systemPrompt .= $this->buildInstructionsSection();
+        $systemPrompt .= $this->buildScratchStorageHint();
 
         $this->messageRepository->append($taskUid, $pid, [
             'role' => 'system',
@@ -395,6 +396,27 @@ class AgentService implements LoggerAwareInterface
         }
 
         return $section;
+    }
+
+    /**
+     * Reminds the model that chat-composer uploads live in the non-public
+     * scratch storage and must be promoted before use in regular records.
+     * Without a PromoteScratchFileTool call, sys_file_references pointing to
+     * scratch files will 404 in the frontend.
+     */
+    private function buildScratchStorageHint(): string
+    {
+        return "\n\n# File attachments"
+            . "\nFiles uploaded by the user via the chat composer, as well as binary"
+            . " outputs of tools such as ExtractImages or ViewImage, are stored in a"
+            . " non-public scratch storage and are NOT web-reachable. Before you"
+            . " reference such a file in a regular record (tt_content image,"
+            . " tx_news_domain_model_news, sys_file_reference on any table other"
+            . " than tx_agent_message), you MUST call `PromoteScratchFileTool` to"
+            . " copy the file into the regular fileadmin storage and use the"
+            . " returned sys_file UID as `uid_local`. Skipping this step leaves a"
+            . " reference to a non-public file and the image will 404 in the"
+            . " frontend.";
     }
 
     /**

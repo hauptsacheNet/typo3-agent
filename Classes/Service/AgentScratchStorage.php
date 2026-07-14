@@ -33,6 +33,7 @@ class AgentScratchStorage
     private const BASE_PATH = 'var/agent-scratch/';
 
     private ?ResourceStorage $storage = null;
+    private ?int $cachedStorageUid = null;
 
     public function __construct(
         private readonly StorageRepository $storageRepository,
@@ -72,6 +73,48 @@ class AgentScratchStorage
         }
     }
 
+    /**
+     * True if the file lives in the agent scratch storage. Cheap identity
+     * check on the storage UID — no permission touch, no file read.
+     */
+    public function isScratchFile(File $file): bool
+    {
+        return $this->isScratchStorageUid($file->getStorage()->getUid());
+    }
+
+    /**
+     * Cheap identity check on a storage UID. Used both internally and by the
+     * AfterResourceStorageInitializationEvent listener that unlocks permissions
+     * on this storage for every consumer (incl. Core's /typo3/file_upload).
+     */
+    public function isScratchStorageUid(int $storageUid): bool
+    {
+        // Called from AgentScratchStorageInitializer on every storage init —
+        // cache the lookup so we don't hit sys_file_storage per query.
+        if ($this->cachedStorageUid === null) {
+            $this->cachedStorageUid = $this->findStorageUid() ?? 0;
+        }
+        return $this->cachedStorageUid > 0 && $this->cachedStorageUid === $storageUid;
+    }
+
+    /**
+     * Combined identifier of a per-BE-user landing folder for chat-composer
+     * uploads (e.g. "3:/user_42/"). The DragUploader in the composer receives
+     * this via `data-target-folder` and posts uploads straight into the
+     * scratch storage instead of fileadmin/user_upload/.
+     *
+     * We use a user-scoped folder rather than a task-scoped one because the
+     * composer is rendered in contexts (chat list, embedded new-task widget)
+     * where no task UID exists yet. Content-addressing in store() keeps
+     * duplicate uploads from consuming extra space.
+     */
+    public function ensureUploadIdentifierForUser(int $beUserUid): string
+    {
+        $storage = $this->getStorage();
+        $folder = $this->ensureUserFolder($storage, $beUserUid);
+        return $folder->getCombinedIdentifier();
+    }
+
     private function getStorage(): ResourceStorage
     {
         if ($this->storage instanceof ResourceStorage) {
@@ -80,19 +123,21 @@ class AgentScratchStorage
         $storageUid = $this->findStorageUid();
         if ($storageUid === null) {
             $storageUid = $this->createStorageRecord();
+            // Fresh record — invalidate the per-instance cache used by
+            // isScratchStorageUid() so the event listener recognises it.
+            $this->cachedStorageUid = $storageUid;
         }
         $storage = $this->storageRepository->findByUid($storageUid);
         if (!$storage instanceof ResourceStorage) {
             throw new \RuntimeException('Agent scratch storage #' . $storageUid . ' could not be loaded.');
         }
-        // Bypass BE-user permission checks — the agent runs in a synthesized
-        // BE user context and we want binary tool outputs to land regardless
-        // of that user's filemount setup. Two independent layers:
-        //  1. setEvaluatePermissions(false) — disables the ACL check inside
-        //     assureFolderReadPermission()/assureFileAddPermissions().
-        //  2. setUserPermissions(r+w) — permits action-level checks that
-        //     evaluate the storage's own permission set irrespective of the
-        //     BE user's file mounts.
+        // Belt-and-suspenders: AgentScratchStorageInitializer applies these
+        // overrides globally via AfterResourceStorageInitializationEvent so
+        // that Core's /typo3/file_upload endpoint sees the same permissionless
+        // storage. Setting them here as well guards against a stale DI cache
+        // (right after deployment, before `cache:flush`) where the listener
+        // isn't registered yet — the extension's own scratch-storage users
+        // (ExtractImages, ViewImage tool outputs) still work.
         $storage->setEvaluatePermissions(false);
         $storage->setUserPermissions(['r' => true, 'w' => true]);
         $this->ensureBasePathExists();
@@ -189,7 +234,16 @@ XML;
 
     private function ensureTaskFolder(ResourceStorage $storage, int $taskUid): Folder
     {
-        $name = 'task_' . $taskUid;
+        return $this->ensureFolder($storage, 'task_' . $taskUid);
+    }
+
+    private function ensureUserFolder(ResourceStorage $storage, int $beUserUid): Folder
+    {
+        return $this->ensureFolder($storage, 'user_' . $beUserUid);
+    }
+
+    private function ensureFolder(ResourceStorage $storage, string $name): Folder
+    {
         // respectFileMounts=false — the agent-scratch storage is intentionally
         // outside any file mount, and the synthesized BE user has none set anyway.
         $rootFolder = $storage->getRootLevelFolder(false);
