@@ -79,12 +79,16 @@ class ChatStreamController
         }
 
         $agentService = $this->agentService;
+        $attachmentService = $this->attachmentService;
         $userMessage = $isInitialProcessing ? null : $message;
 
-        return $this->buildSseResponse(static function (callable $send) use ($agentService, $taskUid, $userMessage, $attachments): void {
+        return $this->buildSseResponse(static function (callable $send) use ($agentService, $attachmentService, $taskUid, $userMessage, $attachments): void {
             try {
                 $messages = $agentService->run($taskUid, $userMessage, $send, $attachments);
-                $send('done', ['status' => 2, 'messages' => $messages]);
+                $send('done', [
+                    'status' => 2,
+                    'messages' => $attachmentService->hydrateAttachmentsForClient($messages),
+                ]);
             } catch (\Throwable $e) {
                 $send('error', ['error' => $e->getMessage(), 'status' => 3]);
             }

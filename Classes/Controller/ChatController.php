@@ -6,6 +6,7 @@ namespace Hn\Agent\Controller;
 
 use Doctrine\DBAL\ParameterType;
 use Hn\Agent\Domain\AgentInstructionRepository;
+use Hn\Agent\Domain\AgentMessageRepository;
 use Hn\Agent\Domain\AgentTaskRepository;
 use Hn\Agent\Domain\TaskStatus;
 use Hn\Agent\Renderer\PromptRenderer;
@@ -47,6 +48,7 @@ class ChatController
         private readonly UriBuilder                 $uriBuilder,
         private readonly IconFactory                $iconFactory,
         private readonly AgentTaskRepository        $repository,
+        private readonly AgentMessageRepository     $messageRepository,
         private readonly AgentService               $agentService,
         private readonly AttachmentService          $attachmentService,
         protected readonly PageRenderer             $pageRenderer,
@@ -249,7 +251,9 @@ class ChatController
             }
         }
 
-        $messages = $this->agentService->decodeMessages($task['messages'] ?? null) ?? [];
+        $messages = $this->attachmentService->hydrateAttachmentsForClient(
+            $this->messageRepository->findByTask($taskUid),
+        );
         $isNewTask = (int)($task['status'] ?? 0) === TaskStatus::Pending->value;
         $changes = $this->repository->getChanges($taskUid);
 
@@ -300,16 +304,6 @@ class ChatController
         $contextUid = (int)($body['uid'] ?? 0);
         $returnUrl = GeneralUtility::sanitizeLocalUrl((string)($body['return_url'] ?? ''));
 
-        // FAL permission checks for attachments run against the current
-        // BE_USER (= task owner) inside buildInitialMessages.
-        $initialMessages = $this->agentService->buildInitialMessages(
-            $pageId,
-            $contextTable,
-            $contextUid,
-            $message,
-            $rawAttachments,
-        );
-
         $title = $message !== '' ? mb_substr($message, 0, 80) : ($rawAttachments[0]['name'] ?? 'Anhang');
         $userId = (int)($GLOBALS['BE_USER']->user['uid'] ?? 0);
         $taskUid = $this->repository->insert(
@@ -321,8 +315,20 @@ class ChatController
             $contextUid,
             $returnUrl,
             $workspaceId,
-            $initialMessages,
         );
+
+        // Persist the initial conversation (system + synthetic context + user)
+        // into tx_agent_message. FAL permission checks for attachments run
+        // against the current BE_USER (= task owner).
+        $this->agentService->persistInitialMessages(
+            $taskUid,
+            $pageId,
+            $contextTable,
+            $contextUid,
+            $message,
+            $rawAttachments,
+        );
+
         return new RedirectResponse((string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks.show', [
             'task' => $taskUid,
             'id' => $pageId,

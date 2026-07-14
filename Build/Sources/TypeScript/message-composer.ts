@@ -29,6 +29,12 @@ export class MessageComposerElement extends LitElement {
   private uploadTriggerRef: Ref<HTMLElement> = createRef();
   private uploadZoneRef: Ref<HTMLElement> = createRef();
 
+  // objectGroup marker for the Core Drag-Uploader's "Use existing" postMessage.
+  // The Core only shows the option when data-file-irre-object is set, and posts
+  // an event with this string as objectGroup — we filter our own listener on it
+  // so unrelated FormEngine IRRE containers (if any) are ignored.
+  private readonly irreObjectGroup = 'hn-agent-message-composer';
+
   private get preflightUri(): string {
     const ajaxUrls = (TYPO3?.settings as Record<string, unknown> | undefined)?.ajaxUrls as Record<string, string> | undefined;
     return ajaxUrls?.['typo3_agent_tasks_attachment_preflight'] ?? '';
@@ -57,6 +63,22 @@ export class MessageComposerElement extends LitElement {
     this.addAttachment({uid: file.uid, identifier: file.id, name: file.name, iconHtml: file.icon});
   };
 
+  // The Core Drag-Uploader fires no `uploadSuccess` for "Use existing" — it
+  // only postMessages `typo3:foreignRelation:insert`, intended for FormEngine
+  // IRRE containers. We intercept it ourselves and route the picked sys_file
+  // through the same chip pipeline as a regular upload. The preflight AJAX
+  // called by addAttachment() fills in name/mime/icon from the UID.
+  private foreignRelationInsertListener = (e: MessageEvent): void => {
+    if (!MessageUtility.verifyOrigin(e.origin)) return;
+    const data = e.data as {actionName?: string; objectGroup?: string; table?: string; uid?: number | string};
+    if (data.actionName !== 'typo3:foreignRelation:insert') return;
+    if (data.objectGroup !== this.irreObjectGroup) return;
+    if (data.table !== 'sys_file') return;
+    const uid = typeof data.uid === 'number' ? data.uid : parseInt(String(data.uid ?? ''), 10);
+    if (!uid || Number.isNaN(uid)) return;
+    this.addAttachment({uid, name: `sys_file:${uid}`});
+  };
+
   override firstUpdated(): void {
     // Manual single-instance init. The auto-discovery in DragUploader.init()
     // races (MutationObserver + DocumentService.ready both pick up the same
@@ -70,12 +92,14 @@ export class MessageComposerElement extends LitElement {
       new DragUploader(zoneEl);
     }
     this.uploadTriggerRef.value?.addEventListener('uploadSuccess', this.uploadSuccessListener);
+    window.addEventListener('message', this.foreignRelationInsertListener);
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     this.uploadTriggerRef.value?.removeEventListener('uploadSuccess', this.uploadSuccessListener);
     window.removeEventListener('message', this.elementBrowserListener);
+    window.removeEventListener('message', this.foreignRelationInsertListener);
   }
 
   override focus(): void {
@@ -99,6 +123,11 @@ export class MessageComposerElement extends LitElement {
   }
 
   private addAttachment(att: Attachment): void {
+    // Guard against duplicates — same sys_file uid (or same combined identifier)
+    // dropped/picked twice must yield only one chip. Especially relevant for
+    // the "Use existing" branch, which can be triggered repeatedly.
+    if (att.uid !== undefined && this.attachments.some(a => a.uid === att.uid)) return;
+    if (att.identifier && this.attachments.some(a => a.identifier === att.identifier)) return;
     this.attachments = [...this.attachments, att];
     if (this.preflightUri && (att.uid !== undefined || att.identifier)) {
       void this.preflightAttachment(att);
@@ -121,8 +150,14 @@ export class MessageComposerElement extends LitElement {
         const sameUid = info.uid !== undefined && a.uid === info.uid;
         const sameIdent = !!info.identifier && a.identifier === info.identifier;
         if (!sameUid && !sameIdent) return a;
+        // Fill in name/identifier when we only had the sys_file UID up front
+        // (e.g. "Use existing" postMessage only carries the UID). For regular
+        // uploads the name is already set by uploadSuccess — keep it.
+        const isPlaceholderName = !a.name || /^sys_file:\d+$/.test(a.name);
         return {
           ...a,
+          name: isPlaceholderName && info.name ? info.name : a.name,
+          identifier: a.identifier || info.identifier || '',
           mime_type: info.mime || a.mime_type,
           size: typeof info.size === 'number' ? info.size : a.size,
           readableByLlm: info.readableByLlm,
@@ -203,7 +238,8 @@ export class MessageComposerElement extends LitElement {
           data-max-file-size="0"
           data-dropzone-target=".chat-upload-anchor"
           data-dropzone-trigger=".chat-upload-trigger"
-          data-default-action="rename">
+          data-default-action="rename"
+          data-file-irre-object=${this.irreObjectGroup}>
         <form class="task-form" @submit=${this.onSubmit}>
           <textarea
               class="message-control"
