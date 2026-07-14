@@ -37,7 +37,6 @@ let ChatElement = class extends LitElement {
     this.messages = [];
     this.loading = false;
     this.errorMessage = "";
-    this.thinking = false;
     this.streamingBuffer = "";
     this.reasoningBuffer = "";
     this.isStreaming = false;
@@ -101,7 +100,7 @@ let ChatElement = class extends LitElement {
                             <div class="chat-turn d-flex flex-column gap-3 ${isLast ? "chat-turn-latest" : "pb-3"}">
                                 ${turn.map((msg, j) => this.renderMessage(msg, isLast && j === 0 && msg.role === "user"))}
                                 ${isLast && this.isStreaming ? this.renderStreamingBubble() : nothing}
-                                ${isLast && this.thinking && !this.isStreaming ? this.renderThinkingIndicator() : nothing}
+                                ${isLast && this.loading && !this.isStreaming && !this.hasRunningToolCall() ? this.renderThinkingIndicator() : nothing}
                             </div>
                         `;
     })}
@@ -385,6 +384,11 @@ let ChatElement = class extends LitElement {
             </div>
         `;
   }
+  hasRunningToolCall() {
+    const last = this.messages[this.messages.length - 1];
+    if (!last || last.role !== "assistant" || !last.tool_calls) return false;
+    return last.tool_calls.some((tc) => tc.result === void 0);
+  }
   // -- Markdown --------------------------------------------------------------
   renderMarkdown(text) {
     return DOMPurify.sanitize(marked.parse(text ?? ""));
@@ -460,7 +464,6 @@ let ChatElement = class extends LitElement {
   async sendStreaming(message, attachments = []) {
     this.abortController = new AbortController();
     try {
-      this.thinking = true;
       const formData = new FormData();
       formData.append("message", message);
       this.appendAttachments(formData, attachments);
@@ -487,7 +490,6 @@ let ChatElement = class extends LitElement {
         }
       }
     } catch (err) {
-      this.thinking = false;
       this.isStreaming = false;
       if (err.name !== "AbortError") {
         this.errorMessage = err.message || String(err);
@@ -525,20 +527,16 @@ let ChatElement = class extends LitElement {
   handleSseEvent(event, data) {
     switch (event) {
       case "llm_start":
-        this.thinking = true;
         break;
       case "content_delta":
-        this.thinking = false;
         this.isStreaming = true;
         this.streamingBuffer += data.text || "";
         break;
       case "reasoning_delta":
-        this.thinking = false;
         this.isStreaming = true;
         this.reasoningBuffer += data.text || "";
         break;
       case "tool_call_delta":
-        this.thinking = false;
         break;
       case "user_message": {
         const msg = data.message;
@@ -549,7 +547,6 @@ let ChatElement = class extends LitElement {
         break;
       }
       case "assistant_message": {
-        this.thinking = false;
         const msg = data.message;
         if (this.isStreaming) {
           if (Array.isArray(msg?.tool_calls) && msg.tool_calls.length > 0) {
@@ -594,7 +591,6 @@ let ChatElement = class extends LitElement {
         break;
       }
       case "done":
-        this.thinking = false;
         this.isStreaming = false;
         this.streamingBuffer = "";
         this.reasoningBuffer = "";
@@ -604,7 +600,6 @@ let ChatElement = class extends LitElement {
         document.dispatchEvent(new CustomEvent("agent:record-changed"));
         break;
       case "error":
-        this.thinking = false;
         this.isStreaming = false;
         this.errorMessage = data.error || "Unknown error";
         break;
@@ -731,9 +726,6 @@ __decorateClass([
 __decorateClass([
   state()
 ], ChatElement.prototype, "errorMessage", 2);
-__decorateClass([
-  state()
-], ChatElement.prototype, "thinking", 2);
 __decorateClass([
   state()
 ], ChatElement.prototype, "streamingBuffer", 2);
