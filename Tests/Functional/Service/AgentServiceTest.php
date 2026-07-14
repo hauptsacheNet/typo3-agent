@@ -5,13 +5,16 @@ declare(strict_types=1);
 namespace Hn\Agent\Tests\Functional\Service;
 
 use Hn\Agent\Domain\AgentInstructionRepository;
+use Hn\Agent\Domain\AgentMessageRepository;
 use Hn\Agent\Domain\AgentTaskRepository;
 use Hn\Agent\Domain\TaskStateMachine;
+use Hn\Agent\Service\AgentScratchStorage;
 use Hn\Agent\Service\AgentService;
 use Hn\Agent\Service\AttachmentService;
 use Hn\Agent\Service\ChangeTracker;
 use Hn\Agent\Service\InstructionTextFormatter;
 use Hn\Agent\Service\LlmService;
+use Hn\Agent\Service\MessageLlmSerializer;
 use Hn\Agent\Service\ToolConverterService;
 use Hn\McpServer\MCP\ToolRegistry;
 use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
@@ -19,6 +22,7 @@ use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
 use TYPO3\CMS\Core\Resource\File;
 use TYPO3\CMS\Core\Resource\ResourceFactory;
+use TYPO3\CMS\Core\Resource\StorageRepository;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
 
@@ -35,6 +39,7 @@ class AgentServiceTest extends FunctionalTestCase
     ];
 
     private ConnectionPool $connectionPool;
+    private AgentMessageRepository $messageRepository;
 
     protected function setUp(): void
     {
@@ -48,24 +53,16 @@ class AgentServiceTest extends FunctionalTestCase
         $GLOBALS['LANG'] = GeneralUtility::makeInstance(LanguageServiceFactory::class)->create('default');
 
         $this->connectionPool = GeneralUtility::makeInstance(ConnectionPool::class);
+        $this->messageRepository = new AgentMessageRepository($this->connectionPool);
     }
 
     /**
-     * Create a task record directly in the database and return its UID.
-     *
-     * Mirrors what ChatController::newAction does in production: when no
-     * pre-built $messages array is provided, the initial conversation
-     * (system + synthetic GetPage/ReadTable context + user message) is
-     * synthesized via AgentService::buildInitialMessages and persisted.
-     * Pass a non-null $messages to bypass the synthesis (resume scenarios).
+     * Insert a bare task record and persist the initial system+user
+     * conversation via AgentService::persistInitialMessages — mirrors
+     * ChatController::newAction in production.
      */
-    private function createTask(string $title, string $prompt, int $pid = 0, int $status = 0, ?array $messages = null, string $contextTable = '', int $contextUid = 0): int
+    private function createTask(string $title, string $prompt, int $pid = 0, int $status = 0, string $contextTable = '', int $contextUid = 0): int
     {
-        if ($messages === null) {
-            $messages = $this->buildAgentServiceWithMock([])
-                ->buildInitialMessages($pid, $contextTable, $contextUid, $prompt);
-        }
-
         $connection = $this->connectionPool->getConnectionForTable('tx_agent_task');
         $connection->insert(
             'tx_agent_task',
@@ -74,7 +71,6 @@ class AgentServiceTest extends FunctionalTestCase
                 'title' => $title,
                 'prompt' => $prompt,
                 'status' => $status,
-                'messages' => $messages,
                 'result' => '',
                 'cruser_id' => 1,
                 'crdate' => time(),
@@ -82,14 +78,44 @@ class AgentServiceTest extends FunctionalTestCase
                 'deleted' => 0,
                 'hidden' => 0,
             ],
-            ['messages' => \Doctrine\DBAL\Types\Types::JSON],
         );
-        return (int)$connection->lastInsertId();
+        $taskUid = (int)$connection->lastInsertId();
+        $this->buildAgentServiceWithMock([])
+            ->persistInitialMessages($taskUid, $pid, $contextTable, $contextUid, $prompt);
+        return $taskUid;
     }
 
     /**
-     * Load a task record from DB by UID.
+     * Directly insert a message row (bypassing AgentMessageRepository::append),
+     * used only for resume scenarios where we simulate pre-existing state.
+     *
+     * @param array<string, mixed> $message
      */
+    private function insertRawMessage(int $taskUid, int $sorting, array $message): void
+    {
+        $connection = $this->connectionPool->getConnectionForTable('tx_agent_message');
+        $now = time();
+        $toolCalls = $message['tool_calls'] ?? null;
+        $connection->insert(
+            'tx_agent_message',
+            [
+                'pid' => 0,
+                'tstamp' => $now,
+                'crdate' => $now,
+                'sorting' => $sorting,
+                'task' => $taskUid,
+                'role' => (string)($message['role'] ?? ''),
+                'content' => (string)($message['content'] ?? ''),
+                'reasoning' => (string)($message['reasoning'] ?? ''),
+                'tool_calls' => is_array($toolCalls) ? $toolCalls : null,
+                'tool_call_id' => (string)($message['tool_call_id'] ?? ''),
+                'tool_name' => (string)($message['tool_name'] ?? ''),
+                'attachments' => 0,
+            ],
+            ['tool_calls' => \Doctrine\DBAL\Types\Types::JSON],
+        );
+    }
+
     private function getTask(int $uid): array|false
     {
         $queryBuilder = $this->connectionPool->getQueryBuilderForTable('tx_agent_task');
@@ -103,29 +129,24 @@ class AgentServiceTest extends FunctionalTestCase
     }
 
     /**
-     * Decode messages from a task record, handling potential double-encoding.
+     * @return list<array<string, mixed>>
      */
-    private function decodeMessages(mixed $raw): array
+    private function loadMessages(int $taskUid): array
     {
-        if (is_array($raw)) {
-            return $raw;
-        }
-        if (is_string($raw)) {
-            $decoded = json_decode($raw, true);
-            if (is_string($decoded)) {
-                $decoded = json_decode($decoded, true);
-            }
-            if (is_array($decoded)) {
-                return $decoded;
-            }
-        }
-        self::fail('Could not decode messages: ' . var_export($raw, true));
+        return $this->messageRepository->findByTask($taskUid);
     }
 
-    /**
-     * Build an AgentService with a mocked LlmService that returns canned responses.
-     */
-    private function buildAgentServiceWithMock(array $responses): AgentService
+    private function makeToolConverterService(): ToolConverterService
+    {
+        $scratchStorage = new AgentScratchStorage(
+            GeneralUtility::makeInstance(StorageRepository::class),
+            GeneralUtility::makeInstance(ResourceFactory::class),
+            $this->connectionPool,
+        );
+        return new ToolConverterService($scratchStorage);
+    }
+
+    private function buildAgentServiceWithMock(array $responses, ?ResourceFactory $resourceFactory = null): AgentService
     {
         $callIndex = 0;
         $llmStub = $this->createStub(LlmService::class);
@@ -138,15 +159,21 @@ class AgentServiceTest extends FunctionalTestCase
             }
         );
 
+        $resourceFactory ??= GeneralUtility::makeInstance(ResourceFactory::class);
+        $attachmentService = new AttachmentService($resourceFactory, $this->connectionPool);
+        $serializer = new MessageLlmSerializer($resourceFactory, $attachmentService);
+
         return new AgentService(
             $llmStub,
-            GeneralUtility::makeInstance(ToolConverterService::class),
+            $this->makeToolConverterService(),
             GeneralUtility::makeInstance(ToolRegistry::class),
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
+            $this->messageRepository,
             new TaskStateMachine(new AgentTaskRepository($this->connectionPool)),
-            new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class), $this->connectionPool),
+            $attachmentService,
+            $serializer,
             new AgentInstructionRepository($this->connectionPool),
             new InstructionTextFormatter(),
             new ChangeTracker($this->connectionPool, new AgentTaskRepository($this->connectionPool)),
@@ -154,8 +181,38 @@ class AgentServiceTest extends FunctionalTestCase
     }
 
     /**
-     * Insert a tx_agent_instruction record and return its UID.
+     * @param array<int, array<int, array<string, mixed>>> $capturedMessages
      */
+    private function buildAgentServiceCapturing(array &$capturedMessages, ResourceFactory $resourceFactory): AgentService
+    {
+        $llmStub = $this->createStub(LlmService::class);
+        $llmStub->method('chatCompletionStream')->willReturnCallback(
+            function (array $messages) use (&$capturedMessages): array {
+                $capturedMessages[] = $messages;
+                return ['role' => 'assistant', 'content' => 'OK.'];
+            }
+        );
+
+        $attachmentService = new AttachmentService($resourceFactory, $this->connectionPool);
+        $serializer = new MessageLlmSerializer($resourceFactory, $attachmentService);
+
+        return new AgentService(
+            $llmStub,
+            $this->makeToolConverterService(),
+            GeneralUtility::makeInstance(ToolRegistry::class),
+            GeneralUtility::makeInstance(ExtensionConfiguration::class),
+            $this->connectionPool,
+            new AgentTaskRepository($this->connectionPool),
+            $this->messageRepository,
+            new TaskStateMachine(new AgentTaskRepository($this->connectionPool)),
+            $attachmentService,
+            $serializer,
+            new AgentInstructionRepository($this->connectionPool),
+            new InstructionTextFormatter(),
+            new ChangeTracker($this->connectionPool, new AgentTaskRepository($this->connectionPool)),
+        );
+    }
+
     private function createInstruction(string $title, string $instruction, string $mode = 'always', string $description = '', int $hidden = 0, int $sorting = 0): int
     {
         $connection = $this->connectionPool->getConnectionForTable('tx_agent_instruction');
@@ -174,24 +231,29 @@ class AgentServiceTest extends FunctionalTestCase
         return (int)$connection->lastInsertId();
     }
 
+    private function loadSystemMessage(int $taskUid): array
+    {
+        $messages = $this->loadMessages($taskUid);
+        self::assertNotEmpty($messages);
+        self::assertSame('system', $messages[0]['role']);
+        return $messages[0];
+    }
+
     public function testAlwaysInstructionsAreInlinedIntoSystemPrompt(): void
     {
         $this->createInstruction('Tone of voice', 'Always write in a friendly, formal tone.', 'always', '', 0, 10);
         $this->createInstruction('News handling', 'Never delete news records, only hide them.', 'always', '', 0, 20);
-        // Hidden instruction must be excluded.
         $this->createInstruction('Draft', 'This guidance is not active yet.', 'always', '', 1, 30);
 
-        $messages = $this->buildAgentServiceWithMock([])
-            ->buildInitialMessages(0, '', 0, 'Do something');
+        $taskUid = $this->createTask('Instructions test', 'Do something');
+        $systemMsg = $this->loadSystemMessage($taskUid);
+        $systemContent = (string)$systemMsg['content'];
 
-        self::assertSame('system', $messages[0]['role']);
-        $systemContent = $messages[0]['content'];
         self::assertStringContainsString('Tone of voice', $systemContent);
         self::assertStringContainsString('Always write in a friendly, formal tone.', $systemContent);
         self::assertStringContainsString('News handling', $systemContent);
         self::assertStringContainsString('Never delete news records, only hide them.', $systemContent);
         self::assertStringNotContainsString('This guidance is not active yet.', $systemContent);
-        // Ordering follows the sorting field.
         self::assertLessThan(
             strpos($systemContent, 'News handling'),
             strpos($systemContent, 'Tone of voice'),
@@ -209,16 +271,13 @@ class AgentServiceTest extends FunctionalTestCase
             10,
         );
 
-        $messages = $this->buildAgentServiceWithMock([])
-            ->buildInitialMessages(0, '', 0, 'Do something');
+        $taskUid = $this->createTask('On-demand test', 'Do something');
+        $systemContent = (string)$this->loadSystemMessage($taskUid)['content'];
 
-        $systemContent = $messages[0]['content'];
-        // Index: name + "when to use" + the uid the agent passes to GetInstruction.
         self::assertStringContainsString('News writing', $systemContent);
         self::assertStringContainsString('When writing or revising news articles', $systemContent);
         self::assertStringContainsString('#' . $uid, $systemContent);
         self::assertStringContainsString('GetInstruction', $systemContent);
-        // The full body must NOT be inlined for on-demand instructions.
         self::assertStringNotContainsString('use active voice, max 60 chars', $systemContent);
     }
 
@@ -230,25 +289,22 @@ class AgentServiceTest extends FunctionalTestCase
             'always',
         );
 
-        $messages = $this->buildAgentServiceWithMock([])
-            ->buildInitialMessages(0, '', 0, 'Do something');
+        $taskUid = $this->createTask('RTE test', 'Do something');
+        $systemContent = (string)$this->loadSystemMessage($taskUid)['content'];
 
-        $systemContent = $messages[0]['content'];
         self::assertStringContainsString('**active**', $systemContent);
         self::assertStringContainsString('- Short sentences', $systemContent);
-        // No raw HTML tags should leak into the prompt.
         self::assertStringNotContainsString('<p>', $systemContent);
         self::assertStringNotContainsString('<li>', $systemContent);
     }
 
     public function testNoInstructionsLeavesSystemPromptUntouched(): void
     {
-        $messages = $this->buildAgentServiceWithMock([])
-            ->buildInitialMessages(0, '', 0, 'Do something');
+        $taskUid = $this->createTask('No instructions', 'Do something');
+        $systemContent = (string)$this->loadSystemMessage($taskUid)['content'];
 
-        self::assertSame('system', $messages[0]['role']);
-        self::assertStringNotContainsString('Editorial guidelines', $messages[0]['content']);
-        self::assertStringNotContainsString('On-demand instructions', $messages[0]['content']);
+        self::assertStringNotContainsString('Editorial guidelines', $systemContent);
+        self::assertStringNotContainsString('On-demand instructions', $systemContent);
     }
 
     public function testSimpleResponseWithoutToolCalls(): void
@@ -258,15 +314,13 @@ class AgentServiceTest extends FunctionalTestCase
         $agentService = $this->buildAgentServiceWithMock([
             ['role' => 'assistant', 'content' => 'Here are the pages: Home, About.'],
         ]);
-
         $agentService->run($taskUid);
 
         $task = $this->getTask($taskUid);
-        self::assertSame(2, (int)$task['status'], 'Task should be ended (status=2)');
+        self::assertSame(2, (int)$task['status']);
         self::assertSame('Here are the pages: Home, About.', $task['result']);
 
-        $messages = $this->decodeMessages($task['messages']);
-        // system + user + assistant = 3 messages
+        $messages = $this->loadMessages($taskUid);
         self::assertCount(3, $messages);
         self::assertSame('system', $messages[0]['role']);
         self::assertSame('user', $messages[1]['role']);
@@ -294,15 +348,13 @@ class AgentServiceTest extends FunctionalTestCase
             ],
             ['role' => 'assistant', 'content' => 'The page tree has: Home, About.'],
         ]);
-
         $agentService->run($taskUid);
 
         $task = $this->getTask($taskUid);
         self::assertSame(2, (int)$task['status']);
         self::assertSame('The page tree has: Home, About.', $task['result']);
 
-        $messages = $this->decodeMessages($task['messages']);
-        // system + user + assistant(tool_calls) + tool(result) + assistant(final) = 5
+        $messages = $this->loadMessages($taskUid);
         self::assertCount(5, $messages);
         self::assertSame('tool', $messages[3]['role']);
         self::assertSame('call_001', $messages[3]['tool_call_id']);
@@ -310,30 +362,37 @@ class AgentServiceTest extends FunctionalTestCase
 
     public function testResumeFromExistingMessages(): void
     {
-        // Pre-fill messages as if the task was interrupted mid-conversation
-        $existingMessages = [
-            ['role' => 'system', 'content' => 'You are a TYPO3 assistant.'],
-            ['role' => 'user', 'content' => 'List all pages'],
-            ['role' => 'assistant', 'content' => null, 'tool_calls' => [
-                ['id' => 'call_001', 'type' => 'function', 'function' => ['name' => 'GetPageTree', 'arguments' => '{}']],
-            ]],
-            ['role' => 'tool', 'tool_call_id' => 'call_001', 'content' => 'Home, About'],
-        ];
+        $connection = $this->connectionPool->getConnectionForTable('tx_agent_task');
+        $connection->insert('tx_agent_task', [
+            'pid' => 0, 'title' => 'Resume test', 'prompt' => 'List all pages',
+            'status' => 0, 'result' => '', 'cruser_id' => 1,
+            'crdate' => time(), 'tstamp' => time(), 'deleted' => 0, 'hidden' => 0,
+        ]);
+        $taskUid = (int)$connection->lastInsertId();
 
-        $taskUid = $this->createTask('Resume test', 'List all pages', 0, 0, $existingMessages);
+        $this->insertRawMessage($taskUid, 100, ['role' => 'system', 'content' => 'You are a TYPO3 assistant.']);
+        $this->insertRawMessage($taskUid, 200, ['role' => 'user', 'content' => 'List all pages']);
+        $this->insertRawMessage($taskUid, 300, [
+            'role' => 'assistant',
+            'content' => '',
+            'tool_calls' => [
+                ['id' => 'call_001', 'type' => 'function', 'function' => ['name' => 'GetPageTree', 'arguments' => '{}']],
+            ],
+        ]);
+        $this->insertRawMessage($taskUid, 400, [
+            'role' => 'tool', 'tool_call_id' => 'call_001', 'tool_name' => 'GetPageTree', 'content' => 'Home, About',
+        ]);
 
         $agentService = $this->buildAgentServiceWithMock([
             ['role' => 'assistant', 'content' => 'The pages are: Home and About.'],
         ]);
-
         $agentService->run($taskUid);
 
         $task = $this->getTask($taskUid);
         self::assertSame(2, (int)$task['status']);
         self::assertSame('The pages are: Home and About.', $task['result']);
 
-        $messages = $this->decodeMessages($task['messages']);
-        // Original 4 messages + 1 new assistant = 5
+        $messages = $this->loadMessages($taskUid);
         self::assertCount(5, $messages);
     }
 
@@ -346,15 +405,21 @@ class AgentServiceTest extends FunctionalTestCase
             new \RuntimeException('API connection failed')
         );
 
+        $resourceFactory = GeneralUtility::makeInstance(ResourceFactory::class);
+        $attachmentService = new AttachmentService($resourceFactory, $this->connectionPool);
+        $serializer = new MessageLlmSerializer($resourceFactory, $attachmentService);
+
         $agentService = new AgentService(
             $llmStub,
-            GeneralUtility::makeInstance(ToolConverterService::class),
+            $this->makeToolConverterService(),
             GeneralUtility::makeInstance(ToolRegistry::class),
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
+            $this->messageRepository,
             new TaskStateMachine(new AgentTaskRepository($this->connectionPool)),
-            new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class), $this->connectionPool),
+            $attachmentService,
+            $serializer,
             new AgentInstructionRepository($this->connectionPool),
             new InstructionTextFormatter(),
             new ChangeTracker($this->connectionPool, new AgentTaskRepository($this->connectionPool)),
@@ -368,33 +433,26 @@ class AgentServiceTest extends FunctionalTestCase
         }
 
         $task = $this->getTask($taskUid);
-        self::assertSame(3, (int)$task['status'], 'Task should be failed (status=3)');
+        self::assertSame(3, (int)$task['status']);
         self::assertStringContainsString('Error:', $task['result']);
 
-        // Messages should be preserved (initial system + user)
-        $messages = $this->decodeMessages($task['messages']);
+        $messages = $this->loadMessages($taskUid);
         self::assertCount(2, $messages);
     }
 
     public function testPageContextIncludedWhenPidSet(): void
     {
-        // Create task on page 1 (Home)
         $taskUid = $this->createTask('Page context test', 'Describe this page', 1);
 
         $agentService = $this->buildAgentServiceWithMock([
             ['role' => 'assistant', 'content' => 'This is the Home page.'],
         ]);
-
         $agentService->run($taskUid);
 
-        $task = $this->getTask($taskUid);
-        $messages = $this->decodeMessages($task['messages']);
+        $messages = $this->loadMessages($taskUid);
 
-        // Expected shape after buildMessages() — user prompt precedes the
-        // synthetic context turn so the chat UI renders them in that order:
-        // [0] system, [1] user(prompt), [2] assistant(narration content +
-        // GetPage tool_call), [3] tool(GetPage result),
-        // [4] assistant(final mock response)
+        // [0] system, [1] user(prompt), [2] assistant(narration + GetPage tool_call),
+        // [3] tool(GetPage result), [4] assistant(final mock response)
         self::assertSame('user', $messages[1]['role']);
         self::assertSame('Describe this page', $messages[1]['content']);
         self::assertSame('assistant', $messages[2]['role']);
@@ -406,114 +464,6 @@ class AgentServiceTest extends FunctionalTestCase
         self::assertSame('tool', $messages[3]['role']);
     }
 
-    public function testContinueChatPersistsAttachmentsStructuredAndSerializesForLlm(): void
-    {
-        $taskUid = $this->createTask('Attachment test', 'Initial prompt');
-
-        // Capture what is handed to LlmService so we can prove the markdown
-        // block exists in the LLM payload — but NOT in the persisted state.
-        $capturedMessages = [];
-        $llmStub = $this->createStub(LlmService::class);
-        $llmStub->method('chatCompletionStream')->willReturnCallback(
-            function (array $messages) use (&$capturedMessages): array {
-                $capturedMessages[] = $messages;
-                return ['role' => 'assistant', 'content' => 'OK.'];
-            }
-        );
-
-        $agentService = new AgentService(
-            $llmStub,
-            GeneralUtility::makeInstance(ToolConverterService::class),
-            GeneralUtility::makeInstance(ToolRegistry::class),
-            GeneralUtility::makeInstance(ExtensionConfiguration::class),
-            $this->connectionPool,
-            new AgentTaskRepository($this->connectionPool),
-            new TaskStateMachine(new AgentTaskRepository($this->connectionPool)),
-            new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class), $this->connectionPool),
-            new AgentInstructionRepository($this->connectionPool),
-            new InstructionTextFormatter(),
-            new ChangeTracker($this->connectionPool, new AgentTaskRepository($this->connectionPool)),
-        );
-
-        // Pass an unresolvable attachment (no such sys_file UID) — keeps the
-        // test independent from FAL fixtures while still exercising the full
-        // resolveAttachmentRefs → serializeForLlm pipeline.
-        $attachments = [
-            ['uid' => 999999, 'name' => 'phantom.pdf'],
-        ];
-        $agentService->run($taskUid, 'Look at this', null, $attachments);
-
-        // --- Persisted state: attachments structured, no markdown block in content
-        $task = $this->getTask($taskUid);
-        $messages = $this->decodeMessages($task['messages']);
-
-        $userMsg = null;
-        foreach ($messages as $m) {
-            if (($m['role'] ?? '') === 'user' && ($m['content'] ?? '') === 'Look at this') {
-                $userMsg = $m;
-                break;
-            }
-        }
-        self::assertNotNull($userMsg, 'User message with plain content was persisted');
-        self::assertSame('Look at this', $userMsg['content']);
-        self::assertArrayHasKey('attachments', $userMsg);
-        self::assertCount(1, $userMsg['attachments']);
-        self::assertSame('phantom.pdf', $userMsg['attachments'][0]['name']);
-        self::assertTrue($userMsg['attachments'][0]['unresolvable'] ?? false);
-        self::assertStringNotContainsString('Angehängte Dateien', $userMsg['content']);
-
-        // --- LLM view: markdown block in content, no structured attachments field
-        self::assertNotEmpty($capturedMessages, 'LlmService was called at least once');
-        $llmMessages = $capturedMessages[0];
-
-        $llmUserMsg = null;
-        foreach ($llmMessages as $m) {
-            $content = (string)($m['content'] ?? '');
-            if (($m['role'] ?? '') === 'user' && str_contains($content, 'Look at this')) {
-                $llmUserMsg = $m;
-                break;
-            }
-        }
-        self::assertNotNull($llmUserMsg, 'User message reached LlmService');
-        self::assertArrayNotHasKey('attachments', $llmUserMsg, 'LLM payload has no structured attachments field');
-        self::assertStringContainsString('Angehängte Dateien', $llmUserMsg['content']);
-        self::assertStringContainsString('phantom.pdf', $llmUserMsg['content']);
-        self::assertStringContainsString('nicht auflösbar', $llmUserMsg['content']);
-    }
-
-    /**
-     * @param-out array $capturedMessages
-     */
-    private function buildAgentServiceCapturing(array &$capturedMessages, ResourceFactory $resourceFactory): AgentService
-    {
-        $llmStub = $this->createStub(LlmService::class);
-        $llmStub->method('chatCompletionStream')->willReturnCallback(
-            function (array $messages) use (&$capturedMessages): array {
-                $capturedMessages[] = $messages;
-                return ['role' => 'assistant', 'content' => 'OK.'];
-            }
-        );
-
-        return new AgentService(
-            $llmStub,
-            GeneralUtility::makeInstance(ToolConverterService::class),
-            GeneralUtility::makeInstance(ToolRegistry::class),
-            GeneralUtility::makeInstance(ExtensionConfiguration::class),
-            $this->connectionPool,
-            new AgentTaskRepository($this->connectionPool),
-            new TaskStateMachine(new AgentTaskRepository($this->connectionPool)),
-            new AttachmentService($resourceFactory, $this->connectionPool),
-            new AgentInstructionRepository($this->connectionPool),
-            new InstructionTextFormatter(),
-            new ChangeTracker($this->connectionPool, new AgentTaskRepository($this->connectionPool)),
-        );
-    }
-
-    /**
-     * Build a File mock with the FAL methods serializeForLlm() touches.
-     * `getContents` defaults to throwing if the caller didn't expect to read
-     * the file (used to assert oversize / unsupported MIME short-circuits).
-     */
     private function buildFileMock(int $uid, string $mime, int $size, string $name, string $identifier, ?string $content = null): File
     {
         $file = $this->getMockBuilder(File::class)->disableOriginalConstructor()->getMock();
@@ -533,14 +483,10 @@ class AgentServiceTest extends FunctionalTestCase
     private function buildResourceFactoryReturning(int $uid, File $file): ResourceFactory
     {
         $factory = $this->getMockBuilder(ResourceFactory::class)->disableOriginalConstructor()->getMock();
-        $factory->expects(self::atLeastOnce())->method('getFileObject')->with($uid)->willReturn($file);
+        $factory->method('getFileObject')->with($uid)->willReturn($file);
         return $factory;
     }
 
-    /**
-     * Locate the user message in the LLM-payload that carries our test text.
-     * Returns null on mismatch so assertions stay readable in the calling test.
-     */
     private function findLlmUserMessage(array $llmMessages, string $textNeedle): ?array
     {
         foreach ($llmMessages as $m) {
@@ -562,13 +508,12 @@ class AgentServiceTest extends FunctionalTestCase
         return null;
     }
 
-    public function testImageAttachmentStaysMarkerOnlyForViewImage(): void
+    public function testImageAttachmentInlinesAsImageBlockForLlm(): void
     {
-        // The image is *not* embedded into the user message — the LLM has
-        // to call the ViewImage tool to actually see the bytes. content=null
-        // on the mock asserts that getContents() is never read during
-        // serialization (file bytes only flow through ViewImage).
-        $file = $this->buildFileMock(101, 'image/png', 2048, 'pixel.png', '1:/uploads/pixel.png', null);
+        // Image within size cap → serializer inlines it as an image_url block
+        // (LLM sees the bytes directly). content='DEADBEEF' proves getContents()
+        // is invoked exactly once during LLM serialization.
+        $file = $this->buildFileMock(101, 'image/png', 2048, 'pixel.png', '1:/uploads/pixel.png', 'DEADBEEF');
         $resourceFactory = $this->buildResourceFactoryReturning(101, $file);
 
         $capturedMessages = [];
@@ -581,17 +526,16 @@ class AgentServiceTest extends FunctionalTestCase
         $userMsg = $this->findLlmUserMessage($capturedMessages[0], 'Was siehst du?');
         self::assertNotNull($userMsg, 'User message reached LlmService');
 
-        self::assertIsString($userMsg['content'], 'Content stays plain text — files reach the LLM only via ViewImage');
-        self::assertStringContainsString('Was siehst du?', $userMsg['content']);
-        self::assertStringContainsString('sys_file:101', $userMsg['content']);
-        self::assertStringContainsString('image/png', $userMsg['content']);
-        self::assertStringContainsString('ViewImage', $userMsg['content']);
+        self::assertIsArray($userMsg['content'], 'Inline image → block-array content');
+        self::assertSame('text', $userMsg['content'][0]['type']);
+        self::assertStringContainsString('Was siehst du?', $userMsg['content'][0]['text']);
+        self::assertSame('image_url', $userMsg['content'][1]['type']);
+        self::assertStringStartsWith('data:image/png;base64,', $userMsg['content'][1]['image_url']['url']);
     }
 
     public function testPdfAttachmentMarkerPointsLlmToReadPdfText(): void
     {
-        // PDFs are read via ReadPdfText (text) or ViewPdfPage (page as image).
-        // content=null asserts no bytes are ever read at marker time.
+        // PDFs stay marker-only → the LLM has to call ReadPdfText / ViewPdfPage.
         $file = $this->buildFileMock(202, 'application/pdf', 4096, 'doc.pdf', '1:/uploads/doc.pdf', null);
         $resourceFactory = $this->buildResourceFactoryReturning(202, $file);
 
@@ -612,7 +556,6 @@ class AgentServiceTest extends FunctionalTestCase
 
     public function testOversizedImageMarkerWarnsLlmNotToCallViewImage(): void
     {
-        // 6 MiB > 5 MiB image cap. content=null asserts getContents() is never invoked.
         $file = $this->buildFileMock(303, 'image/png', 6 * 1024 * 1024, 'huge.png', '1:/uploads/huge.png', null);
         $resourceFactory = $this->buildResourceFactoryReturning(303, $file);
 
@@ -632,8 +575,6 @@ class AgentServiceTest extends FunctionalTestCase
 
     public function testUnsupportedMimeMarkerPointsLlmToGetFileInfo(): void
     {
-        // application/zip isn't on any viewer-tool allowlist — even though
-        // small, the marker must stay metadata-only via GetFileInfo.
         $file = $this->buildFileMock(404, 'application/zip', 100, 'archive.zip', '1:/uploads/archive.zip', null);
         $resourceFactory = $this->buildResourceFactoryReturning(404, $file);
 
@@ -693,7 +634,6 @@ class AgentServiceTest extends FunctionalTestCase
 
     public function testPreviewAttachmentReportsUnresolvable(): void
     {
-        // real ResourceFactory — uid 999999 will not resolve, falls into catch
         $attachmentService = new AttachmentService(
             GeneralUtility::makeInstance(ResourceFactory::class),
             $this->connectionPool,
@@ -717,11 +657,9 @@ class AgentServiceTest extends FunctionalTestCase
         $agentService = $this->buildAgentServiceWithMock(
             [['role' => 'assistant', 'content' => 'Done.']],
         );
-
         $agentService->run($taskUid, null, $progress);
 
-        // Fresh tasks emit a `user_message` event up front so the UI can render
-        // the prompt in the same slot it occupies in the persisted state.
+        // Fresh tasks emit user_message + llm_start + assistant_message.
         self::assertCount(3, $calls);
 
         self::assertSame('user_message', $calls[0][0]);
@@ -731,236 +669,5 @@ class AgentServiceTest extends FunctionalTestCase
 
         self::assertSame('assistant_message', $calls[2][0]);
         self::assertSame('Done.', $calls[2][1]['message']['content']);
-    }
-
-    /**
-     * When a tool returns ImageContent (e.g. ViewImage on a sys_file), the
-     * resulting tool message stores `content` directly as a block array
-     * [text, image_url]. Same shape is sent to the LLM (serializeForLlm
-     * is a no-op for tool messages) and persisted in the DB.
-     */
-    public function testToolMessageWithImageMediaStoresBlockArrayContent(): void
-    {
-        $existingMessages = [
-            ['role' => 'system', 'content' => 'sys'],
-            ['role' => 'user', 'content' => 'show me'],
-            ['role' => 'assistant', 'content' => null, 'tool_calls' => [
-                ['id' => 'call_img', 'type' => 'function', 'function' => ['name' => 'ViewImage', 'arguments' => '{"uid":42}']],
-            ]],
-            [
-                'role' => 'tool',
-                'tool_call_id' => 'call_img',
-                'content' => [
-                    ['type' => 'text', 'text' => "File: pixel.png\nMIME: image/png\nSize: 70 B\nUID: sys_file:42"],
-                    ['type' => 'image_url', 'image_url' => ['url' => 'data:image/png;base64,AAAA']],
-                ],
-            ],
-        ];
-
-        $taskUid = $this->createTask('Tool media test', 'show me', 0, 0, $existingMessages);
-
-        $capturedMessages = [];
-        $llmStub = $this->createStub(LlmService::class);
-        $llmStub->method('chatCompletionStream')->willReturnCallback(
-            function (array $messages) use (&$capturedMessages): array {
-                $capturedMessages[] = $messages;
-                return ['role' => 'assistant', 'content' => 'Seen.'];
-            }
-        );
-
-        $agentService = new AgentService(
-            $llmStub,
-            GeneralUtility::makeInstance(ToolConverterService::class),
-            GeneralUtility::makeInstance(ToolRegistry::class),
-            GeneralUtility::makeInstance(ExtensionConfiguration::class),
-            $this->connectionPool,
-            new AgentTaskRepository($this->connectionPool),
-            new TaskStateMachine(new AgentTaskRepository($this->connectionPool)),
-            new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class), $this->connectionPool),
-            new AgentInstructionRepository($this->connectionPool),
-            new InstructionTextFormatter(),
-            new ChangeTracker($this->connectionPool, new AgentTaskRepository($this->connectionPool)),
-        );
-        $agentService->run($taskUid);
-
-        self::assertNotEmpty($capturedMessages, 'LlmService received a payload');
-        $llmMessages = $capturedMessages[0];
-
-        $toolIndex = null;
-        foreach ($llmMessages as $i => $m) {
-            if (($m['role'] ?? '') === 'tool' && ($m['tool_call_id'] ?? '') === 'call_img') {
-                $toolIndex = $i;
-                break;
-            }
-        }
-        self::assertNotNull($toolIndex, 'Tool message reached LlmService');
-
-        $toolMsg = $llmMessages[$toolIndex];
-        self::assertIsArray($toolMsg['content'], 'tool_result content reaches LLM as block array');
-        self::assertSame('text', $toolMsg['content'][0]['type']);
-        self::assertStringContainsString('pixel.png', $toolMsg['content'][0]['text']);
-        self::assertSame('image_url', $toolMsg['content'][1]['type']);
-        self::assertSame('data:image/png;base64,AAAA', $toolMsg['content'][1]['image_url']['url']);
-        self::assertArrayNotHasKey('_media', $toolMsg, 'No legacy split — content carries the media directly');
-
-        // Persisted record carries the same block array — no transformation
-        // between storage and LLM call.
-        $task = $this->getTask($taskUid);
-        $persisted = $this->decodeMessages($task['messages']);
-        $persistedTool = null;
-        foreach ($persisted as $m) {
-            if (($m['role'] ?? '') === 'tool' && ($m['tool_call_id'] ?? '') === 'call_img') {
-                $persistedTool = $m;
-                break;
-            }
-        }
-        self::assertNotNull($persistedTool);
-        self::assertIsArray($persistedTool['content'], 'Persisted content is a block array');
-        self::assertSame('image_url', $persistedTool['content'][1]['type']);
-        self::assertSame('data:image/png;base64,AAAA', $persistedTool['content'][1]['image_url']['url']);
-        self::assertArrayNotHasKey('_media', $persistedTool);
-    }
-
-    /**
-     * PDFs follow the same inline path as images: the tool message content
-     * becomes a block array carrying text + a `file` block with the PDF bytes.
-     */
-    public function testToolMessageWithPdfMediaInlinesFileBlock(): void
-    {
-        $existingMessages = [
-            ['role' => 'system', 'content' => 'sys'],
-            ['role' => 'user', 'content' => 'show pdf'],
-            ['role' => 'assistant', 'content' => null, 'tool_calls' => [
-                ['id' => 'call_pdf', 'type' => 'function', 'function' => ['name' => 'ViewImage', 'arguments' => '{"uid":48}']],
-            ]],
-            [
-                'role' => 'tool',
-                'tool_call_id' => 'call_pdf',
-                'content' => [
-                    ['type' => 'text', 'text' => "File: doc.pdf\nMIME: application/pdf\nSize: 1.0 KiB\nUID: sys_file:48"],
-                    ['type' => 'file', 'file' => ['filename' => 'doc.pdf', 'file_data' => 'data:application/pdf;base64,BBBB']],
-                ],
-            ],
-        ];
-
-        $taskUid = $this->createTask('Tool pdf test', 'show pdf', 0, 0, $existingMessages);
-
-        $capturedMessages = [];
-        $llmStub = $this->createStub(LlmService::class);
-        $llmStub->method('chatCompletionStream')->willReturnCallback(
-            function (array $messages) use (&$capturedMessages): array {
-                $capturedMessages[] = $messages;
-                return ['role' => 'assistant', 'content' => 'Got it.'];
-            }
-        );
-
-        $agentService = new AgentService(
-            $llmStub,
-            GeneralUtility::makeInstance(ToolConverterService::class),
-            GeneralUtility::makeInstance(ToolRegistry::class),
-            GeneralUtility::makeInstance(ExtensionConfiguration::class),
-            $this->connectionPool,
-            new AgentTaskRepository($this->connectionPool),
-            new TaskStateMachine(new AgentTaskRepository($this->connectionPool)),
-            new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class), $this->connectionPool),
-            new AgentInstructionRepository($this->connectionPool),
-            new InstructionTextFormatter(),
-            new ChangeTracker($this->connectionPool, new AgentTaskRepository($this->connectionPool)),
-        );
-        $agentService->run($taskUid);
-
-        $llmMessages = $capturedMessages[0];
-
-        $toolIndex = null;
-        foreach ($llmMessages as $i => $m) {
-            if (($m['role'] ?? '') === 'tool' && ($m['tool_call_id'] ?? '') === 'call_pdf') {
-                $toolIndex = $i;
-                break;
-            }
-        }
-        self::assertNotNull($toolIndex);
-
-        $toolMsg = $llmMessages[$toolIndex];
-        self::assertIsArray($toolMsg['content'], 'tool_result content becomes a block array with text + file');
-        self::assertSame('text', $toolMsg['content'][0]['type']);
-        self::assertStringContainsString('doc.pdf', $toolMsg['content'][0]['text']);
-        self::assertSame('file', $toolMsg['content'][1]['type']);
-        self::assertSame('doc.pdf', $toolMsg['content'][1]['file']['filename']);
-        self::assertSame('data:application/pdf;base64,BBBB', $toolMsg['content'][1]['file']['file_data']);
-        self::assertArrayNotHasKey('_media', $toolMsg);
-    }
-
-    /**
-     * Two consecutive ViewImage calls in one assistant turn produce two
-     * `tool` messages. Each carries its own media inline — the resulting
-     * message tail is `assistant(tool_calls), tool(a), tool(b)` with each
-     * tool message holding its own `file` block.
-     */
-    public function testMultiplePdfToolResultsInlineMediaEach(): void
-    {
-        $existingMessages = [
-            ['role' => 'system', 'content' => 'sys'],
-            ['role' => 'user', 'content' => 'show both'],
-            ['role' => 'assistant', 'content' => null, 'tool_calls' => [
-                ['id' => 'call_a', 'type' => 'function', 'function' => ['name' => 'ViewImage', 'arguments' => '{"uid":1}']],
-                ['id' => 'call_b', 'type' => 'function', 'function' => ['name' => 'ViewImage', 'arguments' => '{"uid":2}']],
-            ]],
-            [
-                'role' => 'tool', 'tool_call_id' => 'call_a',
-                'content' => [
-                    ['type' => 'text', 'text' => 'File: a.pdf'],
-                    ['type' => 'file', 'file' => ['filename' => 'a.pdf', 'file_data' => 'data:application/pdf;base64,AAAA']],
-                ],
-            ],
-            [
-                'role' => 'tool', 'tool_call_id' => 'call_b',
-                'content' => [
-                    ['type' => 'text', 'text' => 'File: b.pdf'],
-                    ['type' => 'file', 'file' => ['filename' => 'b.pdf', 'file_data' => 'data:application/pdf;base64,CCCC']],
-                ],
-            ],
-        ];
-
-        $taskUid = $this->createTask('Multi pdf', 'show both', 0, 0, $existingMessages);
-
-        $capturedMessages = [];
-        $llmStub = $this->createStub(LlmService::class);
-        $llmStub->method('chatCompletionStream')->willReturnCallback(
-            function (array $messages) use (&$capturedMessages): array {
-                $capturedMessages[] = $messages;
-                return ['role' => 'assistant', 'content' => 'OK.'];
-            }
-        );
-
-        $agentService = new AgentService(
-            $llmStub,
-            GeneralUtility::makeInstance(ToolConverterService::class),
-            GeneralUtility::makeInstance(ToolRegistry::class),
-            GeneralUtility::makeInstance(ExtensionConfiguration::class),
-            $this->connectionPool,
-            new AgentTaskRepository($this->connectionPool),
-            new TaskStateMachine(new AgentTaskRepository($this->connectionPool)),
-            new AttachmentService(GeneralUtility::makeInstance(\TYPO3\CMS\Core\Resource\ResourceFactory::class), $this->connectionPool),
-            new AgentInstructionRepository($this->connectionPool),
-            new InstructionTextFormatter(),
-            new ChangeTracker($this->connectionPool, new AgentTaskRepository($this->connectionPool)),
-        );
-        $agentService->run($taskUid);
-
-        $llmMessages = $capturedMessages[0];
-
-        $roles = array_map(static fn(array $m): string => (string)($m['role'] ?? ''), $llmMessages);
-        $tail = array_slice($roles, -3);
-        self::assertSame(['assistant', 'tool', 'tool'], $tail, 'Tool messages stay contiguous, each carries its own inline media');
-
-        $toolMsgs = array_values(array_filter(
-            $llmMessages,
-            static fn(array $m): bool => ($m['role'] ?? '') === 'tool',
-        ));
-        self::assertCount(2, $toolMsgs);
-        self::assertSame('a.pdf', $toolMsgs[0]['content'][1]['file']['filename']);
-        self::assertSame('data:application/pdf;base64,AAAA', $toolMsgs[0]['content'][1]['file']['file_data']);
-        self::assertSame('b.pdf', $toolMsgs[1]['content'][1]['file']['filename']);
-        self::assertSame('data:application/pdf;base64,CCCC', $toolMsgs[1]['content'][1]['file']['file_data']);
     }
 }

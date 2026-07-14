@@ -4,19 +4,17 @@ declare(strict_types=1);
 
 namespace Hn\Agent\Renderer;
 
+use Hn\Agent\Service\AgentScratchStorage;
 use TYPO3\CMS\Backend\Routing\UriBuilder;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
-use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
 use TYPO3\CMS\Core\Page\PageRenderer;
-use TYPO3\CMS\Core\Resource\DefaultUploadFolderResolver;
-use TYPO3\CMS\Core\Resource\Folder;
 
 class PromptRenderer
 {
     public function __construct(
         private readonly UriBuilder $uriBuilder,
         private readonly PageRenderer $pageRenderer,
-        private readonly DefaultUploadFolderResolver $defaultUploadFolderResolver,
+        private readonly AgentScratchStorage $scratchStorage,
     ) {}
 
     /**
@@ -42,9 +40,12 @@ class PromptRenderer
      * Registriert alles, was der Message-Composer im Modul-Iframe braucht, um
      * Upload & File-Picking betreiben zu können — als Inline-Settings, die der
      * Composer im JS liest:
-     *   - `TYPO3.settings.Agent.defaultUploadFolder` (kontextabhängig via
-     *     DefaultUploadFolderResolver aus pageId + tableName + BE_USER auf-
-     *     gelöst).
+     *   - `TYPO3.settings.Agent.defaultUploadFolder` — Combined Identifier
+     *     eines BE-User-scoped Ordners im nicht-öffentlichen Scratch-Storage
+     *     (z.B. "3:/user_42/"). Chat-Uploads landen damit außerhalb von
+     *     fileadmin/ und müssen bei Record-Verwendung durch den Agent via
+     *     PromoteScratchFileTool in den regulären fileadmin-Zielordner
+     *     promotet werden.
      *   - `TYPO3.settings.Agent.elementBrowserUrl` (Basis-URL des Element-
      *     Browsers; der Core setzt sie nur im äußeren Backend-Shell, nicht im
      *     Modul-Iframe).
@@ -52,11 +53,10 @@ class PromptRenderer
      */
     public function registerUploadContext(int $pageId, string $tableName): void
     {
-        $beUser = $GLOBALS['BE_USER'] ?? null;
-        $uploadFolder = $beUser instanceof BackendUserAuthentication
-            ? $this->defaultUploadFolderResolver->resolve($beUser, $pageId, $tableName !== '' ? $tableName : null)
-            : false;
-        $defaultUploadFolder = $uploadFolder instanceof Folder ? $uploadFolder->getCombinedIdentifier() : '';
+        $beUserUid = (int)($GLOBALS['BE_USER']->user['uid'] ?? 0);
+        $defaultUploadFolder = $beUserUid > 0
+            ? $this->scratchStorage->ensureUploadIdentifierForUser($beUserUid)
+            : '';
 
         $this->pageRenderer->addInlineLanguageLabelFile('EXT:core/Resources/Private/Language/locallang_core.xlf', 'file_upload');
         $this->pageRenderer->addInlineSetting('Agent', 'defaultUploadFolder', $defaultUploadFolder);

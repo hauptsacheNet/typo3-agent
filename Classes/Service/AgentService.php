@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Hn\Agent\Service;
 
 use Hn\Agent\Domain\AgentInstructionRepository;
+use Hn\Agent\Domain\AgentMessageRepository;
 use Hn\Agent\Domain\AgentTaskRepository;
 use Hn\Agent\Domain\TaskEvent;
 use Hn\Agent\Domain\TaskStateMachine;
@@ -34,8 +35,10 @@ class AgentService implements LoggerAwareInterface
         private readonly ExtensionConfiguration $extensionConfiguration,
         private readonly ConnectionPool $connectionPool,
         private readonly AgentTaskRepository $repository,
+        private readonly AgentMessageRepository $messageRepository,
         private readonly TaskStateMachine $stateMachine,
         private readonly AttachmentService $attachmentService,
+        private readonly MessageLlmSerializer $llmSerializer,
         private readonly AgentInstructionRepository $instructionRepository,
         private readonly InstructionTextFormatter $instructionTextFormatter,
         private readonly ChangeTracker $changeTracker,
@@ -54,23 +57,17 @@ class AgentService implements LoggerAwareInterface
      *     reload-view render identically.
      *
      * Follow-up path ($userMessage !== null):
-     *   - Appends a new user message (and optional attachment refs).
-     *   - Persists the new message via saveMessages(), then acquires the
-     *     lease via claim(). The lease CAS (status != InProgress) guards
-     *     against concurrent follow-ups.
+     *   - Appends a new user message (and optional attachment refs) to
+     *     tx_agent_message, creating sys_file_reference rows for the files.
+     *   - Then acquires the lease via claim(). The lease CAS
+     *     (status != InProgress) guards against concurrent follow-ups.
      *
      * Both paths converge in runLoop() (LLM call → tool execution → repeat).
-     * Messages are saved after every iteration for resumability.
      *
-     * @param int $taskUid
-     * @param string|null $userMessage Follow-up user message; null for initial processing.
      * @param callable(string, array): void|null $progress Invoked with (string $event, array $data).
-     *        Events: 'llm_start', 'assistant_message', 'tool_start', 'tool_result',
-     *        'content_delta', 'tool_call_delta', 'user_message', 'reasoning_delta',
-     *        'change_tracked'.
      * @param array<int, array{uid?: int|string, identifier?: string, name?: string}> $attachments
      *        Only consumed on the follow-up path.
-     * @return array The full updated messages array (after runLoop).
+     * @return list<array<string, mixed>> The full updated messages array (after runLoop).
      */
     public function run(
         int $taskUid,
@@ -85,19 +82,18 @@ class AgentService implements LoggerAwareInterface
 
         $this->setupBackendUserContext((int)($task['cruser_id'] ?? 0), (int)($task['workspace_id'] ?? 0));
 
-        $messages = $this->decodeMessages($task['messages'] ?? null) ?? [];
+        $pid = (int)($task['pid'] ?? 0);
 
         if ($userMessage !== null) {
             // Follow-up: resolve attachments under the task's BE_USER (not the request context),
-            // append the new user message, persist, then claim the lease.
-            $attachmentRefs = $this->attachmentService->normalizeRefs($attachments);
-            $userMessageRecord = ['role' => 'user', 'content' => $userMessage];
-            if ($attachmentRefs !== []) {
-                $userMessageRecord['attachments'] = $attachmentRefs;
-            }
-            $messages[] = $userMessageRecord;
-
-            $this->repository->saveMessages($taskUid, $messages);
+            // append the new user message, then claim the lease.
+            $fileUids = $this->attachmentService->resolveClientAttachmentsToFileUids($attachments);
+            $this->messageRepository->append(
+                $taskUid,
+                $pid,
+                ['role' => 'user', 'content' => $userMessage],
+                $fileUids,
+            );
 
             $claimed = $this->repository->claim($taskUid);
             if (!$claimed) {
@@ -115,11 +111,12 @@ class AgentService implements LoggerAwareInterface
             }
 
             if ($isFreshTask && $progress !== null) {
+                $messages = $this->messageRepository->findByTask($taskUid);
                 $this->emitInitialContextEvents($messages, $progress);
             }
         }
 
-        return $this->runLoop($taskUid, $messages, $progress);
+        return $this->runLoop($taskUid, $pid, $progress);
     }
 
     /**
@@ -128,14 +125,13 @@ class AgentService implements LoggerAwareInterface
      * Caller must ensure: task is claimed (status=1), BE_USER context is set up.
      *
      * @param callable(string, array): void|null $progress
+     * @return list<array<string, mixed>>
      */
-    private function runLoop(int $taskUid, array $messages, ?callable $progress): array
+    private function runLoop(int $taskUid, int $pid, ?callable $progress): array
     {
         try {
-            // Convert MCP tools to OpenAI format
             $tools = $this->toolConverterService->convertTools($this->toolRegistry);
 
-            // Agent loop
             $config = $this->extensionConfiguration->get('agent');
             $maxIterations = (int)($config['maxIterations'] ?? 20);
             $reachedLimit = false;
@@ -143,37 +139,25 @@ class AgentService implements LoggerAwareInterface
             for ($iteration = 0; $iteration < $maxIterations; $iteration++) {
                 // Cooperative cancellation point. The cancel endpoint flips
                 // status from InProgress to Cancelled via TaskStateMachine;
-                // we see that on the next iteration and bail. The terminal
-                // trigger()'s CAS on `status = InProgress` would also no-op
-                // over a Cancelled row, but this early return avoids the
-                // wasted LLM iteration.
+                // we see that on the next iteration and bail.
                 $current = $this->repository->findByUid($taskUid);
                 if ($current === false || (int)$current['status'] !== TaskStatus::InProgress->value) {
-                    return $messages;
+                    return $this->messageRepository->findByTask($taskUid);
                 }
 
                 if ($progress !== null) {
                     $progress('llm_start', []);
                 }
 
-                // Per-delta callback for streaming LLM chunks. Rewrites raw SSE
-                // delta types ('content', 'tool_call', 'finish') into the agent-level
-                // progress events ('content_delta', 'tool_call_delta'); 'finish' is
-                // intentionally dropped since 'assistant_message' below marks the
-                // end of an iteration for downstream consumers.
                 $onDelta = $progress === null
                     ? null
                     : static function (string $deltaType, array $payload) use ($progress): void {
                         if ($deltaType === 'content') {
-                            $progress('content_delta', [
-                                'text' => $payload['text'] ?? '',
-                            ]);
+                            $progress('content_delta', ['text' => $payload['text'] ?? '']);
                             return;
                         }
                         if ($deltaType === 'reasoning') {
-                            $progress('reasoning_delta', [
-                                'text' => $payload['text'] ?? '',
-                            ]);
+                            $progress('reasoning_delta', ['text' => $payload['text'] ?? '']);
                             return;
                         }
                         if ($deltaType === 'tool_call') {
@@ -181,37 +165,28 @@ class AgentService implements LoggerAwareInterface
                         }
                     };
 
-                // Call LLM (streaming — invokes $onDelta per chunk, returns
-                // aggregated message with same shape as chatCompletion()).
-                // serializeForLlm() merges structured attachment refs into
-                // content as a markdown block at the call site; the persisted
-                // messages keep `attachments` as a structured field.
+                $messages = $this->messageRepository->findByTask($taskUid);
+                $llmPayload = $this->llmSerializer->serialize($messages);
+
                 $assistantMessage = $this->llmService->chatCompletionStream(
-                    $this->serializeForLlm($messages),
+                    $llmPayload,
                     $tools,
                     $onDelta,
                 );
 
-                // Append assistant message
-                $messages[] = $assistantMessage;
-
-                // Save checkpoint (messages only — status is owned by claim/cancel/final-save).
-                $this->repository->saveMessages($taskUid, $messages);
+                $this->messageRepository->append($taskUid, $pid, $assistantMessage);
 
                 if ($progress !== null) {
                     $progress('assistant_message', [
-                        'message' => $assistantMessage,
+                        'message' => $this->attachmentService->hydrateAttachmentsForClient([$assistantMessage])[0],
                     ]);
                 }
 
-                // Check for tool calls
                 $toolCalls = $assistantMessage['tool_calls'] ?? null;
                 if (empty($toolCalls)) {
-                    // No tool calls — final answer reached
                     break;
                 }
 
-                // Execute each tool call
                 foreach ($toolCalls as $toolCall) {
                     $toolName = $toolCall['function']['name'] ?? '';
                     $toolArguments = $toolCall['function']['arguments'] ?? '{}';
@@ -229,59 +204,55 @@ class AgentService implements LoggerAwareInterface
                         $this->toolRegistry,
                         $toolName,
                         $toolArguments,
+                        $taskUid,
                     );
 
-                    // Track workspace changes from write operations
                     $change = $this->changeTracker->track($taskUid, $toolResult['text']);
                     if ($change !== null && $progress !== null) {
                         $progress('change_tracked', $change);
                     }
 
-                    // Append tool result message. When the tool returned binary
-                    // payloads (e.g. ReadFile on a sys_file image), `content`
-                    // becomes a block array [text, image_url|file] — the same
-                    // shape the LLM consumes. The UI's tool-result renderer
-                    // extracts the text portion via a small helper.
-                    $messages[] = [
-                        'role' => 'tool',
-                        'tool_call_id' => $toolCallId,
-                        'content' => $this->buildToolContent($toolResult['text'], $toolResult['media']),
-                    ];
+                    $this->messageRepository->append(
+                        $taskUid,
+                        $pid,
+                        [
+                            'role' => 'tool',
+                            'tool_call_id' => $toolCallId,
+                            'tool_name' => $toolName,
+                            'content' => $toolResult['text'],
+                        ],
+                        $toolResult['attachments'],
+                    );
 
                     if ($progress !== null) {
                         $progress('tool_result', [
                             'tool_call_id' => $toolCallId,
                             'tool_name' => $toolName,
                             'content' => $toolResult['text'],
+                            'attachments' => $this->attachmentService->hydrateAttachmentsForClient([
+                                ['attachments' => $toolResult['attachments']],
+                            ])[0]['attachments'] ?? [],
                         ]);
                     }
                 }
-
-                // Save checkpoint after tool execution (messages only).
-                $this->repository->saveMessages($taskUid, $messages);
 
                 if ($iteration === $maxIterations - 1) {
                     $reachedLimit = true;
                 }
             }
 
-            // Extract final result from last assistant message
-            $result = $this->extractResult($messages);
+            $finalMessages = $this->messageRepository->findByTask($taskUid);
+            $result = $this->extractResult($finalMessages);
 
             if ($reachedLimit) {
                 $result = '[Agent stopped: reached maximum of ' . $maxIterations . ' iterations]'
                     . ($result !== '' ? "\n\n" . $result : '');
             }
-            $this->repository->saveMessages($taskUid, $messages);
             $this->repository->saveResult($taskUid, $result);
             $this->stateMachine->trigger($taskUid, $reachedLimit ? TaskEvent::Fail : TaskEvent::End);
 
-            return $messages;
+            return $finalMessages;
         } catch (\Throwable $e) {
-            // Preserve progress on failure. State-Machine-CAS-guarded: if the
-            // task was cancelled externally before the exception fired, leave
-            // it Cancelled rather than overwriting with Failed.
-            $this->repository->saveMessages($taskUid, $messages);
             $this->repository->saveResult($taskUid, 'Error: ' . $e->getMessage());
             $this->stateMachine->trigger($taskUid, TaskEvent::Fail);
             throw $e;
@@ -289,64 +260,40 @@ class AgentService implements LoggerAwareInterface
     }
 
     /**
-     * Decode messages from a task record.
-     *
-     * fetchAssociative() returns the raw JSON string from the database;
-     * decode it here. Returns null for empty/missing data.
-     */
-    public function decodeMessages(mixed $raw): ?array
-    {
-        if (is_array($raw)) {
-            return $raw !== [] ? $raw : null;
-        }
-        if (is_string($raw) && $raw !== '' && $raw !== 'null') {
-            $decoded = json_decode($raw, true);
-            if (is_array($decoded) && $decoded !== []) {
-                return $decoded;
-            }
-        }
-        return null;
-    }
-
-    /**
-     * Build the initial conversation for a brand-new task: system prompt
-     * + synthetic GetPage/ReadTable context turn + user message (with
-     * resolved attachments, if any).
-     *
-     * Invoked by ChatController::newAction (and persisted there into
-     * tx_agent_task.messages), so subsequent run() calls just decode the
-     * JSON instead of synthesizing.
+     * Build the initial conversation for a brand-new task and persist it
+     * to tx_agent_message. Returns the taskUid → caller inserted the task,
+     * we own the message rows.
      *
      * @param array<int, array{uid?: int|string, identifier?: string, name?: string}> $rawAttachments
-     *        Raw attachment refs from the request — resolved against the current BE_USER's FAL permissions.
      */
-    public function buildInitialMessages(int $pid, string $contextTable, int $contextUid, string $prompt, array $rawAttachments = []): array
+    public function persistInitialMessages(int $taskUid, int $pid, string $contextTable, int $contextUid, string $prompt, array $rawAttachments = []): void
     {
         $config = $this->extensionConfiguration->get('agent');
         $systemPrompt = $config['systemPrompt'] ?? 'You are a helpful TYPO3 CMS assistant.';
         $systemPrompt .= $this->buildInstructionsSection();
+        $systemPrompt .= $this->buildScratchStorageHint();
 
-        $userMessage = ['role' => 'user', 'content' => $prompt];
-        $attachmentRefs = $this->attachmentService->normalizeRefs($rawAttachments);
-        if ($attachmentRefs !== []) {
-            $userMessage['attachments'] = $attachmentRefs;
-        }
-        $messages = [
-            ['role' => 'system', 'content' => $systemPrompt],
-        ];
+        $this->messageRepository->append($taskUid, $pid, [
+            'role' => 'system',
+            'content' => $systemPrompt,
+        ]);
 
-        $messages[] = $userMessage;
+        // Persist the user prompt right after system, BEFORE the synthetic
+        // context turn — the chat UI then renders "user asks" first and the
+        // simulated "let me load the working context" bot turn below it,
+        // matching the natural conversational order.
+        $fileUids = $this->attachmentService->resolveClientAttachmentsToFileUids($rawAttachments);
+        $this->messageRepository->append(
+            $taskUid,
+            $pid,
+            ['role' => 'user', 'content' => $prompt],
+            $fileUids,
+        );
 
-        // Build context tool calls to inject as a simulated assistant turn
-        // BEFORE the user prompt. From the LLM's perspective the agent has
-        // already loaded the working context (page/record the user is on) as
-        // its first action, and the user prompt then arrives with that context
-        // visible. The user message is appended after the context block below.
         $toolCalls = [];
         $toolResults = [];
         $loadedParts = [];
 
-        // Page context via GetPage
         if ($pid > 0) {
             $pageContext = $this->getPageContext($pid);
             if ($pageContext !== '') {
@@ -362,14 +309,13 @@ class AgentService implements LoggerAwareInterface
                 $toolResults[] = [
                     'role' => 'tool',
                     'tool_call_id' => $callId,
+                    'tool_name' => 'GetPage',
                     'content' => $pageContext,
                 ];
                 $loadedParts[] = 'Seite #' . $pid;
             }
         }
 
-        // Record context via ReadTable — skip when it would duplicate the
-        // page context already loaded above (same UID on the pages table).
         $isPageDuplicate = $contextTable === 'pages' && $contextUid === $pid && $pid > 0;
         if ($contextTable !== '' && $contextUid > 0 && !$isPageDuplicate) {
             $recordContext = $this->getRecordContext($contextTable, $contextUid);
@@ -386,28 +332,23 @@ class AgentService implements LoggerAwareInterface
                 $toolResults[] = [
                     'role' => 'tool',
                     'tool_call_id' => $callId,
+                    'tool_name' => 'ReadTable',
                     'content' => $recordContext,
                 ];
                 $loadedParts[] = $contextTable . ' #' . $contextUid;
             }
         }
 
-        // Append the simulated assistant tool-call turn + results.
-        // The narration in `content` frames the pre-fetched tool calls as the
-        // working context the user is currently on — without it the LLM has
-        // to infer purpose from message position alone.
         if ($toolCalls !== []) {
-            $messages[] = [
+            $this->messageRepository->append($taskUid, $pid, [
                 'role' => 'assistant',
                 'content' => 'Ich lade zuerst den aktuellen Arbeitskontext: ' . implode(', ', $loadedParts) . '.',
                 'tool_calls' => $toolCalls,
-            ];
-            array_push($messages, ...$toolResults);
+            ]);
+            foreach ($toolResults as $toolResult) {
+                $this->messageRepository->append($taskUid, $pid, $toolResult);
+            }
         }
-
-
-
-        return $messages;
     }
 
     /**
@@ -419,11 +360,6 @@ class AgentService implements LoggerAwareInterface
      *  - "always" instructions are inlined in full (global base rules).
      *  - "on_demand" instructions are only indexed (name + "when to use"); the
      *    agent loads the full body via the GetInstruction tool when relevant.
-     *
-     * Returns an empty string when there are no active instructions, so the
-     * system prompt is left untouched in that case. The block is baked into
-     * the stored system message at task-creation time — it therefore applies
-     * to newly started chats, not to ones already in progress.
      */
     private function buildInstructionsSection(): string
     {
@@ -463,13 +399,28 @@ class AgentService implements LoggerAwareInterface
     }
 
     /**
-     * Emit progress events for the synthetic turns produced by
-     * buildInitialMessages() in the same order they sit in the persisted
-     * messages array — the chat UI then renders Live-Stream and Reload-View
-     * identically. System messages are skipped (hidden in the UI anyway);
-     * tool_results are emitted in their natural position and correlated to
-     * their tool_call client-side by `tool_call_id`.
-     *
+     * Reminds the model that chat-composer uploads live in the non-public
+     * scratch storage and must be promoted before use in regular records.
+     * Without a PromoteScratchFileTool call, sys_file_references pointing to
+     * scratch files will 404 in the frontend.
+     */
+    private function buildScratchStorageHint(): string
+    {
+        return "\n\n# File attachments"
+            . "\nFiles uploaded by the user via the chat composer, as well as binary"
+            . " outputs of tools such as ExtractImages or ViewImage, are stored in a"
+            . " non-public scratch storage and are NOT web-reachable. Before you"
+            . " reference such a file in a regular record (tt_content image,"
+            . " tx_news_domain_model_news, sys_file_reference on any table other"
+            . " than tx_agent_message), you MUST call `PromoteScratchFileTool` to"
+            . " copy the file into the regular fileadmin storage and use the"
+            . " returned sys_file UID as `uid_local`. Skipping this step leaves a"
+            . " reference to a non-public file and the image will 404 in the"
+            . " frontend.";
+    }
+
+    /**
+     * @param list<array<string, mixed>> $messages
      * @param callable(string, array): void $progress
      */
     private function emitInitialContextEvents(array $messages, callable $progress): void
@@ -484,7 +435,9 @@ class AgentService implements LoggerAwareInterface
             }
         }
 
-        foreach ($messages as $msg) {
+        $hydrated = $this->attachmentService->hydrateAttachmentsForClient($messages);
+
+        foreach ($hydrated as $msg) {
             $role = $msg['role'] ?? '';
             if ($role === 'system') {
                 continue;
@@ -508,8 +461,9 @@ class AgentService implements LoggerAwareInterface
                 $toolCallId = (string)($msg['tool_call_id'] ?? '');
                 $progress('tool_result', [
                     'tool_call_id' => $toolCallId,
-                    'tool_name' => $toolNameByCallId[$toolCallId] ?? '',
+                    'tool_name' => (string)($msg['tool_name'] ?? $toolNameByCallId[$toolCallId] ?? ''),
                     'content' => (string)($msg['content'] ?? ''),
+                    'attachments' => $msg['attachments'] ?? [],
                 ]);
             }
         }
@@ -565,13 +519,24 @@ class AgentService implements LoggerAwareInterface
 
     /**
      * Extract the final text result from the messages array.
+     *
+     * @param list<array<string, mixed>> $messages
      */
     private function extractResult(array $messages): string
     {
-        // Walk backwards to find the last assistant message with content
         for ($i = count($messages) - 1; $i >= 0; $i--) {
             if (($messages[$i]['role'] ?? '') === 'assistant' && !empty($messages[$i]['content'])) {
-                return $messages[$i]['content'];
+                $content = $messages[$i]['content'];
+                if (is_string($content)) {
+                    return $content;
+                }
+                if (is_array($content)) {
+                    foreach ($content as $block) {
+                        if (is_array($block) && ($block['type'] ?? '') === 'text' && isset($block['text'])) {
+                            return (string)$block['text'];
+                        }
+                    }
+                }
             }
         }
         return '';
@@ -584,7 +549,6 @@ class AgentService implements LoggerAwareInterface
      */
     private function setupBackendUserContext(int $userId, int $persistedWorkspaceId = 0): void
     {
-        // Ensure TCA is loaded (required for tools, may not be loaded in all contexts)
         if (empty($GLOBALS['TCA'])) {
             $tcaFactory = GeneralUtility::getContainer()->get(TcaFactory::class);
             $GLOBALS['TCA'] = $tcaFactory->get();
@@ -593,7 +557,6 @@ class AgentService implements LoggerAwareInterface
         $beUser = GeneralUtility::makeInstance(BackendUserAuthentication::class);
 
         if ($userId > 0) {
-            // Load user data from database
             $queryBuilder = $this->connectionPool
                 ->getConnectionForTable('be_users')
                 ->createQueryBuilder();
@@ -609,17 +572,11 @@ class AgentService implements LoggerAwareInterface
                 $beUser->user = $userData;
                 $GLOBALS['BE_USER'] = $beUser;
 
-                // Populate permissions from user groups
                 $beUser->fetchGroupData();
 
-                // Initialize language service
                 $languageServiceFactory = GeneralUtility::makeInstance(LanguageServiceFactory::class);
                 $GLOBALS['LANG'] = $languageServiceFactory->createFromUserPreferences($beUser);
 
-                // Set up workspace context: prefer the workspace persisted on the
-                // task (so a chat continues in the workspace where it was created).
-                // Fall back to optimal-workspace selection only when no workspace
-                // was persisted (legacy rows from before this migration).
                 $workspaceService = GeneralUtility::makeInstance(WorkspaceContextService::class);
                 if ($persistedWorkspaceId > 0) {
                     if (!$beUser->checkWorkspace($persistedWorkspaceId)) {
@@ -635,7 +592,6 @@ class AgentService implements LoggerAwareInterface
                     $workspaceId = $workspaceService->switchToOptimalWorkspace($beUser);
                 }
 
-                // Set up TYPO3 Context API
                 $context = GeneralUtility::makeInstance(Context::class);
                 $context->setAspect('backend.user', new UserAspect($beUser));
                 $context->setAspect('workspace', new WorkspaceAspect($workspaceId));
@@ -644,7 +600,6 @@ class AgentService implements LoggerAwareInterface
             }
         }
 
-        // Fall back to admin context if cruser_id is 0 or user not found
         $beUser->user = [
             'uid' => 1,
             'pid' => 0,
@@ -662,70 +617,4 @@ class AgentService implements LoggerAwareInterface
         $languageServiceFactory = GeneralUtility::makeInstance(LanguageServiceFactory::class);
         $GLOBALS['LANG'] = $languageServiceFactory->create('default');
     }
-
-    /**
-     * Project the persisted message array into the form the LLM client expects.
-     *
-     * User attachments are surfaced as a metadata-only marker block via
-     * AttachmentService::mergeMarkersIntoContent — the LLM has to call
-     * `ReadFile` to actually inspect content. Tool messages already carry
-     * their media inline in `content` (built by buildToolContent() at write
-     * time), so nothing extra is needed for them.
-     *
-     * @param array<int, array<string, mixed>> $messages
-     * @return array<int, array<string, mixed>>
-     */
-    private function serializeForLlm(array $messages): array
-    {
-        $out = [];
-        foreach ($messages as $message) {
-            if (!is_array($message) || empty($message['attachments']) || !is_array($message['attachments'])) {
-                if (is_array($message) && array_key_exists('attachments', $message)) {
-                    unset($message['attachments']);
-                }
-                $out[] = $message;
-                continue;
-            }
-
-            $message['content'] = $this->attachmentService->mergeMarkersIntoContent(
-                (string)($message['content'] ?? ''),
-                $message['attachments'],
-            );
-            unset($message['attachments']);
-            $out[] = $message;
-        }
-        return $out;
-    }
-
-    /**
-     * Combine a tool's text output and inline media into the persisted/LLM
-     * content shape: plain string when there is no media, otherwise a block
-     * array `[{type:text,...}, {type:image_url|file,...}, ...]`.
-     *
-     * @param list<array{mime: string, data: string, filename?: string}> $media
-     * @return string|list<array<string, mixed>>
-     */
-    private function buildToolContent(string $text, array $media): string|array
-    {
-        if ($media === []) {
-            return $text;
-        }
-        $blocks = [['type' => 'text', 'text' => $text]];
-        foreach ($media as $item) {
-            $mime = (string)($item['mime'] ?? 'application/octet-stream');
-            $data = (string)($item['data'] ?? '');
-            if ($data === '') {
-                continue;
-        }
-            $dataUri = 'data:' . $mime . ';base64,' . $data;
-            if (str_starts_with($mime, 'image/')) {
-                $blocks[] = ['type' => 'image_url', 'image_url' => ['url' => $dataUri]];
-            } else {
-                $filename = (string)($item['filename'] ?? 'attachment');
-                $blocks[] = ['type' => 'file', 'file' => ['filename' => $filename, 'file_data' => $dataUri]];
-            }
-        }
-        return $blocks;
-    }
-
 }

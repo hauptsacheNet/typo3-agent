@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Hn\Agent\Domain;
 
 use Doctrine\DBAL\ParameterType;
-use Doctrine\DBAL\Types\Types;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 
@@ -197,14 +196,10 @@ class AgentTaskRepository
     }
 
     /**
-     * Insert a new task and return its UID.
-     *
-     * @param array<int, array<string, mixed>>|null $initialMessages
-     *        Pre-built initial conversation (system + synthetic context + user).
-     *        Persisted as JSON so AgentService::run() resumes from it on
-     *        auto-start instead of synthesizing.
+     * Insert a new task and return its UID. Messages are persisted separately
+     * via AgentMessageRepository (see AgentService::persistInitialMessages).
      */
-    public function insert(int $pid, int $cruserId, string $title, string $prompt, string $contextTable = '', int $contextUid = 0, string $returnUrl = '', int $workspaceId = 0, ?array $initialMessages = null): int
+    public function insert(int $pid, int $cruserId, string $title, string $prompt, string $contextTable = '', int $contextUid = 0, string $returnUrl = '', int $workspaceId = 0): int
     {
         $now = time();
         $connection = $this->connectionPool->getConnectionForTable(self::TABLE);
@@ -218,34 +213,14 @@ class AgentTaskRepository
                 'title' => $title,
                 'prompt' => $prompt,
                 'status' => TaskStatus::Pending->value,
-                'messages' => $initialMessages,
                 'result' => '',
                 'context_table' => $contextTable,
                 'context_uid' => $contextUid,
                 'return_url' => $returnUrl,
                 'workspace_id' => $workspaceId,
             ],
-            $initialMessages !== null ? ['messages' => Types::JSON] : [],
         );
         return (int)$connection->lastInsertId();
-    }
-
-    /**
-     * Persist only the messages array, without touching status. Used for the
-     * mid-loop checkpoints in AgentService::runLoop — those must not clobber
-     * a status transition done by another request (e.g. an external cancel
-     * flipping status from InProgress to Cancelled).
-     */
-    public function saveMessages(int $taskUid, array $messages): void
-    {
-        $this->connectionPool
-            ->getConnectionForTable(self::TABLE)
-            ->update(
-                self::TABLE,
-                ['messages' => $messages, 'tstamp' => time()],
-                ['uid' => $taskUid],
-                ['messages' => Types::JSON],
-            );
     }
 
     /**

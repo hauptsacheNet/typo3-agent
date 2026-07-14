@@ -6,13 +6,18 @@ namespace Hn\Agent\Service;
 
 use PhpOffice\PhpPresentation\IOFactory as PresentationIOFactory;
 use PhpOffice\PhpPresentation\PhpPresentation;
+use PhpOffice\PhpPresentation\Shape\Drawing\AbstractDrawingAdapter;
 use PhpOffice\PhpPresentation\Shape\RichText;
 use PhpOffice\PhpPresentation\Slide;
 use PhpOffice\PhpSpreadsheet\IOFactory as SpreadsheetIOFactory;
 use PhpOffice\PhpSpreadsheet\Reader\IReader;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Worksheet\BaseDrawing;
+use PhpOffice\PhpSpreadsheet\Worksheet\Drawing as SpreadsheetDrawing;
+use PhpOffice\PhpSpreadsheet\Worksheet\MemoryDrawing;
 use PhpOffice\PhpWord\Element\AbstractContainer;
 use PhpOffice\PhpWord\Element\AbstractElement;
+use PhpOffice\PhpWord\Element\Image as WordImage;
 use PhpOffice\PhpWord\Element\Text as WordText;
 use PhpOffice\PhpWord\Element\TextBreak;
 use PhpOffice\PhpWord\Element\TextRun;
@@ -20,6 +25,8 @@ use PhpOffice\PhpWord\IOFactory as WordIOFactory;
 use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerAwareTrait;
 use Smalot\PdfParser\Parser as PdfParser;
+use Symfony\Component\Process\Exception\ProcessFailedException;
+use Symfony\Component\Process\Process;
 use TYPO3\CMS\Core\Resource\File;
 
 /**
@@ -38,6 +45,13 @@ class DocumentExtractorService implements LoggerAwareInterface
     use LoggerAwareTrait;
 
     public const MAX_OUTPUT_CHARS = 50_000;
+
+    /**
+     * Upper bound for how many embedded images a single extract call
+     * returns before the extractor stops collecting. Prevents runaway
+     * output on media-heavy files.
+     */
+    public const MAX_IMAGES_PER_CALL = 20;
 
     // -----------------------------------------------------------------
     // PDF
@@ -169,14 +183,14 @@ class DocumentExtractorService implements LoggerAwareInterface
         }
     }
 
-    private function loadSpreadsheet(File $file): Spreadsheet
+    private function loadSpreadsheet(File $file, bool $readDataOnly = true): Spreadsheet
     {
         $path = $this->localPath($file);
         try {
             $readerType = SpreadsheetIOFactory::identify($path);
             $reader = SpreadsheetIOFactory::createReader($readerType);
             if ($reader instanceof IReader) {
-                $reader->setReadDataOnly(true);
+                $reader->setReadDataOnly($readDataOnly);
             }
             return $reader->load($path);
         } catch (DocumentExtractionException $e) {
@@ -503,5 +517,304 @@ class DocumentExtractorService implements LoggerAwareInterface
     private function localPath(File $file): string
     {
         return $file->getForLocalProcessing(false);
+    }
+
+    // -----------------------------------------------------------------
+    // Embedded image extraction
+    //
+    // Each method returns a list of {bytes, mime, name} entries capped
+    // at MAX_IMAGES_PER_CALL. Callers apply per-image size limits and
+    // wrap the bytes in ImageContent. Parser exceptions are wrapped in
+    // DocumentExtractionException just like the text extractors.
+    // -----------------------------------------------------------------
+
+    /**
+     * @return list<array{bytes: string, mime: string, name: string}>
+     */
+    public function extractDocumentImages(File $file): array
+    {
+        $mime = strtolower((string)$file->getMimeType());
+        $readerName = match ($mime) {
+            'application/rtf', 'text/rtf' => 'RTF',
+            'application/vnd.oasis.opendocument.text' => 'ODText',
+            default => 'Word2007',
+        };
+        $path = $this->localPath($file);
+        try {
+            $phpWord = WordIOFactory::load($path, $readerName);
+        } catch (\Throwable $e) {
+            throw new DocumentExtractionException(
+                sprintf('Dokument konnte nicht gelesen werden: %s', $e->getMessage()),
+                0,
+                $e,
+            );
+        }
+
+        $images = [];
+        $index = 0;
+        foreach ($phpWord->getSections() as $section) {
+            $this->collectPhpWordImages($section, $images, $index);
+            if (count($images) >= self::MAX_IMAGES_PER_CALL) {
+                break;
+            }
+        }
+        return $images;
+    }
+
+    /**
+     * @param list<array{bytes: string, mime: string, name: string}> $out
+     */
+    private function collectPhpWordImages(AbstractElement $element, array &$out, int &$index): void
+    {
+        if (count($out) >= self::MAX_IMAGES_PER_CALL) {
+            return;
+        }
+        if ($element instanceof WordImage) {
+            $bytes = $element->getImageStringData(false);
+            if (is_string($bytes) && $bytes !== '') {
+                $index++;
+                $mime = (string)$element->getImageType();
+                $out[] = [
+                    'bytes' => $bytes,
+                    'mime' => $mime !== '' ? $mime : 'application/octet-stream',
+                    'name' => sprintf('image-%03d.%s', $index, $this->extensionForMime($mime)),
+                ];
+            }
+            return;
+        }
+        if ($element instanceof TextRun) {
+            foreach ($element->getElements() as $child) {
+                $this->collectPhpWordImages($child, $out, $index);
+            }
+            return;
+        }
+        if ($element instanceof AbstractContainer) {
+            foreach ($element->getElements() as $child) {
+                $this->collectPhpWordImages($child, $out, $index);
+            }
+        }
+    }
+
+    /**
+     * @return list<array{bytes: string, mime: string, name: string}>
+     */
+    public function extractPresentationImages(File $file): array
+    {
+        $presentation = $this->loadPresentation($file);
+        $images = [];
+        $index = 0;
+        foreach ($presentation->getAllSlides() as $slideIdx => $slide) {
+            foreach ($slide->getShapeCollection() as $shape) {
+                if (!$shape instanceof AbstractDrawingAdapter) {
+                    continue;
+                }
+                try {
+                    $bytes = $shape->getContents();
+                    $mime = $shape->getMimeType();
+                } catch (\Throwable $e) {
+                    $this->logger?->warning('PhpPresentation drawing could not be read', [
+                        'slide' => $slideIdx + 1,
+                        'file' => $file->getCombinedIdentifier(),
+                        'exception' => $e->getMessage(),
+                    ]);
+                    continue;
+                }
+                if (!is_string($bytes) || $bytes === '') {
+                    continue;
+                }
+                $index++;
+                $images[] = [
+                    'bytes' => $bytes,
+                    'mime' => $mime !== '' ? $mime : 'application/octet-stream',
+                    'name' => sprintf('slide-%03d-image-%03d.%s', $slideIdx + 1, $index, $this->extensionForMime($mime)),
+                ];
+                if (count($images) >= self::MAX_IMAGES_PER_CALL) {
+                    return $images;
+                }
+            }
+        }
+        return $images;
+    }
+
+    /**
+     * @return list<array{bytes: string, mime: string, name: string}>
+     */
+    public function extractSpreadsheetImages(File $file): array
+    {
+        $spreadsheet = $this->loadSpreadsheet($file, readDataOnly: false);
+        try {
+            $images = [];
+            $index = 0;
+            foreach ($spreadsheet->getAllSheets() as $worksheet) {
+                foreach ($worksheet->getDrawingCollection() as $drawing) {
+                    if (!$drawing instanceof BaseDrawing) {
+                        continue;
+                    }
+                    $entry = $this->readSpreadsheetDrawing($drawing);
+                    if ($entry === null) {
+                        continue;
+                    }
+                    $index++;
+                    $entry['name'] = sprintf('%s-image-%03d.%s', $this->slugify($worksheet->getTitle()), $index, $this->extensionForMime($entry['mime']));
+                    $images[] = $entry;
+                    if (count($images) >= self::MAX_IMAGES_PER_CALL) {
+                        return $images;
+                    }
+                }
+            }
+            return $images;
+        } finally {
+            $spreadsheet->disconnectWorksheets();
+        }
+    }
+
+    /**
+     * @return array{bytes: string, mime: string, name: string}|null
+     */
+    private function readSpreadsheetDrawing(BaseDrawing $drawing): ?array
+    {
+        try {
+            if ($drawing instanceof MemoryDrawing) {
+                $resource = $drawing->getImageResource();
+                $renderer = $drawing->getRenderingFunction();
+                if ($resource === null || !function_exists($renderer)) {
+                    return null;
+                }
+                ob_start();
+                $renderer($resource);
+                $bytes = (string)ob_get_clean();
+                if ($bytes === '') {
+                    return null;
+                }
+                return ['bytes' => $bytes, 'mime' => $drawing->getMimeType(), 'name' => ''];
+            }
+            if ($drawing instanceof SpreadsheetDrawing) {
+                $path = $drawing->getPath();
+                if ($path === '') {
+                    return null;
+                }
+                if (str_starts_with($path, 'data:')) {
+                    [, $payload] = explode(',', $path, 2) + [null, ''];
+                    $bytes = base64_decode((string)$payload, true);
+                } else {
+                    $bytes = @file_get_contents($path);
+                }
+                if (!is_string($bytes) || $bytes === '') {
+                    return null;
+                }
+                $mime = $this->guessMimeFromBytes($bytes);
+                return ['bytes' => $bytes, 'mime' => $mime, 'name' => ''];
+            }
+        } catch (\Throwable $e) {
+            $this->logger?->warning('PhpSpreadsheet drawing could not be read', [
+                'exception' => $e->getMessage(),
+            ]);
+        }
+        return null;
+    }
+
+    /**
+     * Extract raster images embedded in a PDF via poppler-utils `pdfimages`.
+     * The binary path must be configured; the tool that calls this is
+     * responsible for verifying that before dispatching.
+     *
+     * @return list<array{bytes: string, mime: string, name: string}>
+     */
+    public function extractPdfImages(File $file, string $pdfimagesPath): array
+    {
+        $tmpDir = $this->createTempDir('agent-pdfimages-');
+        try {
+            $sourcePath = $this->localPath($file);
+            $prefix = $tmpDir . '/img';
+            $process = new Process([$pdfimagesPath, '-all', $sourcePath, $prefix]);
+            $process->setTimeout(60);
+            try {
+                $process->mustRun();
+            } catch (ProcessFailedException $e) {
+                throw new DocumentExtractionException(
+                    sprintf('pdfimages ist fehlgeschlagen: %s', trim($process->getErrorOutput()) ?: $e->getMessage()),
+                    0,
+                    $e,
+                );
+            }
+
+            $files = glob($prefix . '-*') ?: [];
+            sort($files);
+
+            $images = [];
+            foreach ($files as $imagePath) {
+                if (count($images) >= self::MAX_IMAGES_PER_CALL) {
+                    break;
+                }
+                $bytes = @file_get_contents($imagePath);
+                if (!is_string($bytes) || $bytes === '') {
+                    continue;
+                }
+                $mime = $this->guessMimeFromBytes($bytes);
+                $images[] = [
+                    'bytes' => $bytes,
+                    'mime' => $mime,
+                    'name' => basename($imagePath),
+                ];
+            }
+            return $images;
+        } finally {
+            $this->removeTempDir($tmpDir);
+        }
+    }
+
+    private function createTempDir(string $prefix): string
+    {
+        $base = sys_get_temp_dir();
+        $attempt = 0;
+        do {
+            $candidate = $base . '/' . $prefix . bin2hex(random_bytes(6));
+            $attempt++;
+        } while (!@mkdir($candidate, 0700) && $attempt < 5);
+        if (!is_dir($candidate)) {
+            throw new DocumentExtractionException('Konnte kein Temp-Verzeichnis für pdfimages anlegen.');
+        }
+        return $candidate;
+    }
+
+    private function removeTempDir(string $dir): void
+    {
+        if (!is_dir($dir)) {
+            return;
+        }
+        foreach (glob($dir . '/*') ?: [] as $entry) {
+            if (is_file($entry)) {
+                @unlink($entry);
+            }
+        }
+        @rmdir($dir);
+    }
+
+    private function extensionForMime(string $mime): string
+    {
+        return match (strtolower($mime)) {
+            'image/jpeg', 'image/jpg' => 'jpg',
+            'image/png' => 'png',
+            'image/gif' => 'gif',
+            'image/webp' => 'webp',
+            'image/bmp' => 'bmp',
+            'image/tiff' => 'tif',
+            'image/svg+xml' => 'svg',
+            default => 'bin',
+        };
+    }
+
+    private function guessMimeFromBytes(string $bytes): string
+    {
+        $finfo = new \finfo(FILEINFO_MIME_TYPE);
+        $detected = $finfo->buffer($bytes);
+        return is_string($detected) && $detected !== '' ? $detected : 'application/octet-stream';
+    }
+
+    private function slugify(string $value): string
+    {
+        $slug = preg_replace('/[^A-Za-z0-9]+/', '-', $value) ?? '';
+        $slug = trim($slug, '-');
+        return $slug !== '' ? strtolower($slug) : 'sheet';
     }
 }

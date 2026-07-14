@@ -27,6 +27,11 @@ let MessageComposerElement = class extends LitElement {
     this.attachments = [];
     this.uploadTriggerRef = createRef();
     this.uploadZoneRef = createRef();
+    // objectGroup marker for the Core Drag-Uploader's "Use existing" postMessage.
+    // The Core only shows the option when data-file-irre-object is set, and posts
+    // an event with this string as objectGroup — we filter our own listener on it
+    // so unrelated FormEngine IRRE containers (if any) are ignored.
+    this.irreObjectGroup = "hn-agent-message-composer";
     this.elementBrowserListener = (e) => {
       if (!MessageUtility.verifyOrigin(e.origin)) return;
       const data = e.data;
@@ -48,6 +53,21 @@ let MessageComposerElement = class extends LitElement {
       if (!file) return;
       this.addAttachment({ uid: file.uid, identifier: file.id, name: file.name, iconHtml: file.icon });
     };
+    // The Core Drag-Uploader fires no `uploadSuccess` for "Use existing" — it
+    // only postMessages `typo3:foreignRelation:insert`, intended for FormEngine
+    // IRRE containers. We intercept it ourselves and route the picked sys_file
+    // through the same chip pipeline as a regular upload. The preflight AJAX
+    // called by addAttachment() fills in name/mime/icon from the UID.
+    this.foreignRelationInsertListener = (e) => {
+      if (!MessageUtility.verifyOrigin(e.origin)) return;
+      const data = e.data;
+      if (data.actionName !== "typo3:foreignRelation:insert") return;
+      if (data.objectGroup !== this.irreObjectGroup) return;
+      if (data.table !== "sys_file") return;
+      const uid = typeof data.uid === "number" ? data.uid : parseInt(String(data.uid ?? ""), 10);
+      if (!uid || Number.isNaN(uid)) return;
+      this.addAttachment({ uid, name: `sys_file:${uid}` });
+    };
   }
   createRenderRoot() {
     return this;
@@ -62,11 +82,13 @@ let MessageComposerElement = class extends LitElement {
       new DragUploader(zoneEl);
     }
     this.uploadTriggerRef.value?.addEventListener("uploadSuccess", this.uploadSuccessListener);
+    window.addEventListener("message", this.foreignRelationInsertListener);
   }
   disconnectedCallback() {
     super.disconnectedCallback();
     this.uploadTriggerRef.value?.removeEventListener("uploadSuccess", this.uploadSuccessListener);
     window.removeEventListener("message", this.elementBrowserListener);
+    window.removeEventListener("message", this.foreignRelationInsertListener);
   }
   focus() {
     this.textareaEl?.focus();
@@ -85,6 +107,8 @@ let MessageComposerElement = class extends LitElement {
     return !this.disabled && !this.loading && (this.message.trim() !== "" || this.attachments.length > 0);
   }
   addAttachment(att) {
+    if (att.uid !== void 0 && this.attachments.some((a) => a.uid === att.uid)) return;
+    if (att.identifier && this.attachments.some((a) => a.identifier === att.identifier)) return;
     this.attachments = [...this.attachments, att];
     if (this.preflightUri && (att.uid !== void 0 || att.identifier)) {
       void this.preflightAttachment(att);
@@ -102,8 +126,11 @@ let MessageComposerElement = class extends LitElement {
         const sameUid = info.uid !== void 0 && a.uid === info.uid;
         const sameIdent = !!info.identifier && a.identifier === info.identifier;
         if (!sameUid && !sameIdent) return a;
+        const isPlaceholderName = !a.name || /^sys_file:\d+$/.test(a.name);
         return {
           ...a,
+          name: isPlaceholderName && info.name ? info.name : a.name,
+          identifier: a.identifier || info.identifier || "",
           mime_type: info.mime || a.mime_type,
           size: typeof info.size === "number" ? info.size : a.size,
           readableByLlm: info.readableByLlm,
@@ -172,7 +199,8 @@ let MessageComposerElement = class extends LitElement {
           data-max-file-size="0"
           data-dropzone-target=".chat-upload-anchor"
           data-dropzone-trigger=".chat-upload-trigger"
-          data-default-action="rename">
+          data-default-action="rename"
+          data-file-irre-object=${this.irreObjectGroup}>
         <form class="task-form" @submit=${this.onSubmit}>
           <textarea
               class="message-control"

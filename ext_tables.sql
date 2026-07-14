@@ -2,13 +2,26 @@ CREATE TABLE tx_agent_task (
     title varchar(255) DEFAULT '' NOT NULL,
     prompt text,
     status int(11) DEFAULT '0' NOT NULL,
-    messages json,
     result text,
     cruser_id int(11) unsigned DEFAULT '0' NOT NULL,
     context_table varchar(255) DEFAULT '' NOT NULL,
     context_uid int(11) unsigned DEFAULT '0' NOT NULL,
     return_url text,
     workspace_id int(11) unsigned DEFAULT '0' NOT NULL,
+    messages int(11) unsigned DEFAULT '0' NOT NULL,
+);
+
+CREATE TABLE tx_agent_message (
+    task int(11) unsigned DEFAULT '0' NOT NULL,
+    role varchar(16) DEFAULT '' NOT NULL,
+    content longtext,
+    reasoning longtext,
+    tool_calls json,
+    tool_call_id varchar(128) DEFAULT '' NOT NULL,
+    tool_name varchar(255) DEFAULT '' NOT NULL,
+    attachments int(11) unsigned DEFAULT '0' NOT NULL,
+
+    KEY task_sorting (task, sorting)
 );
 
 CREATE TABLE tx_agent_instruction (
