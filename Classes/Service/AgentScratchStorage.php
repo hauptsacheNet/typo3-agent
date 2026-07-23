@@ -14,6 +14,7 @@ use TYPO3\CMS\Core\Resource\ResourceFactory;
 use TYPO3\CMS\Core\Resource\ResourceStorage;
 use TYPO3\CMS\Core\Resource\StorageRepository;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
+use TYPO3\CMS\Core\Utility\PathUtility;
 
 /**
  * Non-public FAL storage for agent-generated binary tool outputs
@@ -164,11 +165,22 @@ class AgentScratchStorage
     private function createStorageRecord(): int
     {
         $this->ensureBasePathExists();
-        // LocalDriver resolves `pathType=relative` against Environment::getPublicPath()
-        // — but we deliberately live OUTSIDE public/. Use an absolute path from
-        // Environment::getProjectPath() instead. LocalDriver's isAllowedAbsolutePath
-        // permits anything under the project root.
-        $absoluteBasePath = $this->getAbsoluteBasePath();
+        // Use `pathType=relative` so the storage survives release-based
+        // deployments where the project root changes on every deploy — an
+        // absolute path would keep pointing at the old release directory and
+        // take the storage (and everything touching it) offline. LocalDriver
+        // resolves relative paths against Environment::getPublicPath(), so a
+        // `../`-prefixed path reaches var/agent-scratch/ outside public/;
+        // after canonicalization it is still within the project root, which
+        // satisfies LocalDriver's isAllowedAbsolutePath check.
+        $basePath = $this->getRelativeBasePath();
+        $pathType = 'relative';
+        if ($basePath === null) {
+            // Public path is not inside the project path (exotic setup) — a
+            // relative path cannot be computed; fall back to absolute.
+            $basePath = $this->getAbsoluteBasePath();
+            $pathType = 'absolute';
+        }
         $configuration = <<<XML
 <?xml version="1.0" encoding="utf-8" standalone="yes" ?>
 <T3FlexForms>
@@ -176,10 +188,10 @@ class AgentScratchStorage
         <sheet index="sDEF">
             <language index="lDEF">
                 <field index="basePath">
-                    <value index="vDEF">{$absoluteBasePath}</value>
+                    <value index="vDEF">{$basePath}</value>
                 </field>
                 <field index="pathType">
-                    <value index="vDEF">absolute</value>
+                    <value index="vDEF">{$pathType}</value>
                 </field>
                 <field index="caseSensitive">
                     <value index="vDEF">1</value>
@@ -222,6 +234,16 @@ XML;
     private function getAbsoluteBasePath(): string
     {
         return Environment::getProjectPath() . '/' . rtrim(self::BASE_PATH, '/') . '/';
+    }
+
+    /**
+     * Base path relative to Environment::getPublicPath(), e.g.
+     * "../var/agent-scratch/" in composer mode. Null when public path and
+     * project path share no usable common prefix.
+     */
+    private function getRelativeBasePath(): ?string
+    {
+        return PathUtility::getRelativePath(Environment::getPublicPath() . '/', $this->getAbsoluteBasePath());
     }
 
     private function ensureBasePathExists(): void
