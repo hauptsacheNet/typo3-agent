@@ -108,7 +108,6 @@ export class ChatElement extends LitElement {
     @state() private messages: ChatMessage[] = [];
     @state() private loading = false;
     @state() private errorMessage = '';
-    @state() private thinking = false;
     @state() private streamingBuffer = '';
     @state() private reasoningBuffer = '';
     @state() private isStreaming = false;
@@ -179,7 +178,7 @@ export class ChatElement extends LitElement {
                             <div class="chat-turn d-flex flex-column gap-3 ${isLast ? 'chat-turn-latest' : 'pb-3'}">
                                 ${turn.map((msg, j) => this.renderMessage(msg, isLast && j === 0 && msg.role === 'user'))}
                                 ${isLast && this.isStreaming ? this.renderStreamingBubble() : nothing}
-                                ${isLast && this.thinking && !this.isStreaming ? this.renderThinkingIndicator() : nothing}
+                                ${isLast && this.loading && !this.isStreaming && !this.hasRunningToolCall() ? this.renderThinkingIndicator() : nothing}
                             </div>
                         `;
                     })}
@@ -514,6 +513,12 @@ export class ChatElement extends LitElement {
         `;
     }
 
+    private hasRunningToolCall(): boolean {
+        const last = this.messages[this.messages.length - 1];
+        if (!last || last.role !== 'assistant' || !last.tool_calls) return false;
+        return last.tool_calls.some(tc => tc.result === undefined);
+    }
+
     // -- Markdown --------------------------------------------------------------
 
     private renderMarkdown(text: string): string {
@@ -615,7 +620,6 @@ export class ChatElement extends LitElement {
     private async sendStreaming(message: string, attachments: Attachment[] = []): Promise<void> {
         this.abortController = new AbortController();
         try {
-            this.thinking = true;
             const formData = new FormData();
             formData.append('message', message);
             this.appendAttachments(formData, attachments);
@@ -649,7 +653,6 @@ export class ChatElement extends LitElement {
                 }
             }
         } catch (err) {
-            this.thinking = false;
             this.isStreaming = false;
             // AbortError is the user clicking Stop — not a failure. The streaming
             // bubble (if any) stays visible; finishSend() will flip loading off and
@@ -696,23 +699,19 @@ export class ChatElement extends LitElement {
     private handleSseEvent(event: string, data: Record<string, unknown>): void {
         switch (event) {
             case 'llm_start':
-                this.thinking = true;
                 break;
 
             case 'content_delta':
-                this.thinking = false;
                 this.isStreaming = true;
                 this.streamingBuffer += (data.text as string) || '';
                 break;
 
             case 'reasoning_delta':
-                this.thinking = false;
                 this.isStreaming = true;
                 this.reasoningBuffer += (data.text as string) || '';
                 break;
 
             case 'tool_call_delta':
-                this.thinking = false;
                 break;
 
             case 'user_message': {
@@ -728,7 +727,6 @@ export class ChatElement extends LitElement {
             }
 
             case 'assistant_message': {
-                this.thinking = false;
                 const msg = data.message as ChatMessage | undefined;
 
                 if (this.isStreaming) {
@@ -787,7 +785,6 @@ export class ChatElement extends LitElement {
             }
 
             case 'done':
-                this.thinking = false;
                 this.isStreaming = false;
                 this.streamingBuffer = '';
                 this.reasoningBuffer = '';
@@ -801,7 +798,6 @@ export class ChatElement extends LitElement {
                 break;
 
             case 'error':
-                this.thinking = false;
                 this.isStreaming = false;
                 this.errorMessage = (data.error as string) || 'Unknown error';
                 break;

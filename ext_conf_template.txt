@@ -15,3 +15,9 @@ maxIterations = 20
 
 # cat=basic/agent/060; type=options[off,low,medium,high]; label=Reasoning Effort: Stärke des Reasonings (off = deaktiviert)
 reasoningEffort = medium
+
+# cat=basic/agent/070; type=boolean; label=Web Fetch: OpenRouters serverseitiges web_fetch-Tool aktivieren (der Agent kann URLs direkt abrufen und lesen)
+webFetch = 1
+
+# cat=basic/tools/080; type=string; label=pdfimages Binary Path: absoluter Pfad zu poppler-utils pdfimages (leer lassen, um Bildextraktion aus PDFs zu deaktivieren)
+pdfimagesPath =

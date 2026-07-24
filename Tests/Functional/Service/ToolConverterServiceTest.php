@@ -4,10 +4,14 @@ declare(strict_types=1);
 
 namespace Hn\Agent\Tests\Functional\Service;
 
+use Hn\Agent\Service\AgentScratchStorage;
 use Hn\Agent\Service\ToolConverterService;
 use Hn\McpServer\MCP\ToolRegistry;
 use TYPO3\CMS\Core\Authentication\BackendUserAuthentication;
+use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
+use TYPO3\CMS\Core\Resource\ResourceFactory;
+use TYPO3\CMS\Core\Resource\StorageRepository;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
 
@@ -37,7 +41,12 @@ class ToolConverterServiceTest extends FunctionalTestCase
         $GLOBALS['BE_USER'] = $backendUser;
         $GLOBALS['LANG'] = GeneralUtility::makeInstance(LanguageServiceFactory::class)->create('default');
 
-        $this->toolConverterService = GeneralUtility::makeInstance(ToolConverterService::class);
+        $scratchStorage = new AgentScratchStorage(
+            GeneralUtility::makeInstance(StorageRepository::class),
+            GeneralUtility::makeInstance(ResourceFactory::class),
+            GeneralUtility::makeInstance(ConnectionPool::class),
+        );
+        $this->toolConverterService = new ToolConverterService($scratchStorage);
         $this->toolRegistry = GeneralUtility::makeInstance(ToolRegistry::class);
     }
 
@@ -85,7 +94,7 @@ class ToolConverterServiceTest extends FunctionalTestCase
 
         self::assertNotEmpty($result['text']);
         self::assertStringNotContainsString('Error', $result['text']);
-        self::assertSame([], $result['media']);
+        self::assertSame([], $result['attachments']);
     }
 
     public function testExecuteToolCallWithStringArguments(): void
@@ -110,7 +119,7 @@ class ToolConverterServiceTest extends FunctionalTestCase
 
         self::assertStringContainsString('Error', $result['text']);
         self::assertStringContainsString('not found', $result['text']);
-        self::assertSame([], $result['media']);
+        self::assertSame([], $result['attachments']);
     }
 
     public function testExecuteToolCallHandlesErrors(): void

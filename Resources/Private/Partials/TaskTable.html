@@ -5,7 +5,8 @@
     <div class="recordlist-heading">
         <div class="recordlist-heading-row">
             <div class="recordlist-heading-title">
-                <f:translate key="{headingLabel}"/> (<span>{tasks -> f:count()}</span>)
+                <f:translate key="{headingLabel}"/>
+                (<span>{tasks -> f:count()}</span>)
             </div>
             <div class="recordlist-heading-actions">
                 <button type="button"
@@ -16,8 +17,8 @@
                         data-bs-toggle="collapse"
                         data-bs-target="#recordlist-{identifier}">
                     <core:icon
-                        identifier="{f:if(condition: collapsed, then: 'actions-view-list-expand', else: 'actions-view-list-collapse')}"
-                        size="small"/>
+                            identifier="{f:if(condition: collapsed, then: 'actions-view-list-expand', else: 'actions-view-list-collapse')}"
+                            size="small"/>
                 </button>
             </div>
         </div>
@@ -30,58 +31,93 @@
                 <colgroup>
                     <col style="width:3em">
                     <col>
-                    <f:if condition="{showPage}"><col></f:if>
-                    <f:if condition="{showUser}"><col></f:if>
+                    <f:if condition="{showPage}">
+                        <col>
+                    </f:if>
+                    <f:if condition="{showUser}">
+                        <col>
+                    </f:if>
                     <col>
                     <col>
                     <col class="col-control">
                 </colgroup>
                 <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th>Title</th>
-                        <f:if condition="{showPage}">
-                            <th><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:index.column.page"/></th>
-                        </f:if>
-                        <f:if condition="{showUser}">
-                            <th><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:index.column.user"/></th>
-                        </f:if>
-                        <th>Status</th>
-                        <th>Updated</th>
-                        <th></th>
-                    </tr>
+                <tr>
+                    <th>ID</th>
+                    <th>Title</th>
+                    <f:if condition="{showPage}">
+                        <th>
+                            <f:translate
+                                    key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:index.column.page"/>
+                        </th>
+                    </f:if>
+                    <f:if condition="{showUser}">
+                        <th>
+                            <f:translate
+                                    key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:index.column.user"/>
+                        </th>
+                    </f:if>
+                    <th>Status</th>
+                    <th>Updated</th>
+                    <th></th>
+                </tr>
                 </thead>
                 <tbody>
-                    <f:for each="{tasks}" as="task">
-                        <tr>
-                            <td>{task.uid}</td>
-                            <td class="col-title col-responsive nowrap">{task.title}</td>
-                            <f:if condition="{showPage}">
-                                <td class="col-title col-responsive nowrap">
-                                    <a href="{f:be.uri(route:'web_typo3_agent_tasks', parameters:'{id:task.pid}')}">{task.pageTitle}</a>
-                                </td>
-                            </f:if>
-                            <f:if condition="{showUser}">
-                                <td class="nowrap">{task.userLabel}</td>
-                            </f:if>
-                            <td>
-                                <f:switch expression="{task.status}">
-                                    <f:case value="0"><span class="badge badge-warning"><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:status.pending" /></span></f:case>
-                                    <f:case value="1"><span class="badge badge-info"><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:status.inProgress" /></span></f:case>
-                                    <f:case value="2"><span class="badge badge-success"><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:status.ended" /></span></f:case>
-                                    <f:case value="3"><span class="badge badge-danger"><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:status.failed" /></span></f:case>
-                                    <f:case value="4"><span class="badge badge-secondary"><f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:status.cancelled" /></span></f:case>
-                                </f:switch>
+                <f:for each="{tasks}" as="task">
+                    <tr>
+                        <td>{task.uid}</td>
+                        <td class="col-title col-responsive nowrap">{task.title}</td>
+                        <f:if condition="{showPage}">
+                            <td class="col-title col-responsive nowrap">
+                                <a href="{f:be.uri(route:'web_typo3_agent_tasks', parameters:'{id:task.pid}')}">{task.pageTitle}</a>
                             </td>
-                            <td class="nowrap"><f:format.date format="Y-m-d H:i">@{task.tstamp}</f:format.date></td>
-                            <td class="col-control">
+                        </f:if>
+                        <f:if condition="{showUser}">
+                            <td class="nowrap">{task.userLabel}</td>
+                        </f:if>
+                        <td>
+                            <f:switch expression="{task.status}">
+                                <f:case value="0"><span class="badge badge-warning"><f:translate
+                                        key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:status.pending"/></span>
+                                </f:case>
+                                <f:case value="1"><span class="badge badge-info"><f:translate
+                                        key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:status.inProgress"/></span>
+                                </f:case>
+                                <f:case value="2"><span class="badge badge-success"><f:translate
+                                        key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:status.ended"/></span>
+                                </f:case>
+                                <f:case value="3"><span class="badge badge-danger"><f:translate
+                                        key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:status.failed"/></span>
+                                </f:case>
+                                <f:case value="4"><span class="badge badge-secondary"><f:translate
+                                        key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:status.cancelled"/></span>
+                                </f:case>
+                            </f:switch>
+                        </td>
+                        <td class="nowrap">
+                            <f:format.date format="Y-m-d H:i">@{task.tstamp}</f:format.date>
+                        </td>
+                        <td class="col-control">
+                            <div class="btn-group">
+
                                 <a href="{f:be.uri(route:'web_typo3_agent_tasks.show', parameters:'{task:task.uid, id:pageId}')}"
-                                   class="btn btn-sm btn-default">
+                                   class="btn btn-default">
                                     <core:icon identifier="actions-open" size="small"/>
                                 </a>
-                            </td>
-                        </tr>
-                    </f:for>
+                                <a href="{task.deleteUri}"
+                                   class="btn btn-default"
+                                   data-hn-delete-confirm=""
+                                   data-hn-delete-title="{f:translate(key:'LLL:EXT:agent/Resources/Private/Language/locallang.xlf:action.delete')}"
+                                   data-hn-delete-body="{f:translate(key:'LLL:EXT:agent/Resources/Private/Language/locallang.xlf:action.delete.confirm')}"
+                                   data-hn-delete-ok="{f:translate(key:'LLL:EXT:core/Resources/Private/Language/locallang_core.xlf:cm.delete')}"
+                                   data-hn-delete-cancel="{f:translate(key:'LLL:EXT:core/Resources/Private/Language/locallang_common.xlf:cancel')}"
+                                   title="{f:translate(key:'LLL:EXT:agent/Resources/Private/Language/locallang.xlf:action.delete')}">
+                                    <core:icon identifier="actions-edit-delete" size="small"/>
+                                </a>
+                            </div>
+                        </td>
+                    </tr>
+                </f:for>
                 </tbody>
             </table>
         </div>

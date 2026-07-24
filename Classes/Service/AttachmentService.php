@@ -217,43 +217,75 @@ class AttachmentService implements LoggerAwareInterface
     }
 
     /**
-     * Turn raw client attachment input into structured FAL refs ready for
-     * persistence in a chat message. Unresolvable entries get a fallback
-     * label so the UI can still show them as "(Datei nicht auflösbar)".
+     * Resolve raw client attachment input to a list of sys_file UIDs.
+     * Unresolvable entries are dropped — the chat UI has already
+     * validated attachments via the preflight endpoint, so anything
+     * that falls out here indicates a race (file deleted between
+     * preflight and submit) rather than a legitimate ref.
      *
      * @param array<int, array<string, mixed>> $raw
-     * @return list<array{uid?: int, identifier?: string, name: string, mime_type?: string, unresolvable?: bool}>
+     * @return list<int>
      */
-    public function normalizeRefs(array $raw): array
+    public function resolveClientAttachmentsToFileUids(array $raw): array
     {
-        $refs = [];
+        $uids = [];
         foreach ($raw as $entry) {
             if (!is_array($entry)) {
                 continue;
             }
             $file = $this->resolveFile($entry);
             if ($file instanceof File) {
-                $refs[] = [
+                $uids[] = $file->getUid();
+            }
+        }
+        return array_values(array_unique($uids));
+    }
+
+    /**
+     * Project message rows into the shape the chat frontend expects:
+     * replaces the `attachments` list of sys_file UIDs with a list of
+     * client-facing attachment objects `{uid, identifier, name, mime_type,
+     * unresolvable?}` — enough for the composer/chip UI to render.
+     *
+     * @param list<array<string, mixed>> $messages
+     * @return list<array<string, mixed>>
+     */
+    public function hydrateAttachmentsForClient(array $messages): array
+    {
+        $out = [];
+        foreach ($messages as $message) {
+            $attachments = $message['attachments'] ?? null;
+            if (!is_array($attachments) || $attachments === []) {
+                $out[] = $message;
+                continue;
+            }
+            $hydrated = [];
+            foreach ($attachments as $uid) {
+                $uid = (int)$uid;
+                if ($uid <= 0) {
+                    continue;
+                }
+                $file = $this->resolveFile(['uid' => $uid]);
+                if (!$file instanceof File) {
+                    $hydrated[] = [
+                        'uid' => $uid,
+                        'name' => 'sys_file:' . $uid,
+                        'unresolvable' => true,
+                    ];
+                    continue;
+                }
+                $hydrated[] = [
                     'uid' => $file->getUid(),
                     'identifier' => $file->getCombinedIdentifier(),
                     'name' => $file->getName(),
                     'mime_type' => $file->getMimeType() ?: 'application/octet-stream',
+                    'size' => (int)$file->getSize(),
                 ];
-                continue;
             }
-            $label = trim((string)($entry['name'] ?? ''));
-            if ($label === '') {
-                $label = trim((string)($entry['identifier'] ?? ''));
-            }
-            if ($label === '' && isset($entry['uid'])) {
-                $label = 'sys_file:' . (int)$entry['uid'];
-            }
-            $refs[] = [
-                'name' => $label !== '' ? $label : 'Unbenannte Datei',
-                'unresolvable' => true,
-            ];
+            $message['attachments'] = $hydrated;
+            $out[] = $message;
         }
-        return $refs;
+        return $out;
     }
 
     /**

@@ -32,6 +32,7 @@ return [
         'tstamp' => 'tstamp',
         'crdate' => 'crdate',
         'delete' => 'deleted',
+        'versioningWS_alwaysAllowLiveEdit' => true,
         'sortby' => 'sorting',
         'enablecolumns' => [
             'disabled' => 'hidden',

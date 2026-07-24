@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Hn\Agent\MCP\Tool;
 
 use Hn\Agent\Service\AttachmentService;
+use Hn\Agent\Service\ImageScalingService;
 use Hn\McpServer\MCP\Tool\AbstractTool;
 use Mcp\Types\CallToolResult;
 use Mcp\Types\ImageContent;
@@ -15,7 +16,13 @@ use Mcp\Types\TextContent;
  * formats (PNG/JPEG/WEBP/GIF) within size limits the bytes are returned
  * as base64-encoded ImageContent so the LLM can actually see them.
  *
- * Non-image MIMEs (PDFs, audio, …) and oversize images return an
+ * Images whose FAL-recorded width or height exceeds MAX_IMAGE_SIDE are
+ * downscaled via ImageScalingService (TYPO3's GraphicsMagick/ImageMagick
+ * pipeline) before being encoded. Non-PNG sources become JPEG on scaling —
+ * animated GIFs lose their animation, which is preferable to the LLM
+ * getting no image at all.
+ *
+ * Non-image MIMEs (PDFs, audio, …) and oversize (bytes) images return an
  * `isError: true` result with a hint to call `GetFileInfo` for
  * metadata-only inspection. Binary payloads in `tool`-role messages
  * have proven unreliable across providers (OpenRouter↔Bedrock 500s for
@@ -29,8 +36,11 @@ use Mcp\Types\TextContent;
  */
 class ViewImageTool extends AbstractTool
 {
+    public const MAX_IMAGE_SIDE = 2048;
+
     public function __construct(
         private readonly AttachmentService $attachmentService,
+        private readonly ImageScalingService $imageScalingService,
     ) {}
 
     public function getSchema(): array
@@ -38,8 +48,9 @@ class ViewImageTool extends AbstractTool
         return [
             'description' => 'Inspect an image (PNG/JPEG/WEBP/GIF) from TYPO3\'s File Abstraction Layer (FAL) '
                 . 'by its sys_file UID. Returns the binary content base64-encoded so it can be displayed / '
-                . 'analyzed inline, plus a metadata block. Use the GetFileInfo tool for any non-image file '
-                . '(PDFs, audio, …) — those return an error here. '
+                . 'analyzed inline, plus a metadata block. Images larger than ' . self::MAX_IMAGE_SIDE
+                . ' px on either side are downscaled server-side; non-PNG sources are re-encoded as JPEG. '
+                . 'Use the GetFileInfo tool for any non-image file (PDFs, audio, …) — those return an error here. '
                 . 'If you pass a sys_file_reference or sys_file_metadata UID by mistake the tool '
                 . 'transparently resolves it to the underlying sys_file and tells you the canonical '
                 . 'sys_file UID in the result.',
@@ -114,6 +125,56 @@ class ViewImageTool extends AbstractTool
                 ))],
                 true,
             );
+        }
+
+        $srcWidth = (int)$file->getProperty('width');
+        $srcHeight = (int)$file->getProperty('height');
+        $needsScaling = $srcWidth > self::MAX_IMAGE_SIDE || $srcHeight > self::MAX_IMAGE_SIDE;
+
+        if ($needsScaling) {
+            $outputFormat = $info['mime'] === 'image/png' ? 'png' : 'jpg';
+            $sourcePath = $file->getForLocalProcessing(false);
+            $scaled = $this->imageScalingService->scaleToMaxSide($sourcePath, self::MAX_IMAGE_SIDE, $outputFormat);
+
+            if ($scaled === null) {
+                return new CallToolResult(
+                    [new TextContent($head . 'Error: Bild konnte nicht skaliert werden — prüfen, ob GraphicsMagick/ImageMagick im Container verfügbar sind.')],
+                    true,
+                );
+            }
+
+            $scaledBytes = $scaled['bytes'];
+            if (strlen($scaledBytes) > AttachmentService::MAX_IMAGE_BYTES) {
+                return new CallToolResult(
+                    [new TextContent(sprintf(
+                        "%sSkaliertes Bild ist %s und überschreitet damit %s. Verwende GetFileInfo für Metadaten.",
+                        $head,
+                        $this->attachmentService->formatBytes(strlen($scaledBytes)),
+                        $this->attachmentService->formatBytes(AttachmentService::MAX_IMAGE_BYTES),
+                    ))],
+                    true,
+                );
+            }
+
+            $metadata = $head . sprintf(
+                "File: %s\nMIME (Original): %s\nMIME (skaliert): %s\nGröße (Original): %s\nGröße (skaliert): %s\nDimensionen (Original): %d×%d px\nDimensionen (skaliert): %d×%d px (max %d px pro Seite)\nUID: sys_file:%d\nIdentifier: %s",
+                $file->getName(),
+                $info['mime'],
+                $scaled['mime'],
+                $this->attachmentService->formatBytes($info['size']),
+                $this->attachmentService->formatBytes(strlen($scaledBytes)),
+                $srcWidth,
+                $srcHeight,
+                $scaled['width'],
+                $scaled['height'],
+                self::MAX_IMAGE_SIDE,
+                $file->getUid(),
+                $file->getCombinedIdentifier(),
+            );
+            return new CallToolResult([
+                new TextContent($metadata),
+                new ImageContent(base64_encode($scaledBytes), $scaled['mime']),
+            ]);
         }
 
         // image within limits: hand bytes off via MCP's ImageContent transport.

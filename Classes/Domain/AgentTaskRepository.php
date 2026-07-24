@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Hn\Agent\Domain;
 
 use Doctrine\DBAL\ParameterType;
-use Doctrine\DBAL\Types\Types;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 
@@ -148,6 +147,34 @@ class AgentTaskRepository
     }
 
     /**
+     * Bulk-Reset für PHP-Timeout-Recovery: setzt alle InProgress-Tasks, deren
+     * `tstamp` länger als `$staleAfterSeconds` zurückliegt, atomar auf Pending
+     * zurück. Der reguläre Pending-Scan greift sie danach wieder auf, und
+     * `AgentService::run()` setzt aus den persistierten `messages` fort.
+     *
+     * Parallele Aufrufe sind unkritisch: nach dem ersten UPDATE greift die
+     * WHERE-Bedingung `status = InProgress` nicht mehr, doppelter Reclaim
+     * ist ausgeschlossen.
+     *
+     * @return int Anzahl reclaimter Tasks
+     */
+    public function reclaimStaleInProgressTasks(int $staleAfterSeconds): int
+    {
+        $qb = $this->connectionPool->getQueryBuilderForTable(self::TABLE);
+        return $qb
+            ->update(self::TABLE)
+            ->set('status', TaskStatus::Pending->value, true, ParameterType::INTEGER)
+            ->set('tstamp', time(), true, ParameterType::INTEGER)
+            ->where(
+                $qb->expr()->eq('status', $qb->createNamedParameter(TaskStatus::InProgress->value, ParameterType::INTEGER)),
+                $qb->expr()->lt('tstamp', $qb->createNamedParameter(time() - $staleAfterSeconds, ParameterType::INTEGER)),
+                $qb->expr()->eq('deleted', 0),
+                $qb->expr()->eq('hidden', 0),
+            )
+            ->executeStatement();
+    }
+
+    /**
      * Lease-Akquise: atomar von jedem inaktiven Status nach InProgress.
      * CAS-Prädikat `status != InProgress` verhindert, dass zwei Prozesse
      * denselben Task gleichzeitig bearbeiten. Gibt true zurück, wenn die
@@ -169,14 +196,10 @@ class AgentTaskRepository
     }
 
     /**
-     * Insert a new task and return its UID.
-     *
-     * @param array<int, array<string, mixed>>|null $initialMessages
-     *        Pre-built initial conversation (system + synthetic context + user).
-     *        Persisted as JSON so AgentService::run() resumes from it on
-     *        auto-start instead of synthesizing.
+     * Insert a new task and return its UID. Messages are persisted separately
+     * via AgentMessageRepository (see AgentService::persistInitialMessages).
      */
-    public function insert(int $pid, int $cruserId, string $title, string $prompt, string $contextTable = '', int $contextUid = 0, string $returnUrl = '', int $workspaceId = 0, ?array $initialMessages = null): int
+    public function insert(int $pid, int $cruserId, string $title, string $prompt, string $contextTable = '', int $contextUid = 0, string $returnUrl = '', int $workspaceId = 0): int
     {
         $now = time();
         $connection = $this->connectionPool->getConnectionForTable(self::TABLE);
@@ -190,34 +213,14 @@ class AgentTaskRepository
                 'title' => $title,
                 'prompt' => $prompt,
                 'status' => TaskStatus::Pending->value,
-                'messages' => $initialMessages,
                 'result' => '',
                 'context_table' => $contextTable,
                 'context_uid' => $contextUid,
                 'return_url' => $returnUrl,
                 'workspace_id' => $workspaceId,
             ],
-            $initialMessages !== null ? ['messages' => Types::JSON] : [],
         );
         return (int)$connection->lastInsertId();
-    }
-
-    /**
-     * Persist only the messages array, without touching status. Used for the
-     * mid-loop checkpoints in AgentService::runLoop — those must not clobber
-     * a status transition done by another request (e.g. an external cancel
-     * flipping status from InProgress to Cancelled).
-     */
-    public function saveMessages(int $taskUid, array $messages): void
-    {
-        $this->connectionPool
-            ->getConnectionForTable(self::TABLE)
-            ->update(
-                self::TABLE,
-                ['messages' => $messages, 'tstamp' => time()],
-                ['uid' => $taskUid],
-                ['messages' => Types::JSON],
-            );
     }
 
     /**

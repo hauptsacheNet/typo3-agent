@@ -28,6 +28,7 @@ Go to **Settings > Extension Configuration > agent** and configure:
 | `systemPrompt` | *(built-in)* | System prompt for the agent |
 | `maxIterations` | `20` | Safety limit for the agent loop |
 | `reasoningEffort` | `medium` | Extended-reasoning strength (`off`, `low`, `medium`, `high`) |
+| `webFetch` | `1` | Enable OpenRouter's server-side `web_fetch` tool so the agent can retrieve and read URLs (executed by OpenRouter, no local handler needed) |
 
 ### Provider Examples
 
@@ -65,6 +66,10 @@ The primary UX is the **Web > TYPO3 Agent Tasks** backend module. It offers:
 ### Attachments & Multimodal
 
 Files can be dragged onto the composer or picked via the file browser. The chat UI pre-flights each attachment against an allowlist and size cap so users see up-front whether a file will be embedded as content for the LLM or only referenced by metadata.
+
+> **Prerequisite for uploads:** the composer uses TYPO3 Core's file-upload AJAX endpoints (`/typo3/ajax/file/exists` and `/typo3/ajax/file/process`), whose access is inherited from the **file** module (`media_management`). BE groups whose members should be able to upload attachments must therefore include this module in their allowed modules. Existing attachments already stored in FAL can still be referenced without this — only the drag-drop/upload path is affected.
+>
+> Composer uploads are written into a non-public **agent scratch storage** (`var/agent-scratch/user_{beUserUid}/`, `is_public=0`); they are not web-reachable until the agent promotes them into a regular FAL folder via the `PromoteScratchFileTool` (which happens automatically when the agent references the file in a record).
 
 | Kind | Formats | Size cap |
 |------|---------|----------|
