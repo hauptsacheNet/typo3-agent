@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Hn\Agent\Tests\Llm;
 
-use Doctrine\DBAL\Types\Types;
 use Hn\Agent\Domain\TaskStatus;
 use Hn\Agent\Service\AgentService;
 use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
@@ -72,6 +71,8 @@ abstract class AgentLlmTestCase extends FunctionalTestCase
                     'systemPrompt' => 'You are a helpful TYPO3 CMS assistant. You have access to tools that let you read and modify TYPO3 pages, content, and database records. Use these tools to fulfill the user\'s request.',
                     'maxIterations' => 15,
                     'reasoningEffort' => 'low',
+                    // Keep the tool set deterministic: no OpenRouter-side web_fetch.
+                    'webFetch' => false,
                 ],
             ],
         ];
@@ -142,7 +143,6 @@ abstract class AgentLlmTestCase extends FunctionalTestCase
     protected function runAgentTask(string $prompt, int $pid = 1): array
     {
         $agentService = $this->get(AgentService::class);
-        $messages = $agentService->buildInitialMessages($pid, '', 0, $prompt);
 
         $connection = $this->getConnectionPool()->getConnectionForTable('tx_agent_task');
         $connection->insert(
@@ -152,7 +152,6 @@ abstract class AgentLlmTestCase extends FunctionalTestCase
                 'title' => mb_substr($prompt, 0, 100),
                 'prompt' => $prompt,
                 'status' => TaskStatus::Pending->value,
-                'messages' => $messages,
                 'result' => '',
                 'cruser_id' => 1,
                 'crdate' => time(),
@@ -160,9 +159,9 @@ abstract class AgentLlmTestCase extends FunctionalTestCase
                 'deleted' => 0,
                 'hidden' => 0,
             ],
-            ['messages' => Types::JSON],
         );
         $taskUid = (int)$connection->lastInsertId();
+        $agentService->persistInitialMessages($taskUid, $pid, '', 0, $prompt);
 
         $finalMessages = $agentService->run($taskUid);
 

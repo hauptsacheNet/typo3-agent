@@ -76,6 +76,7 @@ LLM_URL="${LLM_URL}" php -r '
         "systemPrompt" => "You are a helpful TYPO3 assistant used in an E2E test.",
         "maxIterations" => 10,
         "reasoningEffort" => "off",
+        "webFetch" => false,
     ];
     file_put_contents("config/system/settings.php", "<?php\nreturn " . var_export($s, true) . ";\n");
 '
