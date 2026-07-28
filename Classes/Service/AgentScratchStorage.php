@@ -18,7 +18,7 @@ use TYPO3\CMS\Core\Utility\PathUtility;
 
 /**
  * Non-public FAL storage for agent-generated binary tool outputs
- * (ViewImage-style ImageContent, screenshots, etc.). Lives outside
+ * (ReadFile-style ImageContent, screenshots, etc.). Lives outside
  * public/ under var/agent-scratch/ so nothing here is ever web-reachable.
  *
  * Files are content-addressed (sha256) per task subfolder — repeated
@@ -138,7 +138,7 @@ class AgentScratchStorage
         // storage. Setting them here as well guards against a stale DI cache
         // (right after deployment, before `cache:flush`) where the listener
         // isn't registered yet — the extension's own scratch-storage users
-        // (ExtractImages, ViewImage tool outputs) still work.
+        // (ExtractImages, ReadFile tool outputs) still work.
         $storage->setEvaluatePermissions(false);
         $storage->setUserPermissions(['r' => true, 'w' => true]);
         $this->ensureBasePathExists();

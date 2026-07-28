@@ -25,8 +25,8 @@ use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
  * configured (Settings > Extension Configuration > agent), pointing at
  * a poppler-utils `pdfimages` binary. Without it, PDFs return an error.
  *
- * Auto-registered into the MCP ToolRegistry via the `mcp.tool` Symfony
- * tag declared on Hn\McpServer\MCP\Tool\ToolInterface.
+ * Registered agent-only via the `agent.tool` tag in Services.yaml — this
+ * tool is NOT exposed through the external MCP server.
  */
 class ExtractImagesTool extends AbstractTool
 {
@@ -89,7 +89,7 @@ class ExtractImagesTool extends AbstractTool
         }
         if (!in_array($info['kind'], ['document', 'presentation', 'spreadsheet', 'pdf'], true)) {
             return new CallToolResult(
-                [new TextContent(sprintf('%ssys_file:%d has MIME %s. ExtractImages only handles DOCX/ODT, PPTX/ODP, XLSX/ODS and PDF — pick the right tool or call GetFileInfo.',
+                [new TextContent(sprintf('%ssys_file:%d has MIME %s. ExtractImages only handles DOCX/ODT, PPTX/ODP, XLSX/ODS and PDF — use ReadFile to read this file instead.',
                     $head, $info['file']->getUid(), $info['mime'] !== '' ? $info['mime'] : 'application/octet-stream',
                 ))],
                 true,

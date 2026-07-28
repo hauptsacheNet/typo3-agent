@@ -4,8 +4,9 @@ declare(strict_types=1);
 
 namespace Hn\Agent\Tests\Functional\MCP\Tool;
 
-use Hn\Agent\MCP\Tool\ViewImageTool;
+use Hn\Agent\MCP\Tool\ReadFileTool;
 use Hn\Agent\Service\AttachmentService;
+use Hn\Agent\Service\DocumentExtractorService;
 use Hn\Agent\Service\ImageScalingService;
 use Mcp\Types\ImageContent;
 use Mcp\Types\TextContent;
@@ -16,7 +17,7 @@ use TYPO3\CMS\Core\Resource\ResourceFactory;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
 
-class ViewImageToolTest extends FunctionalTestCase
+class ReadFileToolTest extends FunctionalTestCase
 {
     protected array $coreExtensionsToLoad = [
         'workspaces',
@@ -35,6 +36,10 @@ class ViewImageToolTest extends FunctionalTestCase
         $this->setUpBackendUser(1);
         $GLOBALS['LANG'] = GeneralUtility::makeInstance(LanguageServiceFactory::class)->create('default');
     }
+
+    // -----------------------------------------------------------------
+    // Images (former ViewImage behavior)
+    // -----------------------------------------------------------------
 
     public function testReadsImageAndReturnsBase64(): void
     {
@@ -58,81 +63,20 @@ class ViewImageToolTest extends FunctionalTestCase
         self::assertSame(base64_encode($pngBytes), $image->data);
     }
 
-    public function testReturnsErrorForPdf(): void
+    public function testImageWithOutlineFormatReturnsMetadataWithoutBytes(): void
     {
-        // Non-image MIME → isError pointing the LLM to the right viewer tool
-        // (ReadPdfText / ViewPdfPage for PDF). content=null asserts
-        // getContents() is never called.
-        $tool = $this->buildTool(202, 'application/pdf', 4096, 'doc.pdf', '1:/uploads/doc.pdf', null, 0, 0, $this->createUncalledScaler());
+        // format=outline replaces the former GetFileInfo: metadata only,
+        // getContents() must never be called (content=null asserts that).
+        $tool = $this->buildTool(102, 'image/png', 2048, 'pixel.png', '1:/uploads/pixel.png', null, 1, 1, $this->createUncalledScaler());
 
-        $result = $tool->execute(['uid' => 202]);
+        $result = $tool->execute(['uid' => 102, 'format' => 'outline']);
 
-        self::assertTrue($result->isError);
+        self::assertFalse($result->isError, json_encode($result->jsonSerialize()));
         self::assertCount(1, $result->content);
         $text = $result->content[0];
         self::assertInstanceOf(TextContent::class, $text);
-        self::assertStringContainsString('application/pdf', $text->text);
-        self::assertStringContainsString('ReadPdfText', $text->text);
-        self::assertStringContainsString('ViewPdfPage', $text->text);
-    }
-
-    public function testReturnsErrorForUnsupportedMime(): void
-    {
-        // application/zip is not on any viewer-tool allowlist — the hint
-        // falls through to GetFileInfo.
-        $tool = $this->buildTool(404, 'application/zip', 100, 'archive.zip', '1:/uploads/archive.zip', null, 0, 0, $this->createUncalledScaler());
-
-        $result = $tool->execute(['uid' => 404]);
-
-        self::assertTrue($result->isError);
-        self::assertStringContainsString('application/zip', $result->content[0]->text);
-        self::assertStringContainsString('GetFileInfo', $result->content[0]->text);
-    }
-
-    public function testReturnsErrorWhenOversize(): void
-    {
-        // 6 MiB > 5 MiB image cap. getContents must never be called.
-        $tool = $this->buildTool(303, 'image/png', 6 * 1024 * 1024, 'huge.png', '1:/uploads/huge.png', null, 0, 0, $this->createUncalledScaler());
-
-        $result = $tool->execute(['uid' => 303]);
-
-        self::assertTrue($result->isError);
-        self::assertStringContainsString('sys_file:303', $result->content[0]->text);
-        self::assertStringContainsString('image inspection is capped', $result->content[0]->text);
-        self::assertStringContainsString('6.0 MiB', $result->content[0]->text);
-    }
-
-    public function testReturnsErrorWhenUidNotFound(): void
-    {
-        $tool = new ViewImageTool(
-            new AttachmentService(
-                GeneralUtility::makeInstance(ResourceFactory::class),
-                GeneralUtility::makeInstance(ConnectionPool::class),
-            ),
-            new ImageScalingService(),
-        );
-
-        $result = $tool->execute(['uid' => 999999]);
-
-        self::assertTrue($result->isError);
-        self::assertStringContainsString('999999', $result->content[0]->text);
-        self::assertStringContainsString('could not be resolved', $result->content[0]->text);
-    }
-
-    public function testReturnsErrorWhenUidIsZero(): void
-    {
-        $tool = new ViewImageTool(
-            new AttachmentService(
-                GeneralUtility::makeInstance(ResourceFactory::class),
-                GeneralUtility::makeInstance(ConnectionPool::class),
-            ),
-            new ImageScalingService(),
-        );
-
-        $result = $tool->execute(['uid' => 0]);
-
-        self::assertTrue($result->isError);
-        self::assertStringContainsString('uid', $result->content[0]->text);
+        self::assertStringContainsString('pixel.png', $text->text);
+        self::assertStringContainsString('sys_file:102', $text->text);
     }
 
     public function testScalesImageWhenWidthExceedsMaxSide(): void
@@ -141,7 +85,7 @@ class ViewImageToolTest extends FunctionalTestCase
         $scaler = $this->getMockBuilder(ImageScalingService::class)->disableOriginalConstructor()->getMock();
         $scaler->expects(self::once())
             ->method('scaleToMaxSide')
-            ->with('/tmp/big.png', ViewImageTool::MAX_IMAGE_SIDE, 'png')
+            ->with('/tmp/big.png', ReadFileTool::MAX_IMAGE_SIDE, 'png')
             ->willReturn(['bytes' => $scaledBytes, 'width' => 2048, 'height' => 1536, 'mime' => 'image/png']);
 
         // getContents must never be called on the scaling path.
@@ -170,7 +114,7 @@ class ViewImageToolTest extends FunctionalTestCase
         $scaler = $this->getMockBuilder(ImageScalingService::class)->disableOriginalConstructor()->getMock();
         $scaler->expects(self::once())
             ->method('scaleToMaxSide')
-            ->with('/tmp/tall.jpg', ViewImageTool::MAX_IMAGE_SIDE, 'jpg')
+            ->with('/tmp/tall.jpg', ReadFileTool::MAX_IMAGE_SIDE, 'jpg')
             ->willReturn(['bytes' => $scaledBytes, 'width' => 1024, 'height' => 2048, 'mime' => 'image/jpeg']);
 
         $tool = $this->buildTool(502, 'image/jpeg', 1024 * 1024, 'tall.jpg', '1:/uploads/tall.jpg', null, 1500, 3000, $scaler, '/tmp/tall.jpg');
@@ -206,7 +150,7 @@ class ViewImageToolTest extends FunctionalTestCase
         $scaler = $this->getMockBuilder(ImageScalingService::class)->disableOriginalConstructor()->getMock();
         $scaler->expects(self::once())
             ->method('scaleToMaxSide')
-            ->with('/tmp/anim.gif', ViewImageTool::MAX_IMAGE_SIDE, 'jpg')
+            ->with('/tmp/anim.gif', ReadFileTool::MAX_IMAGE_SIDE, 'jpg')
             ->willReturn(['bytes' => $scaledBytes, 'width' => 2048, 'height' => 2048, 'mime' => 'image/jpeg']);
 
         $tool = $this->buildTool(504, 'image/gif', 2 * 1024 * 1024, 'anim.gif', '1:/uploads/anim.gif', null, 3000, 3000, $scaler, '/tmp/anim.gif');
@@ -251,11 +195,157 @@ class ViewImageToolTest extends FunctionalTestCase
         self::assertStringContainsString('GraphicsMagick', $result->content[0]->text);
     }
 
+    // -----------------------------------------------------------------
+    // Documents (former ReadDocument behavior — text/plain is enough to
+    // exercise the dispatch without office fixtures)
+    // -----------------------------------------------------------------
+
+    public function testReadsPlainTextDocument(): void
+    {
+        $content = "Hallo Welt.\nZweite Zeile.";
+        $tool = $this->buildTool(601, 'text/plain', strlen($content), 'notes.txt', '1:/uploads/notes.txt', $content, 0, 0, $this->createUncalledScaler());
+
+        $result = $tool->execute(['uid' => 601]);
+
+        self::assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        self::assertCount(1, $result->content);
+        $text = $result->content[0];
+        self::assertInstanceOf(TextContent::class, $text);
+        self::assertStringContainsString('notes.txt', $text->text);
+        self::assertStringContainsString('Gesamtzeichen', $text->text);
+        self::assertStringContainsString('Hallo Welt.', $text->text);
+        self::assertStringContainsString('Zweite Zeile.', $text->text);
+    }
+
+    public function testDocumentCharOffsetWindowsThroughContent(): void
+    {
+        $content = 'ABCDEF';
+        $tool = $this->buildTool(602, 'text/plain', strlen($content), 'window.txt', '1:/uploads/window.txt', $content, 0, 0, $this->createUncalledScaler());
+
+        $result = $tool->execute(['uid' => 602, 'char_offset' => 3]);
+
+        self::assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $text = $result->content[0]->text;
+        self::assertStringContainsString('ab Offset 3', $text);
+        self::assertStringContainsString('DEF', $text);
+    }
+
+    public function testDocumentOutlineReportsLengthWithoutBody(): void
+    {
+        $content = 'Zwölf Zeichen';
+        $tool = $this->buildTool(603, 'text/plain', strlen($content), 'meta.txt', '1:/uploads/meta.txt', $content, 0, 0, $this->createUncalledScaler());
+
+        $result = $tool->execute(['uid' => 603, 'format' => 'outline']);
+
+        self::assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $text = $result->content[0]->text;
+        self::assertStringContainsString('Gesamtzeichen', $text);
+        self::assertStringContainsString('text/plain', $text);
+        self::assertStringNotContainsString('Zwölf Zeichen', $text);
+    }
+
+    // -----------------------------------------------------------------
+    // Unsupported MIME → metadata only, no error
+    // -----------------------------------------------------------------
+
+    public function testReturnsMetadataForUnsupportedMime(): void
+    {
+        // application/zip has no content handler — ReadFile degrades to
+        // metadata (former GetFileInfo) instead of erroring, so the LLM
+        // never has to pick a second tool. content=null asserts
+        // getContents() is never called.
+        $tool = $this->buildTool(404, 'application/zip', 100, 'archive.zip', '1:/uploads/archive.zip', null, 0, 0, $this->createUncalledScaler());
+
+        $result = $tool->execute(['uid' => 404]);
+
+        self::assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        self::assertCount(1, $result->content);
+        self::assertStringContainsString('application/zip', $result->content[0]->text);
+        self::assertStringContainsString('archive.zip', $result->content[0]->text);
+        self::assertStringContainsString('nur Metadaten', $result->content[0]->text);
+    }
+
+    // -----------------------------------------------------------------
+    // Errors
+    // -----------------------------------------------------------------
+
+    public function testReturnsErrorWhenOversize(): void
+    {
+        // 6 MiB > 5 MiB image cap. getContents must never be called.
+        $tool = $this->buildTool(303, 'image/png', 6 * 1024 * 1024, 'huge.png', '1:/uploads/huge.png', null, 0, 0, $this->createUncalledScaler());
+
+        $result = $tool->execute(['uid' => 303]);
+
+        self::assertTrue($result->isError);
+        self::assertStringContainsString('sys_file:303', $result->content[0]->text);
+        self::assertStringContainsString('zu groß', $result->content[0]->text);
+        self::assertStringContainsString('6.0 MiB', $result->content[0]->text);
+    }
+
+    public function testReturnsErrorForImageFormatOnNonRenderableMime(): void
+    {
+        $tool = $this->buildTool(505, 'text/plain', 100, 'notes.txt', '1:/uploads/notes.txt', null, 0, 0, $this->createUncalledScaler());
+
+        $result = $tool->execute(['uid' => 505, 'format' => 'image']);
+
+        self::assertTrue($result->isError);
+        self::assertStringContainsString('format="image"', $result->content[0]->text);
+        self::assertStringContainsString('text/plain', $result->content[0]->text);
+    }
+
+    public function testReturnsErrorForUnknownFormat(): void
+    {
+        // Format is validated before the file is even resolved.
+        $tool = $this->buildDefaultTool();
+
+        $result = $tool->execute(['uid' => 506, 'format' => 'video']);
+
+        self::assertTrue($result->isError);
+        self::assertStringContainsString('format', $result->content[0]->text);
+    }
+
+    public function testReturnsErrorWhenUidNotFound(): void
+    {
+        $tool = $this->buildDefaultTool();
+
+        $result = $tool->execute(['uid' => 999999]);
+
+        self::assertTrue($result->isError);
+        self::assertStringContainsString('999999', $result->content[0]->text);
+        self::assertStringContainsString('could not be resolved', $result->content[0]->text);
+    }
+
+    public function testReturnsErrorWhenUidIsZero(): void
+    {
+        $tool = $this->buildDefaultTool();
+
+        $result = $tool->execute(['uid' => 0]);
+
+        self::assertTrue($result->isError);
+        self::assertStringContainsString('uid', $result->content[0]->text);
+    }
+
+    // -----------------------------------------------------------------
+    // Helpers
+    // -----------------------------------------------------------------
+
     private function createUncalledScaler(): ImageScalingService
     {
         $scaler = $this->getMockBuilder(ImageScalingService::class)->disableOriginalConstructor()->getMock();
         $scaler->expects(self::never())->method('scaleToMaxSide');
         return $scaler;
+    }
+
+    private function buildDefaultTool(): ReadFileTool
+    {
+        return new ReadFileTool(
+            new AttachmentService(
+                GeneralUtility::makeInstance(ResourceFactory::class),
+                GeneralUtility::makeInstance(ConnectionPool::class),
+            ),
+            new DocumentExtractorService(),
+            new ImageScalingService(),
+        );
     }
 
     private function buildTool(
@@ -269,7 +359,7 @@ class ViewImageToolTest extends FunctionalTestCase
         int $height,
         ImageScalingService $scaler,
         ?string $localPath = null,
-    ): ViewImageTool {
+    ): ReadFileTool {
         $file = $this->getMockBuilder(File::class)->disableOriginalConstructor()->getMock();
         $file->method('getUid')->willReturn($uid);
         $file->method('getMimeType')->willReturn($mime);
@@ -292,8 +382,9 @@ class ViewImageToolTest extends FunctionalTestCase
         $factory = $this->getMockBuilder(ResourceFactory::class)->disableOriginalConstructor()->getMock();
         $factory->expects(self::atLeastOnce())->method('getFileObject')->with($uid)->willReturn($file);
 
-        return new ViewImageTool(
+        return new ReadFileTool(
             new AttachmentService($factory, GeneralUtility::makeInstance(ConnectionPool::class)),
+            new DocumentExtractorService(),
             $scaler,
         );
     }

@@ -28,8 +28,8 @@ use TYPO3\CMS\Core\Resource\ResourceFactory;
  * the missing link that keeps extracted images from being usable in
  * TYPO3 today.
  *
- * Auto-registered into the MCP ToolRegistry via the `mcp.tool` Symfony
- * tag declared on Hn\McpServer\MCP\Tool\ToolInterface.
+ * Registered agent-only via the `agent.tool` tag in Services.yaml — this
+ * tool is NOT exposed through the external MCP server.
  */
 class PromoteScratchFileTool extends AbstractTool
 {
@@ -44,7 +44,7 @@ class PromoteScratchFileTool extends AbstractTool
     {
         return [
             'description' => 'Copy a sys_file from the internal agent scratch storage into a public FAL folder so it can be referenced by TYPO3 records. '
-                . 'Files landing in the scratch storage include: (a) binary tool outputs such as ExtractImages/ViewImage attachments and (b) files the user uploaded through the chat composer. Both kinds live in a non-public storage and are NOT web-reachable — you MUST promote them before using them in any record other than tx_agent_message. '
+                . 'Files landing in the scratch storage include: (a) binary tool outputs such as ExtractImages/ReadFile attachments and (b) files the user uploaded through the chat composer. Both kinds live in a non-public storage and are NOT web-reachable — you MUST promote them before using them in any record other than tx_agent_message. '
                 . 'Typical use: pick the sys_file UID of the scratch attachment you want to reference (e.g. from a prior ExtractImages result or from the user\'s composer upload) and call this tool. '
                 . 'The returned sys_file UID is the value you pass as `uid_local` when creating a sys_file_reference via WriteTable (e.g. `image: [{uid_local: <returnedUid>, alternative: "…"}]` on tt_content). '
                 . 'Only files from the agent scratch storage may be promoted — regular fileadmin files are rejected. Copies (does not move); the original stays in scratch for chat-history preview.',

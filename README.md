@@ -69,7 +69,7 @@ Files can be dragged onto the composer or picked via the file browser. The chat 
 
 > **Prerequisite for uploads:** the composer uses TYPO3 Core's file-upload AJAX endpoints (`/typo3/ajax/file/exists` and `/typo3/ajax/file/process`), whose access is inherited from the **file** module (`media_management`). BE groups whose members should be able to upload attachments must therefore include this module in their allowed modules. Existing attachments already stored in FAL can still be referenced without this — only the drag-drop/upload path is affected.
 >
-> Composer uploads are written into a non-public **agent scratch storage** (`var/agent-scratch/user_{beUserUid}/`, `is_public=0`); they are not web-reachable until the agent promotes them into a regular FAL folder via the `PromoteScratchFileTool` (which happens automatically when the agent references the file in a record).
+> Composer uploads are written into a non-public **agent scratch storage** (`var/agent-scratch/user_{beUserUid}/`, `is_public=0`); they are not web-reachable until the agent promotes them into a regular FAL folder via the `PromoteScratchFile` tool (which happens automatically when the agent references the file in a record).
 
 | Kind | Formats | Size cap |
 |------|---------|----------|
@@ -79,7 +79,7 @@ Files can be dragged onto the composer or picked via the file browser. The chat 
 | Document | DOCX, ODT, RTF, TXT, Markdown, HTML | 25 MB |
 | Presentation | PPTX, ODP | 25 MB |
 
-Attachments enter the conversation as multimodal tool messages via the MCP tools listed under **Architecture** below (image bytes for `ViewImageTool`, extracted text/pages for the PDF and Office tools).
+Attachments enter the conversation as multimodal tool messages via the `ReadFile` tool listed under **Architecture** below (image bytes inline, extracted text/pages for PDF and Office files).
 
 ### Creating Tasks Directly (List Module / CLI)
 
@@ -201,13 +201,14 @@ Agent tasks are workspace-aware: each task record stores a `workspace_id` (set a
 
 The extension uses the `ToolRegistry` from `hn/typo3-mcp-server` to access the core TYPO3 tools (GetPage, GetPageTree, Search, ReadTable, WriteTable, …) natively from PHP without MCP protocol overhead.
 
-On top of that it registers its own MCP tools under `Classes/MCP/Tool/`:
+On top of that it ships its own agent tools under `Classes/MCP/Tool/`:
 
+- `ReadFileTool` — the single file-reading tool. Reads any FAL file by sys_file UID and dispatches on its MIME type: images come back as inline image content (downscaled if needed), PDFs as per-page text (or one page rendered as image via `format=image`, using `smalot/pdfparser` / the Ghostscript pipeline), spreadsheets/documents/presentations as structured text via PhpOffice, and every other file type as metadata. One tool instead of seven format-specific ones keeps tool selection trivial, especially for smaller models.
 - `GetInstructionTool` — progressive disclosure of on-demand instruction bodies.
-- `GetFileInfoTool` — cheap FAL metadata lookup.
-- `ViewImageTool`, `ViewPdfPageTool` — image and PDF-page bytes returned as multimodal content.
-- `ReadPdfTextTool` — extracts text from PDF attachments via `smalot/pdfparser`.
-- `ReadSpreadsheetTool`, `ReadDocumentTool`, `ReadPresentationTool` — structured content extraction from Office and OpenDocument files via PhpOffice.
+- `ExtractImagesTool` — pulls raster images embedded in Office/PDF files into the scratch storage.
+- `PromoteScratchFileTool` — copies scratch files into a public FAL folder for use in records.
+
+These agent tools are registered with a dedicated `agent.tool` DI tag and merged with the MCP core tools in `Hn\Agent\MCP\AgentToolRegistry`, which only the agent loop consumes. They are deliberately **not** tagged `mcp.tool`, so they do not appear in the `ToolRegistry` that the `mcp_server` extension exposes to external MCP clients — they are designed around this extension's chat internals (scratch storage, multimodal tool messages, instruction records) and external agents bring their own file handling. To expose an individual tool over MCP anyway, tag its service with `mcp.tool` in `Configuration/Services.yaml`.
 
 The `messages` JSON field in each task record stores the full OpenAI messages array — the complete conversation state. This enables resumability, the SSE streaming loop, and the chat UI's message history.
 

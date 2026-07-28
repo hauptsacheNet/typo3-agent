@@ -44,7 +44,7 @@ class PromptRenderer
      *     eines BE-User-scoped Ordners im nicht-öffentlichen Scratch-Storage
      *     (z.B. "3:/user_42/"). Chat-Uploads landen damit außerhalb von
      *     fileadmin/ und müssen bei Record-Verwendung durch den Agent via
-     *     PromoteScratchFileTool in den regulären fileadmin-Zielordner
+     *     PromoteScratchFile in den regulären fileadmin-Zielordner
      *     promotet werden.
      *   - `TYPO3.settings.Agent.elementBrowserUrl` (Basis-URL des Element-
      *     Browsers; der Core setzt sie nur im äußeren Backend-Shell, nicht im

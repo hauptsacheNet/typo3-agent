@@ -15,7 +15,7 @@ use TYPO3\CMS\Core\Resource\ResourceFactory;
  * Resolves FAL file references for the agent and classifies a file's
  * eligibility (MIME on the allowlist, within size limits) for inline
  * delivery to the LLM. Does NOT read file bytes — those are read by
- * the file-content tools (ViewImage today; later e.g. ReadPdfText).
+ * the ReadFile tool.
  *
  * Single source of truth for the supported MIME allowlist and size caps,
  * and for resolving sys_file_reference / sys_file_metadata UIDs to their
@@ -24,10 +24,10 @@ use TYPO3\CMS\Core\Resource\ResourceFactory;
  * Used by:
  *  - AgentService — to annotate user-attachment markers with notes like
  *    "zu groß" / "Format nicht unterstützt" so the LLM doesn't bother
- *    calling a viewer tool on files that wouldn't deliver bytes anyway.
+ *    calling ReadFile on files that wouldn't deliver bytes anyway.
  *  - AttachmentController::preflightAction — for the chat-UI chip.
- *  - GetFileInfoTool / ViewImageTool — share resolveWithFallback() so
- *    the LLM can pass sys_file_reference UIDs and still get the right
+ *  - ReadFileTool and the other agent tools — share resolveWithFallback()
+ *    so the LLM can pass sys_file_reference UIDs and still get the right
  *    file back.
  */
 class AttachmentService implements LoggerAwareInterface
@@ -61,11 +61,11 @@ class AttachmentService implements LoggerAwareInterface
     public const MAX_OFFICE_BYTES = 25 * 1024 * 1024;
 
     private const TOOL_FOR_KIND = [
-        'image' => 'ViewImage',
-        'pdf' => 'ReadPdfText (Text) oder ViewPdfPage (Seite als Bild)',
-        'spreadsheet' => 'ReadSpreadsheet',
-        'document' => 'ReadDocument',
-        'presentation' => 'ReadPresentation',
+        'image' => 'ReadFile',
+        'pdf' => 'ReadFile',
+        'spreadsheet' => 'ReadFile',
+        'document' => 'ReadFile',
+        'presentation' => 'ReadFile',
     ];
 
     public function __construct(
@@ -292,12 +292,11 @@ class AttachmentService implements LoggerAwareInterface
      * UI pre-flight for one attachment. Cheap (metadata-only, no getContents()
      * call) so the chat frontend can call it eagerly after each add.
      *
-     * `readableByLlm` answers: can the LLM retrieve the file's bytes via
-     * a viewer tool? True for images (ViewImage), PDFs (ReadPdfText /
-     * ViewPdfPage), spreadsheets (ReadSpreadsheet), text documents
-     * (ReadDocument) and presentations (ReadPresentation) within their
-     * respective size caps. Other MIME types are limited to metadata
-     * via GetFileInfo and report `readableByLlm: false` with a `reason`.
+     * `readableByLlm` answers: can the LLM retrieve the file's content via
+     * the ReadFile tool? True for images, PDFs, spreadsheets, text
+     * documents and presentations within their respective size caps.
+     * Other MIME types are limited to metadata and report
+     * `readableByLlm: false` with a `reason`.
      *
      * @param array<string, mixed> $ref
      * @return array{uid: int, identifier: string, name: string, mime: string, size: int, readableByLlm: bool, reason: ?string, via: ?string}
@@ -322,7 +321,7 @@ class AttachmentService implements LoggerAwareInterface
     /**
      * Append a marker block listing the structured attachments to a user
      * message's text. The LLM uses these markers to decide which tool to
-     * call (ViewImage for images, GetFileInfo for metadata) — the bytes
+     * call (ReadFile) — the bytes
      * are never sent inline via this path.
      *
      * @param array<int, array<string, mixed>> $attachments
@@ -339,10 +338,10 @@ class AttachmentService implements LoggerAwareInterface
             }
             $markerLines[] = $this->buildMarker($ref, $this->noteFor($ref));
         }
-        $markerBlock = "---\nAngehängte Dateien — passendes Lese-Tool je Format aufrufen "
-            . "(Bilder: ViewImage; PDFs: ReadPdfText für Text bzw. ViewPdfPage für eine Seite als Bild; "
-            . "Spreadsheets: ReadSpreadsheet; Word/ODT/RTF/TXT/MD/HTML: ReadDocument; "
-            . "Präsentationen: ReadPresentation; Metadaten: GetFileInfo):\n" . implode("\n", $markerLines);
+        $markerBlock = "---\nAngehängte Dateien — mit dem ReadFile-Tool lesen "
+            . "(Bilder kommen als Bild zurück; PDFs/Präsentationen seiten-/slideweise via range; "
+            . "Spreadsheets via sheet/a1_range; lange Dokumente via char_offset; "
+            . "andere Formate liefern nur Metadaten):\n" . implode("\n", $markerLines);
         return $userText !== '' ? rtrim($userText) . "\n\n" . $markerBlock : $markerBlock;
     }
 
@@ -354,12 +353,12 @@ class AttachmentService implements LoggerAwareInterface
         $info = $this->classify($ref);
         return match ($info['kind']) {
             'unresolvable' => 'Datei nicht auflösbar',
-            'unsupported' => 'Inhalt nicht direkt lesbar — nur Metadaten via GetFileInfo',
+            'unsupported' => 'Inhalt nicht direkt lesbar — nur Metadaten via ReadFile',
             'oversize' => $info['reason'] . ' — Inhalt nicht abrufbar',
-            'pdf' => 'abrufbar via ReadPdfText oder ViewPdfPage',
-            'spreadsheet' => 'abrufbar via ReadSpreadsheet',
-            'document' => 'abrufbar via ReadDocument',
-            'presentation' => 'abrufbar via ReadPresentation',
+            'pdf' => 'abrufbar via ReadFile (range für Seiten, format="image" für eine Seite als Bild)',
+            'spreadsheet' => 'abrufbar via ReadFile (sheet/a1_range)',
+            'document' => 'abrufbar via ReadFile',
+            'presentation' => 'abrufbar via ReadFile (range für Slides)',
             default => null,
         };
     }

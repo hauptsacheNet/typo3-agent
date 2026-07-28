@@ -10,7 +10,7 @@ use Hn\Agent\Domain\AgentTaskRepository;
 use Hn\Agent\Domain\TaskEvent;
 use Hn\Agent\Domain\TaskStateMachine;
 use Hn\Agent\Domain\TaskStatus;
-use Hn\McpServer\MCP\ToolRegistry;
+use Hn\Agent\MCP\AgentToolRegistry;
 use Hn\McpServer\Service\WorkspaceContextService;
 use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerAwareTrait;
@@ -31,7 +31,7 @@ class AgentService implements LoggerAwareInterface
     public function __construct(
         private readonly LlmService $llmService,
         private readonly ToolConverterService $toolConverterService,
-        private readonly ToolRegistry $toolRegistry,
+        private readonly AgentToolRegistry $toolRegistry,
         private readonly ExtensionConfiguration $extensionConfiguration,
         private readonly ConnectionPool $connectionPool,
         private readonly AgentTaskRepository $repository,
@@ -401,18 +401,18 @@ class AgentService implements LoggerAwareInterface
     /**
      * Reminds the model that chat-composer uploads live in the non-public
      * scratch storage and must be promoted before use in regular records.
-     * Without a PromoteScratchFileTool call, sys_file_references pointing to
+     * Without a PromoteScratchFile call, sys_file_references pointing to
      * scratch files will 404 in the frontend.
      */
     private function buildScratchStorageHint(): string
     {
         return "\n\n# File attachments"
             . "\nFiles uploaded by the user via the chat composer, as well as binary"
-            . " outputs of tools such as ExtractImages or ViewImage, are stored in a"
+            . " outputs of tools such as ExtractImages or ReadFile, are stored in a"
             . " non-public scratch storage and are NOT web-reachable. Before you"
             . " reference such a file in a regular record (tt_content image,"
             . " tx_news_domain_model_news, sys_file_reference on any table other"
-            . " than tx_agent_message), you MUST call `PromoteScratchFileTool` to"
+            . " than tx_agent_message), you MUST call `PromoteScratchFile` to"
             . " copy the file into the regular fileadmin storage and use the"
             . " returned sys_file UID as `uid_local`. Skipping this step leaves a"
             . " reference to a non-public file and the image will 404 in the"

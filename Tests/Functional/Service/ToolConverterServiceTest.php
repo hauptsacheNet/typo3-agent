@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Hn\Agent\Tests\Functional\Service;
 
+use Hn\Agent\MCP\AgentToolRegistry;
 use Hn\Agent\Service\AgentScratchStorage;
 use Hn\Agent\Service\ToolConverterService;
 use Hn\McpServer\MCP\ToolRegistry;
@@ -28,7 +29,7 @@ class ToolConverterServiceTest extends FunctionalTestCase
     ];
 
     private ToolConverterService $toolConverterService;
-    private ToolRegistry $toolRegistry;
+    private AgentToolRegistry $toolRegistry;
 
     protected function setUp(): void
     {
@@ -47,7 +48,7 @@ class ToolConverterServiceTest extends FunctionalTestCase
             GeneralUtility::makeInstance(ConnectionPool::class),
         );
         $this->toolConverterService = new ToolConverterService($scratchStorage);
-        $this->toolRegistry = GeneralUtility::makeInstance(ToolRegistry::class);
+        $this->toolRegistry = GeneralUtility::makeInstance(AgentToolRegistry::class);
     }
 
     public function testConvertToolsReturnsOpenAiFormat(): void
@@ -77,11 +78,28 @@ class ToolConverterServiceTest extends FunctionalTestCase
         self::assertContains('Search', $toolNames);
         self::assertContains('ReadTable', $toolNames);
         self::assertContains('ListTables', $toolNames);
-        // GetFileInfo + ViewImage live in the agent package and register
-        // themselves via the mcp.tool autoconfigure tag — both must show
-        // up alongside vendor tools.
-        self::assertContains('GetFileInfo', $toolNames);
-        self::assertContains('ViewImage', $toolNames);
+        // The agent-only tools are tagged agent.tool and merged into the
+        // AgentToolRegistry alongside the MCP core tools.
+        self::assertContains('ReadFile', $toolNames);
+        self::assertContains('ExtractImages', $toolNames);
+        self::assertContains('PromoteScratchFile', $toolNames);
+        self::assertContains('GetInstruction', $toolNames);
+    }
+
+    public function testAgentToolsAreNotExposedThroughMcpToolRegistry(): void
+    {
+        // Regression guard for the "tool leak": the agent-only tools are
+        // designed around the chat internals (scratch storage, multimodal
+        // tool messages) and must not show up in the ToolRegistry that the
+        // mcp_server extension exposes to external MCP clients.
+        $mcpRegistry = GeneralUtility::makeInstance(ToolRegistry::class);
+        $mcpToolNames = array_keys($mcpRegistry->getTools());
+
+        self::assertContains('GetPage', $mcpToolNames);
+        self::assertNotContains('ReadFile', $mcpToolNames);
+        self::assertNotContains('ExtractImages', $mcpToolNames);
+        self::assertNotContains('PromoteScratchFile', $mcpToolNames);
+        self::assertNotContains('GetInstruction', $mcpToolNames);
     }
 
     public function testExecuteToolCallSuccess(): void
