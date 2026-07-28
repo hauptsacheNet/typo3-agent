@@ -21,6 +21,7 @@
 # Playwright
 /Build/playwright-report
 /Build/test-results
+/Build/screenshots
 /Build/tests/playwright/.auth
 
 # LLM test artifacts

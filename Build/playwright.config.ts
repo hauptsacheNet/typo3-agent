@@ -17,6 +17,8 @@ export default defineConfig({
     ignoreHTTPSErrors: true,
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
+    // Wide enough for the TYPO3 backend with module menu + content area.
+    viewport: { width: 1440, height: 900 },
     launchOptions: {
       // Sandboxed environments ship a system chromium instead of the
       // playwright-managed download; point to it via env when needed.

@@ -88,6 +88,14 @@ jobs:
       - name: Run E2E test suite
         run: composer test:e2e
 
+      - name: Upload E2E screenshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: e2e-screenshots
+          path: Build/screenshots
+          retention-days: 14
+
       - name: Upload Playwright report
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

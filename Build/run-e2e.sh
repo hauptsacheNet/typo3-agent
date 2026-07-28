@@ -121,6 +121,7 @@ done
 
 echo "Running Playwright tests..."
 cd "${ROOT_DIR}/Build"
+rm -rf screenshots
 if [ ! -d node_modules/@playwright ]; then
     npm ci
 fi

@@ -63,11 +63,28 @@ export class AgentModulePage {
 
 type Fixtures = {
   agentModule: AgentModulePage;
+  /**
+   * Take a numbered full-page screenshot documenting the current step.
+   * Files land in Build/screenshots/<test-title>/NN-<name>.png (uploaded as
+   * CI artifact) and are attached to the Playwright HTML report.
+   */
+  shot: (name: string) => Promise<void>;
 };
 
 export const test = base.extend<Fixtures>({
   agentModule: async ({ page }, use) => {
     await use(new AgentModulePage(page));
+  },
+
+  shot: async ({ page }, use, testInfo) => {
+    let counter = 0;
+    const testSlug = testInfo.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    await use(async (name: string) => {
+      counter++;
+      const path = `screenshots/${testSlug}/${String(counter).padStart(2, '0')}-${name}.png`;
+      await page.screenshot({ path, fullPage: true });
+      await testInfo.attach(name, { path, contentType: 'image/png' });
+    });
   },
 });
 
