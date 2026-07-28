@@ -50,6 +50,12 @@
         "test:functional": [
             "phpunit -c phpunit.xml.dist"
         ],
+        "test:e2e": [
+            "bash Build/run-e2e.sh"
+        ],
+        "test:llm": [
+            "phpunit -c Tests/Llm/phpunit-llm.xml --testdox"
+        ],
         "build:ter": "bash Build/build-ter.sh"
     },
     "config": {
