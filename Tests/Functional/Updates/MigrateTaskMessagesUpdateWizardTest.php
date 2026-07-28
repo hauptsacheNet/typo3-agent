@@ -263,6 +263,20 @@ class MigrateTaskMessagesUpdateWizardTest extends FunctionalTestCase
         self::assertSame('{broken', $this->getTaskRow($taskUid)['messages']);
     }
 
+    public function testJsonWithoutMessageObjectsIsKeptForManualInspection(): void
+    {
+        $this->addLegacyColumn();
+        // decodes to a non-empty array, but none of its entries are message objects
+        $taskUid = $this->insertRawLegacyValue('{"role":"user","content":"hi"}');
+
+        self::assertTrue($this->createWizard()->executeUpdate());
+
+        self::assertCount(0, $this->getMessageRows($taskUid));
+        $task = $this->getTaskRow($taskUid);
+        self::assertSame('{"role":"user","content":"hi"}', $task['messages']);
+        self::assertSame(0, (int)$task['chat_messages']);
+    }
+
     public function testTaskWithExistingMessagesIsNotDuplicated(): void
     {
         $this->addLegacyColumn();

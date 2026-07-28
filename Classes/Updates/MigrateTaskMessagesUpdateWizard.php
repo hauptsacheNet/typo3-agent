@@ -210,6 +210,18 @@ final class MigrateTaskMessagesUpdateWizard implements UpgradeWizardInterface, C
                 }
             }
 
+            if ($count === 0) {
+                // Non-empty JSON, but not a single entry was a message
+                // object (e.g. a corrupted flat structure). Never trade the
+                // legacy value for nothing — keep it for manual inspection.
+                $connection->rollBack();
+                $this->say(sprintf(
+                    'Task #%d: legacy messages value contained no valid message objects — left untouched for manual inspection.',
+                    $taskUid,
+                ));
+                return false;
+            }
+
             $this->connectionPool->getConnectionForTable(self::TASK_TABLE)->update(
                 self::TASK_TABLE,
                 [$column => null, self::COUNTER_COLUMN => $count],
