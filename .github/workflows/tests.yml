@@ -42,8 +42,7 @@ jobs:
           composer require --no-update --no-interaction --no-progress \
             "typo3/cms-core:^${{ matrix.typo3 }}" \
             "typo3/cms-backend:^${{ matrix.typo3 }}" \
-            "typo3/cms-workspaces:^${{ matrix.typo3 }}"
-          composer require --no-update --no-interaction --no-progress --dev \
+            "typo3/cms-workspaces:^${{ matrix.typo3 }}" \
             "typo3/cms-install:^${{ matrix.typo3 }}"
 
       - name: Install Composer dependencies

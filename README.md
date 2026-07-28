@@ -209,7 +209,11 @@ On top of that it registers its own MCP tools under `Classes/MCP/Tool/`:
 - `ReadPdfTextTool` — extracts text from PDF attachments via `smalot/pdfparser`.
 - `ReadSpreadsheetTool`, `ReadDocumentTool`, `ReadPresentationTool` — structured content extraction from Office and OpenDocument files via PhpOffice.
 
-The `messages` JSON field in each task record stores the full OpenAI messages array — the complete conversation state. This enables resumability, the SSE streaming loop, and the chat UI's message history.
+Each conversation turn is persisted as a `tx_agent_message` record (role, content, tool calls, attachments as `sys_file_reference` rows), linked to its task via the inline `chat_messages` relation. This enables resumability, the SSE streaming loop, and the chat UI's message history.
+
+### Upgrading from the JSON-column era
+
+Versions that stored the whole conversation in a `tx_agent_task.messages` JSON column are migrated by the **"Migrate agent task chat histories to tx_agent_message records"** upgrade wizard (`agent_migrateTaskMessages`). Run the database schema update first (it leaves the legacy `messages` column untouched — the new counter is deliberately named `chat_messages`), then execute the wizard in the Install Tool or via `bin/typo3 upgrade:run agent_migrateTaskMessages`. Afterwards the emptied `messages` column can be removed via the database analyzer.
 
 ## Development
 

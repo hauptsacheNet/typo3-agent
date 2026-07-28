@@ -20,7 +20,7 @@ return [
     ],
     'types' => [
         '0' => [
-            'showitem' => 'title, prompt, workspace_id, --div--;Status, status, --div--;Result, result, --div--;Messages, messages',
+            'showitem' => 'title, prompt, workspace_id, --div--;Status, status, --div--;Result, result, --div--;Messages, chat_messages',
         ],
     ],
     'columns' => [
@@ -75,7 +75,13 @@ return [
         // its messages (and — via the messages' `attachments` type=file
         // field — transitively to sys_file_reference rows). No manual hook
         // needed; the DB rows are messaged by AgentMessageRepository::append().
-        'messages' => [
+        //
+        // Deliberately NOT named `messages`: installs upgrading from the
+        // JSON-column era still have a `messages` json/text column, and the
+        // schema migrator would try (and fail) to ALTER it to int — losing
+        // the chat history. With a fresh name the old column stays untouched
+        // until MigrateTaskMessagesUpdateWizard has converted its content.
+        'chat_messages' => [
             'label' => 'Messages',
             'config' => [
                 'type' => 'inline',

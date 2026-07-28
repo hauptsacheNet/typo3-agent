@@ -8,7 +8,7 @@ CREATE TABLE tx_agent_task (
     context_uid int(11) unsigned DEFAULT '0' NOT NULL,
     return_url text,
     workspace_id int(11) unsigned DEFAULT '0' NOT NULL,
-    messages int(11) unsigned DEFAULT '0' NOT NULL,
+    chat_messages int(11) unsigned DEFAULT '0' NOT NULL,
 );
 
 CREATE TABLE tx_agent_message (
