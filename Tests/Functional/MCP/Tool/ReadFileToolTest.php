@@ -245,6 +245,112 @@ class ReadFileToolTest extends FunctionalTestCase
     }
 
     // -----------------------------------------------------------------
+    // Real parser paths against the committed fixtures
+    // (regenerate via `php Build/generate-test-fixtures.php`)
+    // -----------------------------------------------------------------
+
+    public function testReadsPdfTextForPageRange(): void
+    {
+        $tool = $this->buildFixtureTool(701, 'document.pdf', 'application/pdf');
+
+        $result = $tool->execute(['uid' => 701, 'range' => '2']);
+
+        self::assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $text = $result->content[0]->text;
+        self::assertStringContainsString('Gesamtseiten: 2', $text);
+        self::assertStringContainsString('Seite 2–2', $text);
+        self::assertStringContainsString('Zweiter Abschnitt auf Seite zwei', $text);
+        self::assertStringNotContainsString('Seite eins', $text);
+    }
+
+    public function testPdfOutlineReportsPageCount(): void
+    {
+        $tool = $this->buildFixtureTool(702, 'document.pdf', 'application/pdf');
+
+        $result = $tool->execute(['uid' => 702, 'format' => 'outline']);
+
+        self::assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $text = $result->content[0]->text;
+        self::assertStringContainsString('Gesamtseiten: 2', $text);
+        self::assertStringNotContainsString('Zweiter Abschnitt', $text);
+    }
+
+    public function testPdfImageFormatRejectsMultiPageRange(): void
+    {
+        $tool = $this->buildFixtureTool(703, 'document.pdf', 'application/pdf');
+
+        $result = $tool->execute(['uid' => 703, 'format' => 'image', 'range' => '1-2']);
+
+        self::assertTrue($result->isError);
+        self::assertStringContainsString('genau eine Seite', $result->content[0]->text);
+    }
+
+    public function testSpreadsheetWithoutSheetReturnsOutline(): void
+    {
+        $tool = $this->buildFixtureTool(704, 'spreadsheet.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+
+        $result = $tool->execute(['uid' => 704]);
+
+        self::assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $text = $result->content[0]->text;
+        self::assertStringContainsString('"Umsatz"', $text);
+        self::assertStringContainsString('"Notizen"', $text);
+        self::assertStringNotContainsString('Januar', $text);
+    }
+
+    public function testSpreadsheetWithSheetAndRangeReturnsCells(): void
+    {
+        $tool = $this->buildFixtureTool(705, 'spreadsheet.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+
+        $result = $tool->execute(['uid' => 705, 'sheet' => 'Umsatz', 'a1_range' => 'A1:B2']);
+
+        self::assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $text = $result->content[0]->text;
+        self::assertStringContainsString("Monat\tUmsatz", $text);
+        self::assertStringContainsString("Januar\t1200", $text);
+        self::assertStringNotContainsString('Februar', $text);
+    }
+
+    public function testPresentationOutlineListsSlideTitles(): void
+    {
+        $tool = $this->buildFixtureTool(706, 'presentation.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+
+        $result = $tool->execute(['uid' => 706, 'format' => 'outline']);
+
+        self::assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $text = $result->content[0]->text;
+        self::assertStringContainsString('Gesamtslides: 3', $text);
+        self::assertStringContainsString('Agenda', $text);
+        self::assertStringContainsString('Fazit', $text);
+        self::assertStringNotContainsString('Der Markt wächst stetig.', $text);
+    }
+
+    public function testReadsPresentationSlideRange(): void
+    {
+        $tool = $this->buildFixtureTool(707, 'presentation.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+
+        $result = $tool->execute(['uid' => 707, 'range' => '2']);
+
+        self::assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $text = $result->content[0]->text;
+        self::assertStringContainsString('--- Slide 2: Marktübersicht ---', $text);
+        self::assertStringContainsString('Der Markt wächst stetig.', $text);
+        self::assertStringNotContainsString('Fazit', $text);
+    }
+
+    public function testReadsDocxDocument(): void
+    {
+        $tool = $this->buildFixtureTool(708, 'document.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+
+        $result = $tool->execute(['uid' => 708]);
+
+        self::assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        $text = $result->content[0]->text;
+        self::assertStringContainsString('Gesamtzeichen', $text);
+        self::assertStringContainsString('Dies ist der erste Absatz des Testdokuments.', $text);
+    }
+
+    // -----------------------------------------------------------------
     // Unsupported MIME → metadata only, no error
     // -----------------------------------------------------------------
 
@@ -334,6 +440,35 @@ class ReadFileToolTest extends FunctionalTestCase
         $scaler = $this->getMockBuilder(ImageScalingService::class)->disableOriginalConstructor()->getMock();
         $scaler->expects(self::never())->method('scaleToMaxSide');
         return $scaler;
+    }
+
+    /**
+     * Tool whose file resolves to a committed fixture: getContents() serves
+     * the bytes (PDF path), getForLocalProcessing() the on-disk path
+     * (PhpOffice readers). No scaler expectations — fixtures never scale.
+     */
+    private function buildFixtureTool(int $uid, string $fixture, string $mime): ReadFileTool
+    {
+        $path = __DIR__ . '/../../Fixtures/Files/' . $fixture;
+        self::assertFileExists($path, 'Fixture missing — run `php Build/generate-test-fixtures.php`.');
+
+        $file = $this->createStub(File::class);
+        $file->method('getUid')->willReturn($uid);
+        $file->method('getMimeType')->willReturn($mime);
+        $file->method('getSize')->willReturn((int)filesize($path));
+        $file->method('getName')->willReturn($fixture);
+        $file->method('getCombinedIdentifier')->willReturn('1:/fixtures/' . $fixture);
+        $file->method('getContents')->willReturnCallback(static fn(): string => (string)file_get_contents($path));
+        $file->method('getForLocalProcessing')->willReturn($path);
+
+        $factory = $this->getMockBuilder(ResourceFactory::class)->disableOriginalConstructor()->getMock();
+        $factory->method('getFileObject')->with($uid)->willReturn($file);
+
+        return new ReadFileTool(
+            new AttachmentService($factory, GeneralUtility::makeInstance(ConnectionPool::class)),
+            new DocumentExtractorService(),
+            new ImageScalingService(),
+        );
     }
 
     private function buildDefaultTool(): ReadFileTool
