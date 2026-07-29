@@ -138,9 +138,12 @@ abstract class AgentLlmTestCase extends FunctionalTestCase
      * Create a task the same way ChatController::newAction does and run the
      * full agent loop against the real LLM.
      *
+     * @param array<int, array{uid?: int|string, identifier?: string, name?: string}> $rawAttachments
+     *        Attachment refs as posted by the chat composer — resolved and
+     *        hung off the initial user message like a real upload.
      * @return array{0: array<string, mixed>, 1: array} Task row after the run, final messages
      */
-    protected function runAgentTask(string $prompt, int $pid = 1): array
+    protected function runAgentTask(string $prompt, int $pid = 1, array $rawAttachments = []): array
     {
         $agentService = $this->get(AgentService::class);
 
@@ -161,7 +164,7 @@ abstract class AgentLlmTestCase extends FunctionalTestCase
             ],
         );
         $taskUid = (int)$connection->lastInsertId();
-        $agentService->persistInitialMessages($taskUid, $pid, '', 0, $prompt);
+        $agentService->persistInitialMessages($taskUid, $pid, '', 0, $prompt, $rawAttachments);
 
         $finalMessages = $agentService->run($taskUid);
 
