@@ -11,12 +11,12 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
 
 /**
  * Thin, mockable wrapper around TYPO3's GraphicalFunctions::imageMagickConvert()
- * used by ViewImageTool to downscale oversized-in-pixels images before they
+ * used by ReadFileTool to downscale oversized-in-pixels images before they
  * are handed to the LLM. Keeps the ImageMagick/GraphicsMagick call in one
  * place so functional tests can inject a fake.
  *
- * ViewPdfPageTool intentionally still calls imageMagickConvert() inline —
- * a shared abstraction across both tools is a separate refactor.
+ * ReadFileTool's PDF page rendering intentionally still calls
+ * imageMagickConvert() inline — a shared abstraction is a separate refactor.
  */
 class ImageScalingService implements LoggerAwareInterface
 {

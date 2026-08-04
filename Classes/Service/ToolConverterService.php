@@ -43,7 +43,7 @@ class ToolConverterService
      *  - `text`: Concatenated text portion of the result. Persisted as-is
      *    on the tool-message row.
      *  - `attachments`: sys_file UIDs for any binary content the tool
-     *    produced (e.g. ImageContent from ViewImage). The binary bytes
+     *    produced (e.g. ImageContent from ReadFile). The binary bytes
      *    have already been persisted into the agent scratch storage
      *    (var/agent-scratch/) and linked via sys_file; the caller creates
      *    the sys_file_reference rows on the tool message.

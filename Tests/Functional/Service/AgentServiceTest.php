@@ -16,7 +16,7 @@ use Hn\Agent\Service\InstructionTextFormatter;
 use Hn\Agent\Service\LlmService;
 use Hn\Agent\Service\MessageLlmSerializer;
 use Hn\Agent\Service\ToolConverterService;
-use Hn\McpServer\MCP\ToolRegistry;
+use Hn\Agent\MCP\AgentToolRegistry;
 use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
 use TYPO3\CMS\Core\Database\ConnectionPool;
 use TYPO3\CMS\Core\Localization\LanguageServiceFactory;
@@ -166,7 +166,7 @@ class AgentServiceTest extends FunctionalTestCase
         return new AgentService(
             $llmStub,
             $this->makeToolConverterService(),
-            GeneralUtility::makeInstance(ToolRegistry::class),
+            GeneralUtility::makeInstance(AgentToolRegistry::class),
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
@@ -199,7 +199,7 @@ class AgentServiceTest extends FunctionalTestCase
         return new AgentService(
             $llmStub,
             $this->makeToolConverterService(),
-            GeneralUtility::makeInstance(ToolRegistry::class),
+            GeneralUtility::makeInstance(AgentToolRegistry::class),
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
@@ -412,7 +412,7 @@ class AgentServiceTest extends FunctionalTestCase
         $agentService = new AgentService(
             $llmStub,
             $this->makeToolConverterService(),
-            GeneralUtility::makeInstance(ToolRegistry::class),
+            GeneralUtility::makeInstance(AgentToolRegistry::class),
             GeneralUtility::makeInstance(ExtensionConfiguration::class),
             $this->connectionPool,
             new AgentTaskRepository($this->connectionPool),
@@ -533,9 +533,9 @@ class AgentServiceTest extends FunctionalTestCase
         self::assertStringStartsWith('data:image/png;base64,', $userMsg['content'][1]['image_url']['url']);
     }
 
-    public function testPdfAttachmentMarkerPointsLlmToReadPdfText(): void
+    public function testPdfAttachmentMarkerPointsLlmToReadFile(): void
     {
-        // PDFs stay marker-only → the LLM has to call ReadPdfText / ViewPdfPage.
+        // PDFs stay marker-only → the LLM has to call ReadFile.
         $file = $this->buildFileMock(202, 'application/pdf', 4096, 'doc.pdf', '1:/uploads/doc.pdf', null);
         $resourceFactory = $this->buildResourceFactoryReturning(202, $file);
 
@@ -550,11 +550,10 @@ class AgentServiceTest extends FunctionalTestCase
         self::assertIsString($userMsg['content']);
         self::assertStringContainsString('sys_file:202', $userMsg['content']);
         self::assertStringContainsString('application/pdf', $userMsg['content']);
-        self::assertStringContainsString('ReadPdfText', $userMsg['content']);
-        self::assertStringContainsString('ViewPdfPage', $userMsg['content']);
+        self::assertStringContainsString('ReadFile', $userMsg['content']);
     }
 
-    public function testOversizedImageMarkerWarnsLlmNotToCallViewImage(): void
+    public function testOversizedImageMarkerWarnsLlmNotToCallReadFile(): void
     {
         $file = $this->buildFileMock(303, 'image/png', 6 * 1024 * 1024, 'huge.png', '1:/uploads/huge.png', null);
         $resourceFactory = $this->buildResourceFactoryReturning(303, $file);
@@ -573,7 +572,7 @@ class AgentServiceTest extends FunctionalTestCase
         self::assertStringContainsString('nicht abrufbar', $userMsg['content']);
     }
 
-    public function testUnsupportedMimeMarkerPointsLlmToGetFileInfo(): void
+    public function testUnsupportedMimeMarkerPointsLlmToReadFileMetadata(): void
     {
         $file = $this->buildFileMock(404, 'application/zip', 100, 'archive.zip', '1:/uploads/archive.zip', null);
         $resourceFactory = $this->buildResourceFactoryReturning(404, $file);
@@ -590,7 +589,7 @@ class AgentServiceTest extends FunctionalTestCase
         self::assertStringContainsString('sys_file:404', $userMsg['content']);
         self::assertStringContainsString('application/zip', $userMsg['content']);
         self::assertStringContainsString('Inhalt nicht direkt lesbar', $userMsg['content']);
-        self::assertStringContainsString('GetFileInfo', $userMsg['content']);
+        self::assertStringContainsString('ReadFile', $userMsg['content']);
         self::assertStringNotContainsString('zu groß', $userMsg['content']);
     }
 

@@ -27,8 +27,8 @@ use Mcp\Types\TextContent;
  * Bodies are converted from RTE HTML to plain text via InstructionTextFormatter
  * so the LLM never sees raw markup.
  *
- * Auto-registered into the MCP ToolRegistry via the `mcp.tool` Symfony tag
- * declared on Hn\McpServer\MCP\Tool\ToolInterface.
+ * Registered agent-only via the `agent.tool` tag in Services.yaml — this
+ * tool is NOT exposed through the external MCP server.
  */
 class GetInstructionTool extends AbstractTool
 {

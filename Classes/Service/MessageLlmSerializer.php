@@ -15,7 +15,7 @@ use TYPO3\CMS\Core\Resource\ResourceFactory;
  * Images referenced via the `attachments` sys_file-UID list are inlined
  * as OpenAI-style `image_url` blocks (base64 data URIs). Non-image
  * attachments become a marker block appended to the text content —
- * the LLM then calls the appropriate viewer tool (ReadPdfText, …).
+ * the LLM then calls the ReadFile tool.
  *
  * The `attachments` key never leaves this layer — the LLM API does not
  * know about it.

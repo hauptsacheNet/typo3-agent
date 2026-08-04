@@ -7,8 +7,29 @@ services:
   Hn\Agent\:
     resource: '../Classes/*'
 
+  # Agent tools are designed for the internal agent loop (scratch storage,
+  # multimodal tool messages, instruction records) and must NOT leak into
+  # the ToolRegistry that the mcp_server extension exposes to external MCP
+  # clients. autoconfigure would apply the `mcp.tool` tag declared on
+  # ToolInterface, so it is disabled here; the `agent.tool` tag feeds
+  # Hn\Agent\MCP\AgentToolRegistry instead, which only the agent uses.
+  Hn\Agent\MCP\Tool\:
+    resource: '../Classes/MCP/Tool/*'
+    autoconfigure: false
+    tags: ['agent.tool']
+
+  # autoconfigure is off above, so TYPO3's logger injection needs the
+  # psr.logger_aware tag spelled out for the one tool that logs.
+  Hn\Agent\MCP\Tool\ReadFileTool:
+    autoconfigure: false
+    tags: ['agent.tool', 'psr.logger_aware']
+
   Hn\Agent\Domain\AgentTaskRepository:
     public: true
 
   Hn\Agent\Service\AgentService:
+    public: true
+
+  # Public so functional tests can fetch it via GeneralUtility::makeInstance().
+  Hn\Agent\MCP\AgentToolRegistry:
     public: true

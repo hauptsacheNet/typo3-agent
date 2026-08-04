@@ -570,7 +570,9 @@ class DocumentExtractorService implements LoggerAwareInterface
             return;
         }
         if ($element instanceof WordImage) {
-            $bytes = $element->getImageStringData(false);
+            // getImageString() returns raw binary — getImageStringData(false)
+            // would return bin2hex()ed data and corrupt the image downstream.
+            $bytes = $element->getImageString();
             if (is_string($bytes) && $bytes !== '') {
                 $index++;
                 $mime = (string)$element->getImageType();
