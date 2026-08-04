@@ -17,6 +17,11 @@ $EM_CONF[$_EXTKEY] = [
             'workspaces' => '13.4.0-14.99.99',
         ],
         'conflicts' => [],
-        'suggests' => [],
+        // EXT:install provides the upgrade-wizard API (always present in
+        // classic-mode installations); a hard `depends` would force-load it
+        // in contexts that don't have it, e.g. functional tests.
+        'suggests' => [
+            'install' => '13.4.0-14.99.99',
+        ],
     ],
 ];
