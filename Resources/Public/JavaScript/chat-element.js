@@ -17,6 +17,8 @@ import DOMPurify from "dompurify";
 import AjaxRequest from "@typo3/core/ajax/ajax-request.js";
 import "./thinking-indicator.js";
 import "./chat-bubble.js";
+import "./chat-choice.js";
+import { splitChoiceSegments } from "./choice-block.js";
 import "@hn/agent/attachment-chip-elements.js";
 import "@hn/agent/message-composer.js";
 marked.setOptions({ breaks: true, gfm: true });
@@ -85,6 +87,7 @@ let ChatElement = class extends LitElement {
   render() {
     const mismatch = this.isWorkspaceMismatch();
     const showHeader = mismatch || !!this.errorMessage;
+    const lastMsg = this.messages[this.messages.length - 1];
     return html`
             ${showHeader ? html`
                 <div class="chat-header">
@@ -93,12 +96,13 @@ let ChatElement = class extends LitElement {
                 </div>` : nothing}
             <div class="chat-body">
 
-                <div class="chat-messages px-2 py-4" ${ref(this.messagesContainerRef)}>
+                <div class="chat-messages px-2 py-4" ${ref(this.messagesContainerRef)}
+                     @choice-submit=${this.onChoiceSubmit}>
                     ${this.computeTurns().map((turn, i, all) => {
       const isLast = i === all.length - 1;
       return html`
                             <div class="chat-turn d-flex flex-column gap-3 ${isLast ? "chat-turn-latest" : "pb-3"}">
-                                ${turn.map((msg, j) => this.renderMessage(msg, isLast && j === 0 && msg.role === "user"))}
+                                ${turn.map((msg, j) => this.renderMessage(msg, isLast && j === 0 && msg.role === "user", msg === lastMsg))}
                                 ${isLast && this.isStreaming ? this.renderStreamingBubble() : nothing}
                                 ${isLast && this.loading && !this.isStreaming && !this.hasRunningToolCall() ? this.renderThinkingIndicator() : nothing}
                             </div>
@@ -204,7 +208,7 @@ let ChatElement = class extends LitElement {
             </div>
         `;
   }
-  renderMessage(msg, isLatestUser = false) {
+  renderMessage(msg, isLatestUser = false, isLastMessage = false) {
     const role = msg.role || "unknown";
     if (role === "system") return nothing;
     if (role === "assistant") {
@@ -213,7 +217,7 @@ let ChatElement = class extends LitElement {
       return html`
                 <hn-agent-chat-bubble
                         author="assistant"
-                        .body=${assistantText ? html`${unsafeHTML(this.renderMarkdown(assistantText))}` : nothing}
+                        .body=${assistantText ? this.renderAssistantBody(assistantText, isLastMessage) : nothing}
                         .footer=${hasFooter ? html`
                                     ${msg.reasoning ? this.renderReasoningBlock(msg.reasoning, msg) : nothing}
                                     ${msg.tool_calls && msg.tool_calls.length > 0 ? this.renderToolCallsGroup(msg.tool_calls) : nothing}` : nothing}>
@@ -393,10 +397,40 @@ let ChatElement = class extends LitElement {
   renderMarkdown(text) {
     return DOMPurify.sanitize(marked.parse(text ?? ""));
   }
+  // -- Choice blocks ---------------------------------------------------------
+  /**
+   * Render assistant text, turning any ```agent-choices``` fenced block into
+   * an interactive <hn-agent-choice> card while keeping the surrounding
+   * markdown intact and in order. `active` = this is the last message and
+   * still awaiting the user, so the card is clickable.
+   */
+  renderAssistantBody(text, active) {
+    const segments = splitChoiceSegments(text);
+    if (segments.length === 1 && segments[0].type === "md") {
+      return html`${unsafeHTML(this.renderMarkdown(segments[0].text))}`;
+    }
+    const disabled = !active || this.loading || this.isWorkspaceMismatch();
+    return html`${segments.map((seg) => seg.type === "md" ? seg.text.trim() ? html`${unsafeHTML(this.renderMarkdown(seg.text))}` : nothing : html`
+                <hn-agent-choice
+                        .question=${seg.data.question}
+                        .options=${seg.data.options}
+                        ?multiselect=${seg.data.multiselect}
+                        ?disabled=${disabled}>
+                </hn-agent-choice>`)}`;
+  }
   // -- Event handlers --------------------------------------------------------
   onComposerSubmit(e) {
-    if (this.isWorkspaceMismatch()) return;
     const { message, attachments } = e.detail;
+    this.submitUserMessage(message, attachments);
+  }
+  // A click on an <hn-agent-choice> option is delivered as a normal follow-up
+  // message carrying the picked label(s) — the agent loop continues as if the
+  // user had typed the answer.
+  onChoiceSubmit(e) {
+    this.submitUserMessage(e.detail.message);
+  }
+  submitUserMessage(message, attachments = []) {
+    if (this.isWorkspaceMismatch() || this.loading) return;
     if (!message && attachments.length === 0) return;
     this.errorMessage = "";
     this.lastSubmission = { message, attachments };

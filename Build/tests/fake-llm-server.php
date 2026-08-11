@@ -82,6 +82,22 @@ if (str_contains($userText, 'E2E-TOOL') && !$hasToolResultAfterUser) {
     $text = null;
 } elseif (str_contains($userText, 'E2E-TOOL')) {
     $text = 'FAKE-LLM-TOOL-DONE: I inspected the page with the GetPage tool.';
+} elseif (str_contains($userText, 'E2E-CHOICE')) {
+    // Emit an agent-choices block the chat frontend renders as a clickable card.
+    // "E2E-CHOICE-MULTI" flips on multiselect. The clicked label(s) come back as
+    // a plain user message and fall through to the default echo branch below.
+    $choice = [
+        'question' => 'Which title should I use?',
+        'multiselect' => str_contains($userText, 'E2E-CHOICE-MULTI'),
+        'options' => [
+            ['label' => 'IT-News & Branchentrends', 'description' => 'best clarity + SEO'],
+            ['label' => 'Enterprise IT & Technologie', 'description' => 'B2B-focused'],
+            ['label' => 'Tech-Branche: News & Know-how', 'description' => 'content mix'],
+        ],
+    ];
+    $text = "FAKE-LLM-CHOICE: please pick below.\n\n```agent-choices\n"
+        . json_encode($choice, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+        . "\n```";
 } else {
     $text = 'FAKE-LLM-REPLY: Hello from the fake LLM. You said: ' . mb_substr($userText, 0, 200);
 }

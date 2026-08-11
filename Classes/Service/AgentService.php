@@ -272,6 +272,7 @@ class AgentService implements LoggerAwareInterface
         $systemPrompt = $config['systemPrompt'] ?? 'You are a helpful TYPO3 CMS assistant.';
         $systemPrompt .= $this->buildInstructionsSection();
         $systemPrompt .= $this->buildScratchStorageHint();
+        $systemPrompt .= $this->buildChoiceUiHint();
 
         $this->messageRepository->append($taskUid, $pid, [
             'role' => 'system',
@@ -417,6 +418,37 @@ class AgentService implements LoggerAwareInterface
             . " returned sys_file UID as `uid_local`. Skipping this step leaves a"
             . " reference to a non-public file and the image will 404 in the"
             . " frontend.";
+    }
+
+    /**
+     * Teaches the model to offer a clickable choice UI instead of asking the
+     * user to type a selection. When the model emits a fenced ```agent-choices```
+     * block, the chat frontend renders it as radio/checkbox cards; the user's
+     * click comes back as a normal follow-up message containing the chosen
+     * label(s), so no special tool or loop handling is required server-side.
+     */
+    private function buildChoiceUiHint(): string
+    {
+        return "\n\n# Asking the user to choose"
+            . "\nWhen you need the user to pick from a small set of discrete options"
+            . " (e.g. which of several proposed titles/variants to use), do NOT ask"
+            . " them to type a number or the answer in prose. Instead render a"
+            . " clickable choice UI by emitting a fenced code block whose info"
+            . " string is exactly `agent-choices` and whose body is a single JSON"
+            . " object:"
+            . "\n\n```agent-choices"
+            . "\n{\"question\": \"<short question>\", \"multiselect\": false, \"options\": ["
+            . "{\"label\": \"<option text>\", \"description\": \"<optional one-line hint>\"}]}"
+            . "\n```"
+            . "\n\nRules:"
+            . "\n- Use it only for a genuine multiple-choice decision with 2–6 discrete options."
+            . "\n- Every option needs a non-empty `label` (this exact text is sent back to you"
+            . " when clicked); `description` is optional."
+            . "\n- Set `multiselect` to true only when several options may be combined; otherwise false."
+            . "\n- Emit at most ONE such block per message and place it at the very end of the message."
+            . " Do not also repeat the same question in prose."
+            . "\n- The user's click arrives as a normal user message containing the chosen label(s)"
+            . " (comma-separated for multiselect). Continue the task from that answer.";
     }
 
     /**
