@@ -25,7 +25,11 @@ function parseChoiceJson(raw) {
   try {
     const parsed = JSON.parse(raw.trim());
     if (!parsed || !Array.isArray(parsed.options)) return null;
-    const options = parsed.options.filter((o) => !!o && typeof o.label === "string" && o.label !== "").map((o) => ({ label: o.label, ...o.description ? { description: String(o.description) } : {} }));
+    const options = parsed.options.filter((o) => !!o && typeof o.label === "string" && o.label !== "").map((o) => ({
+      label: o.label,
+      ...o.description ? { description: String(o.description) } : {},
+      ...typeof o.uid === "number" && Number.isInteger(o.uid) && o.uid > 0 ? { uid: o.uid } : {}
+    }));
     if (options.length === 0) return null;
     return {
       question: typeof parsed.question === "string" ? parsed.question : "",

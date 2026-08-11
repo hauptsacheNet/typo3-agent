@@ -10,6 +10,7 @@ var __decorateClass = (decorators, target, key, kind) => {
 };
 import { html, LitElement, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
+import { buildThumbnailUrl } from "./thumbnail.js";
 let ChatChoice = class extends LitElement {
   constructor() {
     super(...arguments);
@@ -23,6 +24,10 @@ let ChatChoice = class extends LitElement {
   // agent chat components).
   createRenderRoot() {
     return this;
+  }
+  /** Image mode: at least one option references an image by sys_file uid. */
+  get isImageMode() {
+    return this.options.some((o) => typeof o.uid === "number");
   }
   toggle(index) {
     if (this.disabled) return;
@@ -43,8 +48,9 @@ let ChatChoice = class extends LitElement {
     this.submit([...this.selected].sort((a, b) => a - b));
   }
   submit(indices) {
-    const message = indices.map((i) => this.options[i]?.label ?? "").filter((label) => label !== "").join(", ");
-    if (message === "") return;
+    const chosen = indices.map((i) => this.options[i]).filter((o) => !!o && o.label !== "");
+    if (chosen.length === 0) return;
+    const message = this.isImageMode ? "Ausgew\xE4hlte Bilder: " + chosen.map((o) => o.uid ? `${o.label} (sys_file:${o.uid})` : o.label).join(", ") : chosen.map((o) => o.label).join(", ");
     this.dispatchEvent(new CustomEvent("choice-submit", {
       detail: { message },
       bubbles: true,
@@ -52,12 +58,15 @@ let ChatChoice = class extends LitElement {
     }));
   }
   render() {
+    const imageMode = this.isImageMode;
     return html`
-            <div class="chat-choice card card--chat-choice">
+            <div class="chat-choice card card--chat-choice ${imageMode ? "chat-choice--images" : ""}">
                 ${this.question ? html`<div class="chat-choice-question card-header">${this.question}</div>` : nothing}
-                <div class="chat-choice-options list-group list-group-flush">
-                    ${this.options.map((opt, i) => this.renderOption(opt, i))}
-                </div>
+                ${imageMode ? html`<div class="chat-choice-grid">
+                        ${this.options.map((opt, i) => this.renderImageOption(opt, i))}
+                    </div>` : html`<div class="chat-choice-options list-group list-group-flush">
+                        ${this.options.map((opt, i) => this.renderOption(opt, i))}
+                    </div>`}
                 ${this.multiselect ? html`
                         <div class="chat-choice-actions card-footer">
                             <button type="button"
@@ -87,6 +96,35 @@ let ChatChoice = class extends LitElement {
                     <span class="chat-choice-label">${opt.label}</span>
                     ${opt.description ? html`<span class="chat-choice-description text-body-secondary">${opt.description}</span>` : nothing}
                 </span>
+            </button>
+        `;
+  }
+  renderImageOption(opt, index) {
+    const isSelected = this.selected.has(index);
+    const thumbUrl = buildThumbnailUrl(opt.uid);
+    const onThumbError = (e) => {
+      const img = e.target;
+      img.style.display = "none";
+      const fallback = img.parentElement?.querySelector(".chat-choice-tile-fallback");
+      if (fallback) fallback.style.display = "";
+    };
+    return html`
+            <button type="button"
+                    class="chat-choice-tile ${isSelected ? "active" : ""}"
+                    ?disabled=${this.disabled}
+                    aria-pressed=${isSelected ? "true" : "false"}
+                    title=${opt.description ?? opt.label}
+                    @click=${() => this.toggle(index)}>
+                <span class="chat-choice-tile-thumb">
+                    ${thumbUrl ? html`<img src=${thumbUrl} alt=${opt.label} @error=${onThumbError}/>` : nothing}
+                    <span class="chat-choice-tile-fallback" style=${thumbUrl ? "display:none" : ""}>
+                        <typo3-backend-icon identifier="mimetypes-media-image" size="large"></typo3-backend-icon>
+                    </span>
+                    <span class="chat-choice-tile-check">
+                        <typo3-backend-icon identifier=${isSelected ? "actions-check-circle" : "actions-circle"} size="small"></typo3-backend-icon>
+                    </span>
+                </span>
+                <span class="chat-choice-tile-label">${opt.label}</span>
             </button>
         `;
   }

@@ -448,7 +448,24 @@ class AgentService implements LoggerAwareInterface
             . "\n- Emit at most ONE such block per message and place it at the very end of the message."
             . " Do not also repeat the same question in prose."
             . "\n- The user's click arrives as a normal user message containing the chosen label(s)"
-            . " (comma-separated for multiselect). Continue the task from that answer.";
+            . " (comma-separated for multiselect). Continue the task from that answer."
+            . "\n\n## Choosing between images"
+            . "\nWhen the choice is about images you have ALREADY received in this conversation"
+            . " (e.g. images returned by ExtractImages or ReadFile, each shown to you inline with a"
+            . " `sys_file:<uid>` marker), add that image's `sys_file` UID to the option as a `uid`"
+            . " field. The frontend then renders the options as clickable thumbnails:"
+            . "\n\n```agent-choices"
+            . "\n{\"question\": \"Welche Bilder soll ich einbauen?\", \"multiselect\": true, \"options\": ["
+            . "{\"label\": \"Logo oben links\", \"uid\": 123}, {\"label\": \"Team-Foto\", \"uid\": 130}]}"
+            . "\n```"
+            . "\n- Use `uid` ONLY with the real sys_file UID of an image you actually received in this"
+            . " conversation (from its inline `sys_file:<uid>` marker) — never invent UIDs."
+            . "\n- Give each image a short, distinguishing `label`."
+            . "\n- The click comes back as a message listing the chosen labels with their UIDs, e.g."
+            . " `Ausgewählte Bilder: Logo oben links (sys_file:123)`. To place a chosen image, reference"
+            . " its sys_file UID directly as `uid_local` in a WriteTable sys_file_reference — scratch"
+            . " images are auto-promoted to public storage on write, so you do NOT need to call"
+            . " PromoteScratchFile first.";
     }
 
     /**

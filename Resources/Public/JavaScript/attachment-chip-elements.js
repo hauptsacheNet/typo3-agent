@@ -11,13 +11,14 @@ var __decorateClass = (decorators, target, key, kind) => {
 import { html, LitElement, nothing } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { buildThumbnailUrl } from "@hn/agent/thumbnail.js";
 let AttachmentChipElements = class extends LitElement {
   constructor() {
     super(...arguments);
     this.attachments = [];
     this.readonly = false;
     this.renderAttachmentChip = (att, index) => {
-      const thumbUrl = this.buildThumbnailUrl(att);
+      const thumbUrl = buildThumbnailUrl(att.uid ?? att.identifier);
       const onThumbError = (e) => {
         const img = e.target;
         img.style.display = "none";
@@ -91,17 +92,6 @@ let AttachmentChipElements = class extends LitElement {
   renderFallbackIcon(att) {
     if (att.iconHtml) return html`${unsafeHTML(att.iconHtml)}`;
     return html`<typo3-backend-icon identifier="mimetypes-other-other" size="small"></typo3-backend-icon>`;
-  }
-  buildThumbnailUrl(att) {
-    const base = window.top?.TYPO3?.settings?.Resource?.thumbnailUrl;
-    if (!base) return "";
-    const ref = att.uid ?? att.identifier;
-    if (ref === void 0 || ref === null || ref === "") return "";
-    const url = new URL(base, window.location.origin);
-    url.searchParams.set("identifier", String(ref));
-    url.searchParams.set("size", "large");
-    url.searchParams.set("keepAspectRatio", "false");
-    return url.toString();
   }
 };
 __decorateClass([

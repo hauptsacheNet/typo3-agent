@@ -7,6 +7,9 @@
 export interface ChoiceOption {
     label: string;
     description?: string;
+    // sys_file UID of an image the option represents. When present the option
+    // is rendered as a clickable thumbnail (image-choice mode).
+    uid?: number;
 }
 
 export interface ChoiceData {
@@ -62,7 +65,11 @@ export function parseChoiceJson(raw: string): ChoiceData | null {
         if (!parsed || !Array.isArray(parsed.options)) return null;
         const options: ChoiceOption[] = parsed.options
             .filter((o): o is ChoiceOption => !!o && typeof o.label === 'string' && o.label !== '')
-            .map(o => ({label: o.label, ...(o.description ? {description: String(o.description)} : {})}));
+            .map(o => ({
+                label: o.label,
+                ...(o.description ? {description: String(o.description)} : {}),
+                ...(typeof o.uid === 'number' && Number.isInteger(o.uid) && o.uid > 0 ? {uid: o.uid} : {}),
+            }));
         if (options.length === 0) return null;
         return {
             question: typeof parsed.question === 'string' ? parsed.question : '',

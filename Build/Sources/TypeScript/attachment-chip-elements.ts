@@ -2,6 +2,7 @@ import {html, LitElement, nothing, type TemplateResult} from 'lit';
 import {customElement, property} from 'lit/decorators.js';
 import {unsafeHTML} from 'lit/directives/unsafe-html.js';
 import type {Attachment} from '@hn/agent/attachment.js';
+import {buildThumbnailUrl} from '@hn/agent/thumbnail.js';
 
 @customElement('hn-agent-attachment-chips')
 export class AttachmentChipElements extends LitElement {
@@ -23,7 +24,7 @@ export class AttachmentChipElements extends LitElement {
   }
 
   private renderAttachmentChip = (att: Attachment, index: number) => {
-    const thumbUrl = this.buildThumbnailUrl(att);
+    const thumbUrl = buildThumbnailUrl(att.uid ?? att.identifier);
     const onThumbError = (e: Event): void => {
       const img = e.target as HTMLImageElement;
       img.style.display = 'none';
@@ -92,19 +93,6 @@ export class AttachmentChipElements extends LitElement {
   private renderFallbackIcon(att: Attachment): TemplateResult {
     if (att.iconHtml) return html`${unsafeHTML(att.iconHtml)}`;
     return html`<typo3-backend-icon identifier="mimetypes-other-other" size="small"></typo3-backend-icon>`;
-  }
-
-  private buildThumbnailUrl(att: Attachment): string {
-    const base = (window.top as unknown as {TYPO3?: {settings?: {Resource?: {thumbnailUrl?: string}}}})
-      ?.TYPO3?.settings?.Resource?.thumbnailUrl;
-    if (!base) return '';
-    const ref = att.uid ?? att.identifier;
-    if (ref === undefined || ref === null || ref === '') return '';
-    const url = new URL(base, window.location.origin);
-    url.searchParams.set('identifier', String(ref));
-    url.searchParams.set('size', 'large');
-    url.searchParams.set('keepAspectRatio', 'false');
-    return url.toString();
   }
 }
 

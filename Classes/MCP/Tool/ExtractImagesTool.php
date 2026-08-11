@@ -115,7 +115,7 @@ class ExtractImagesTool extends AbstractTool
         }
 
         $content = [];
-        $kept = 0;
+        $keptNames = [];
         $droppedOversize = 0;
         foreach ($images as $image) {
             $size = strlen($image['bytes']);
@@ -124,14 +124,27 @@ class ExtractImagesTool extends AbstractTool
                 continue;
             }
             $content[] = new ImageContent(base64_encode($image['bytes']), $image['mime']);
-            $kept++;
+            $keptNames[] = (string)($image['name'] ?? '');
         }
+        $kept = count($keptNames);
 
         $summaryLines = [
             sprintf('%sFile: %s', $head, $info['file']->getName()),
             sprintf('UID: sys_file:%d', $info['file']->getUid()),
             sprintf('Bilder extrahiert: %d', $kept),
         ];
+        if ($kept > 0) {
+            // Enumerate the kept images in the SAME order as the ImageContent
+            // blocks below. ToolConverterService assigns each image a scratch
+            // sys_file UID in this order and MessageLlmSerializer inlines each
+            // image with its own `sys_file:<uid>` marker in this order — so the
+            // model can map "image N" → name → the sys_file UID of the N-th
+            // attached image (useful e.g. for an agent-choices image picker).
+            $summaryLines[] = 'Reihenfolge der angehängten Bilder (dieselbe wie die sys_file-Marker unten):';
+            foreach ($keptNames as $i => $name) {
+                $summaryLines[] = sprintf('%d. %s', $i + 1, $name !== '' ? $name : 'Bild ' . ($i + 1));
+            }
+        }
         if ($droppedOversize > 0) {
             $summaryLines[] = sprintf(
                 'Nicht mitgeliefert: %d Bild(er) über %s.',

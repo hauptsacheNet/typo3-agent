@@ -82,6 +82,22 @@ if (str_contains($userText, 'E2E-TOOL') && !$hasToolResultAfterUser) {
     $text = null;
 } elseif (str_contains($userText, 'E2E-TOOL')) {
     $text = 'FAKE-LLM-TOOL-DONE: I inspected the page with the GetPage tool.';
+} elseif (str_contains($userText, 'E2E-IMAGE-CHOICE')) {
+    // Emit an agent-choices block with IMAGE options (each carrying a sys_file
+    // uid) → the frontend renders clickable thumbnails. "…-MULTI" enables
+    // multiselect. The picked labels+uids come back as a plain user message
+    // and fall through to the default echo branch below.
+    $choice = [
+        'question' => 'Welche Bilder soll ich einbauen?',
+        'multiselect' => str_contains($userText, 'E2E-IMAGE-CHOICE-MULTI'),
+        'options' => [
+            ['label' => 'Logo oben links', 'uid' => 9991],
+            ['label' => 'Team-Foto', 'uid' => 9992],
+        ],
+    ];
+    $text = "FAKE-LLM-IMAGE-CHOICE: bitte Bilder auswählen.\n\n```agent-choices\n"
+        . json_encode($choice, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+        . "\n```";
 } elseif (str_contains($userText, 'E2E-CHOICE')) {
     // Emit an agent-choices block the chat frontend renders as a clickable card.
     // "E2E-CHOICE-MULTI" flips on multiselect. The clicked label(s) come back as
