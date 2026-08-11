@@ -77,6 +77,17 @@ class MessageLlmSerializer
                         'url' => 'data:' . $mime . ';base64,' . base64_encode($file->getContents()),
                     ],
                 ];
+                // The bytes are already delivered inline above. We still emit a
+                // marker so the LLM knows the file's sys_file UID (and can pass
+                // it to file tools / cite it) — flagged `inline` so the marker
+                // note tells it no viewer tool is needed.
+                $markerRefs[] = [
+                    'uid' => $file->getUid(),
+                    'identifier' => $file->getCombinedIdentifier(),
+                    'name' => $file->getName(),
+                    'mime_type' => $mime !== '' ? $mime : 'application/octet-stream',
+                    'inline' => true,
+                ];
                 continue;
             }
 

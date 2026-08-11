@@ -350,6 +350,9 @@ class AttachmentService implements LoggerAwareInterface
      */
     private function noteFor(array $ref): ?string
     {
+        if (!empty($ref['inline'])) {
+            return 'Bild bereits inline eingebettet — kein Lese-Tool nötig';
+        }
         $info = $this->classify($ref);
         return match ($info['kind']) {
             'unresolvable' => 'Datei nicht auflösbar',

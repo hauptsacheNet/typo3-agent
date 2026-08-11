@@ -531,6 +531,11 @@ class AgentServiceTest extends FunctionalTestCase
         self::assertStringContainsString('Was siehst du?', $userMsg['content'][0]['text']);
         self::assertSame('image_url', $userMsg['content'][1]['type']);
         self::assertStringStartsWith('data:image/png;base64,', $userMsg['content'][1]['image_url']['url']);
+
+        // Even for an inlined image the text block carries a sys_file marker so
+        // the LLM knows the UID; the note tells it no viewer tool is needed.
+        self::assertStringContainsString('sys_file:101', $userMsg['content'][0]['text']);
+        self::assertStringContainsString('bereits inline eingebettet', $userMsg['content'][0]['text']);
     }
 
     public function testPdfAttachmentMarkerPointsLlmToReadFile(): void
