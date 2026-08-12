@@ -7,15 +7,17 @@ import {buildThumbnailUrl} from './thumbnail.js';
  * Renders an `agent-choices` block emitted by the LLM as a clickable choice
  * card. Two modes:
  *  - text options (label + optional description) → radio/checkbox rows;
- *  - image options (each carrying a sys_file `uid`) → a grid of clickable
- *    thumbnails, served via TYPO3 Core's backend thumbnail endpoint.
+ *  - image options (carrying a sys_file `uid` and/or a direct image `url`) →
+ *    a grid of clickable thumbnails. `uid` renders via TYPO3 Core's backend
+ *    thumbnail endpoint, `url` is used as the <img> source directly.
  *
  * Single-select sends the pick immediately; multiselect toggles options and
  * sends via the "Auswahl senden" button. The pick is delivered as a
  * `choice-submit` CustomEvent (bubbles/composed); ChatElement routes it into
  * the normal follow-up message send path, so the agent loop continues as with
- * any typed reply. Image picks carry the chosen `sys_file:<uid>` refs in the
- * message text so the model can place them (auto-promoted on write).
+ * any typed reply. Image picks carry the chosen image ref (`sys_file:<uid>`,
+ * auto-promoted on write, or the raw URL) in the message text so the model
+ * can place them.
  */
 @customElement('hn-agent-choice')
 export class ChatChoice extends LitElement {
@@ -35,9 +37,9 @@ export class ChatChoice extends LitElement {
 
     @state() private selected = new Set<number>();
 
-    /** Image mode: at least one option references an image by sys_file uid. */
+    /** Image mode: at least one option references an image (sys_file uid or direct URL). */
     private get isImageMode(): boolean {
-        return this.options.some(o => typeof o.uid === 'number');
+        return this.options.some(o => typeof o.uid === 'number' || typeof o.url === 'string');
     }
 
     private toggle(index: number): void {
@@ -66,11 +68,12 @@ export class ChatChoice extends LitElement {
             .map(i => this.options[i])
             .filter((o): o is ChoiceOption => !!o && o.label !== '');
         if (chosen.length === 0) return;
-        // Image picks send the sys_file uid alongside the label so the model
-        // can act on the exact file; text picks send just the label(s).
+        // Image picks send the image ref (sys_file uid or URL) alongside the
+        // label so the model can act on the exact image; text picks send just
+        // the label(s).
         const message = this.isImageMode
             ? 'Ausgewählte Bilder: ' + chosen
-                .map(o => o.uid ? `${o.label} (sys_file:${o.uid})` : o.label)
+                .map(o => o.uid ? `${o.label} (sys_file:${o.uid})` : (o.url ? `${o.label} (${o.url})` : o.label))
                 .join(', ')
             : chosen.map(o => o.label).join(', ');
         this.dispatchEvent(new CustomEvent('choice-submit', {
@@ -136,7 +139,7 @@ export class ChatChoice extends LitElement {
 
     private renderImageOption(opt: ChoiceOption, index: number): TemplateResult {
         const isSelected = this.selected.has(index);
-        const thumbUrl = buildThumbnailUrl(opt.uid);
+        const thumbUrl = opt.url ?? buildThumbnailUrl(opt.uid);
         // If the thumbnail fails to load (e.g. non-image or processing error),
         // hide the <img> and reveal the icon fallback so the tile stays usable.
         const onThumbError = (e: Event): void => {

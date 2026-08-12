@@ -25,9 +25,9 @@ let ChatChoice = class extends LitElement {
   createRenderRoot() {
     return this;
   }
-  /** Image mode: at least one option references an image by sys_file uid. */
+  /** Image mode: at least one option references an image (sys_file uid or direct URL). */
   get isImageMode() {
-    return this.options.some((o) => typeof o.uid === "number");
+    return this.options.some((o) => typeof o.uid === "number" || typeof o.url === "string");
   }
   toggle(index) {
     if (this.disabled) return;
@@ -50,7 +50,7 @@ let ChatChoice = class extends LitElement {
   submit(indices) {
     const chosen = indices.map((i) => this.options[i]).filter((o) => !!o && o.label !== "");
     if (chosen.length === 0) return;
-    const message = this.isImageMode ? "Ausgew\xE4hlte Bilder: " + chosen.map((o) => o.uid ? `${o.label} (sys_file:${o.uid})` : o.label).join(", ") : chosen.map((o) => o.label).join(", ");
+    const message = this.isImageMode ? "Ausgew\xE4hlte Bilder: " + chosen.map((o) => o.uid ? `${o.label} (sys_file:${o.uid})` : o.url ? `${o.label} (${o.url})` : o.label).join(", ") : chosen.map((o) => o.label).join(", ");
     this.dispatchEvent(new CustomEvent("choice-submit", {
       detail: { message },
       bubbles: true,
@@ -101,7 +101,7 @@ let ChatChoice = class extends LitElement {
   }
   renderImageOption(opt, index) {
     const isSelected = this.selected.has(index);
-    const thumbUrl = buildThumbnailUrl(opt.uid);
+    const thumbUrl = opt.url ?? buildThumbnailUrl(opt.uid);
     const onThumbError = (e) => {
       const img = e.target;
       img.style.display = "none";

@@ -82,6 +82,23 @@ if (str_contains($userText, 'E2E-TOOL') && !$hasToolResultAfterUser) {
     $text = null;
 } elseif (str_contains($userText, 'E2E-TOOL')) {
     $text = 'FAKE-LLM-TOOL-DONE: I inspected the page with the GetPage tool.';
+} elseif (str_contains($userText, 'E2E-IMAGE-CHOICE-URL')) {
+    // Emit an agent-choices block whose image options carry direct `url` refs
+    // (mixed with one sys_file uid) → exercises the URL pass-through in the
+    // thumbnail grid. Must be checked before the plain E2E-IMAGE-CHOICE branch
+    // since the trigger string contains it.
+    $choice = [
+        'question' => 'Welches Logo soll ich verwenden?',
+        'multiselect' => str_contains($userText, 'E2E-IMAGE-CHOICE-URL-MULTI'),
+        'options' => [
+            ['label' => 'Logo blau', 'url' => '/fileadmin/e2e/logo-blau.png'],
+            ['label' => 'Logo rot', 'url' => 'https://example.com/logo-rot.png'],
+            ['label' => 'Team-Foto', 'uid' => 9992],
+        ],
+    ];
+    $text = "FAKE-LLM-IMAGE-CHOICE-URL: bitte Logo auswählen.\n\n```agent-choices\n"
+        . json_encode($choice, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+        . "\n```";
 } elseif (str_contains($userText, 'E2E-IMAGE-CHOICE')) {
     // Emit an agent-choices block with IMAGE options (each carrying a sys_file
     // uid) → the frontend renders clickable thumbnails. "…-MULTI" enables

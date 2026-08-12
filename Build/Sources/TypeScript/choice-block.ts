@@ -10,6 +10,15 @@ export interface ChoiceOption {
     // sys_file UID of an image the option represents. When present the option
     // is rendered as a clickable thumbnail (image-choice mode).
     uid?: number;
+    // Direct image URL (http(s) or root-relative) as an alternative to `uid`
+    // for images that are not sys_file records, e.g. external web images.
+    url?: string;
+}
+
+// Only http(s) and root-relative URLs may end up in an <img src>; everything
+// else (javascript:, data:, protocol-relative //…) is dropped by the parser.
+export function isSafeImageUrl(value: unknown): value is string {
+    return typeof value === 'string' && /^(https?:\/\/|\/(?!\/))/.test(value);
 }
 
 export interface ChoiceData {
@@ -69,6 +78,7 @@ export function parseChoiceJson(raw: string): ChoiceData | null {
                 label: o.label,
                 ...(o.description ? {description: String(o.description)} : {}),
                 ...(typeof o.uid === 'number' && Number.isInteger(o.uid) && o.uid > 0 ? {uid: o.uid} : {}),
+                ...(isSafeImageUrl(o.url) ? {url: o.url} : {}),
             }));
         if (options.length === 0) return null;
         return {

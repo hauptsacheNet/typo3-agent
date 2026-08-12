@@ -1,3 +1,6 @@
+function isSafeImageUrl(value) {
+  return typeof value === "string" && /^(https?:\/\/|\/(?!\/))/.test(value);
+}
 const CHOICE_BLOCK_RE = /```agent-choices[^\n]*\n([\s\S]*?)```/g;
 function splitChoiceSegments(text) {
   const segments = [];
@@ -28,7 +31,8 @@ function parseChoiceJson(raw) {
     const options = parsed.options.filter((o) => !!o && typeof o.label === "string" && o.label !== "").map((o) => ({
       label: o.label,
       ...o.description ? { description: String(o.description) } : {},
-      ...typeof o.uid === "number" && Number.isInteger(o.uid) && o.uid > 0 ? { uid: o.uid } : {}
+      ...typeof o.uid === "number" && Number.isInteger(o.uid) && o.uid > 0 ? { uid: o.uid } : {},
+      ...isSafeImageUrl(o.url) ? { url: o.url } : {}
     }));
     if (options.length === 0) return null;
     return {
@@ -41,6 +45,7 @@ function parseChoiceJson(raw) {
   }
 }
 export {
+  isSafeImageUrl,
   parseChoiceJson,
   splitChoiceSegments
 };
