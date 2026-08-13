@@ -1,0 +1,7 @@
+{
+  "version": 3,
+  "sources": ["../../../Build/Sources/TypeScript/image-lightbox.ts"],
+  "sourcesContent": ["import {html} from 'lit';\nimport Modal from '@typo3/backend/modal.js';\n\n/**\n * Opens a chat image in a TYPO3 backend modal as a large preview (\"lightbox\").\n * Closes via the modal's own X button, Escape or backdrop click.\n *\n * Shared by the attachment chips, the image-choice tiles and the delegated\n * image click handler in ChatElement (tool-result + markdown images).\n *\n * The modal renders in the top frame, where agent-chat.css is not loaded \u2014\n * the sizing therefore has to live inline on the <img>.\n */\nexport function openImageLightbox(src: string, alt = ''): void {\n    if (!src) return;\n    Modal.advanced({\n        type: Modal.types.default,\n        title: alt || 'Bildvorschau',\n        content: html`<img class=\"hn-agent-lightbox-img\" src=${src} alt=${alt}\n                          style=\"display:block;margin:0 auto;max-width:100%;max-height:calc(100vh - 14rem);object-fit:contain\"/>`,\n        size: Modal.sizes.large,\n    });\n}\n"],
+  "mappings": "AAAA,SAAQ,YAAW;AACnB,OAAO,WAAW;AAYX,SAAS,kBAAkB,KAAa,MAAM,IAAU;AAC3D,MAAI,CAAC,IAAK;AACV,QAAM,SAAS;AAAA,IACX,MAAM,MAAM,MAAM;AAAA,IAClB,OAAO,OAAO;AAAA,IACd,SAAS,8CAA8C,GAAG,QAAQ,GAAG;AAAA;AAAA,IAErE,MAAM,MAAM,MAAM;AAAA,EACtB,CAAC;AACL;",
+  "names": []
+}

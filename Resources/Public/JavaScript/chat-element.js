@@ -19,6 +19,7 @@ import "./thinking-indicator.js";
 import "./chat-bubble.js";
 import "./chat-choice.js";
 import { splitChoiceSegments } from "./choice-block.js";
+import { openImageLightbox } from "./image-lightbox.js";
 import "@hn/agent/attachment-chip-elements.js";
 import "@hn/agent/message-composer.js";
 marked.setOptions({ breaks: true, gfm: true });
@@ -58,6 +59,17 @@ let ChatElement = class extends LitElement {
       e.preventDefault();
       this.onStop();
     };
+    // Delegated lightbox for images that render as plain <img> in the light
+    // DOM (assistant markdown via unsafeHTML, tool-result media). Attachment
+    // chips and choice tiles bring their own zoom handling; images inside
+    // links, buttons or icons keep their native behaviour.
+    this.onChatImageClick = (e) => {
+      const img = e.target;
+      if (!(img instanceof HTMLImageElement) || !img.src) return;
+      if (img.closest("hn-agent-attachment-chips, hn-agent-choice, typo3-backend-icon, a, button")) return;
+      e.preventDefault();
+      openImageLightbox(img.src, img.alt);
+    };
     this.toolCallsGroupIds = /* @__PURE__ */ new WeakMap();
     this.reasoningGroupIds = /* @__PURE__ */ new WeakMap();
   }
@@ -70,6 +82,7 @@ let ChatElement = class extends LitElement {
     this.messages = this.mergeToolResults(this.initialMessages);
     this.changes = [...this.initialChanges];
     document.addEventListener("keydown", this.onKeydownGlobal);
+    this.addEventListener("click", this.onChatImageClick);
     if ((this.autoStart === "1" || this.autoStart === "true") && this.streamUri && !this.isWorkspaceMismatch()) {
       this.doAutoStart();
     }
@@ -78,6 +91,7 @@ let ChatElement = class extends LitElement {
   disconnectedCallback() {
     super.disconnectedCallback();
     document.removeEventListener("keydown", this.onKeydownGlobal);
+    this.removeEventListener("click", this.onChatImageClick);
   }
   isWorkspaceMismatch() {
     if (!this.taskWorkspaceId) return false;

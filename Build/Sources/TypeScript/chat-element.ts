@@ -10,6 +10,7 @@ import './thinking-indicator.js';
 import './chat-bubble.js';
 import './chat-choice.js';
 import {splitChoiceSegments} from './choice-block.js';
+import {openImageLightbox} from './image-lightbox.js';
 import '@hn/agent/attachment-chip-elements.js';
 import '@hn/agent/message-composer.js';
 import type {MessageComposerElement} from '@hn/agent/message-composer.js';
@@ -135,6 +136,18 @@ export class ChatElement extends LitElement {
         this.onStop();
     };
 
+    // Delegated lightbox for images that render as plain <img> in the light
+    // DOM (assistant markdown via unsafeHTML, tool-result media). Attachment
+    // chips and choice tiles bring their own zoom handling; images inside
+    // links, buttons or icons keep their native behaviour.
+    private onChatImageClick = (e: Event): void => {
+        const img = e.target;
+        if (!(img instanceof HTMLImageElement) || !img.src) return;
+        if (img.closest('hn-agent-attachment-chips, hn-agent-choice, typo3-backend-icon, a, button')) return;
+        e.preventDefault();
+        openImageLightbox(img.src, img.alt);
+    };
+
     // -- Lifecycle -------------------------------------------------------------
 
     override firstUpdated(): void {
@@ -142,6 +155,7 @@ export class ChatElement extends LitElement {
         this.changes = [...this.initialChanges];
 
         document.addEventListener('keydown', this.onKeydownGlobal);
+        this.addEventListener('click', this.onChatImageClick);
 
         if ((this.autoStart === '1' || this.autoStart === 'true') && this.streamUri && !this.isWorkspaceMismatch()) {
             this.doAutoStart();
@@ -153,6 +167,7 @@ export class ChatElement extends LitElement {
     override disconnectedCallback(): void {
         super.disconnectedCallback();
         document.removeEventListener('keydown', this.onKeydownGlobal);
+        this.removeEventListener('click', this.onChatImageClick);
     }
 
     private isWorkspaceMismatch(): boolean {

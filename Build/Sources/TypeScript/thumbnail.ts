@@ -19,3 +19,21 @@ export function buildThumbnailUrl(ref: number | string | undefined | null, size 
     url.searchParams.set('keepAspectRatio', 'false');
     return url.toString();
 }
+
+/**
+ * Build a URL to the extension's attachment-preview endpoint
+ * (typo3_agent_tasks_attachment_preview) for a large rendition of a FAL image,
+ * used by the chat lightbox. Core's thumbnail endpoint caps at 96px, so the
+ * extension ships its own endpoint for big previews. Returns '' when the
+ * route or the reference is unavailable.
+ */
+export function buildPreviewUrl(ref: number | string | undefined | null): string {
+    type AjaxSettings = {TYPO3?: {settings?: {ajaxUrls?: Record<string, string>}}};
+    const base = (window as unknown as AjaxSettings).TYPO3?.settings?.ajaxUrls?.typo3_agent_tasks_attachment_preview
+        ?? (window.top as unknown as AjaxSettings)?.TYPO3?.settings?.ajaxUrls?.typo3_agent_tasks_attachment_preview;
+    if (!base) return '';
+    if (ref === undefined || ref === null || ref === '') return '';
+    const url = new URL(base, window.location.origin);
+    url.searchParams.set('identifier', String(ref));
+    return url.toString();
+}

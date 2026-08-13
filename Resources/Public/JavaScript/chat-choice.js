@@ -10,7 +10,8 @@ var __decorateClass = (decorators, target, key, kind) => {
 };
 import { html, LitElement, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import { buildThumbnailUrl } from "./thumbnail.js";
+import { buildPreviewUrl, buildThumbnailUrl } from "./thumbnail.js";
+import { openImageLightbox } from "./image-lightbox.js";
 let ChatChoice = class extends LitElement {
   constructor() {
     super(...arguments);
@@ -102,30 +103,45 @@ let ChatChoice = class extends LitElement {
   renderImageOption(opt, index) {
     const isSelected = this.selected.has(index);
     const thumbUrl = opt.url ?? buildThumbnailUrl(opt.uid);
+    const zoomUrl = opt.url ?? buildPreviewUrl(opt.uid);
     const onThumbError = (e) => {
       const img = e.target;
       img.style.display = "none";
       const fallback = img.parentElement?.querySelector(".chat-choice-tile-fallback");
       if (fallback) fallback.style.display = "";
     };
+    const onZoomClick = (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      openImageLightbox(zoomUrl, opt.label);
+    };
     return html`
-            <button type="button"
-                    class="chat-choice-tile ${isSelected ? "active" : ""}"
-                    ?disabled=${this.disabled}
-                    aria-pressed=${isSelected ? "true" : "false"}
-                    title=${opt.description ?? opt.label}
-                    @click=${() => this.toggle(index)}>
-                <span class="chat-choice-tile-thumb">
-                    ${thumbUrl ? html`<img src=${thumbUrl} alt=${opt.label} @error=${onThumbError}/>` : nothing}
-                    <span class="chat-choice-tile-fallback" style=${thumbUrl ? "display:none" : ""}>
-                        <typo3-backend-icon identifier="mimetypes-media-image" size="large"></typo3-backend-icon>
+            <span class="chat-choice-tile-wrap">
+                <button type="button"
+                        class="chat-choice-tile ${isSelected ? "active" : ""}"
+                        ?disabled=${this.disabled}
+                        aria-pressed=${isSelected ? "true" : "false"}
+                        title=${opt.description ?? opt.label}
+                        @click=${() => this.toggle(index)}>
+                    <span class="chat-choice-tile-thumb">
+                        ${thumbUrl ? html`<img src=${thumbUrl} alt=${opt.label} @error=${onThumbError}/>` : nothing}
+                        <span class="chat-choice-tile-fallback" style=${thumbUrl ? "display:none" : ""}>
+                            <typo3-backend-icon identifier="mimetypes-media-image" size="large"></typo3-backend-icon>
+                        </span>
+                        <span class="chat-choice-tile-check">
+                            <typo3-backend-icon identifier=${isSelected ? "actions-check-circle" : "actions-circle"} size="small"></typo3-backend-icon>
+                        </span>
                     </span>
-                    <span class="chat-choice-tile-check">
-                        <typo3-backend-icon identifier=${isSelected ? "actions-check-circle" : "actions-circle"} size="small"></typo3-backend-icon>
-                    </span>
-                </span>
-                <span class="chat-choice-tile-label">${opt.label}</span>
-            </button>
+                    <span class="chat-choice-tile-label">${opt.label}</span>
+                </button>
+                ${thumbUrl && zoomUrl ? html`
+                    <button type="button"
+                            class="chat-choice-tile-zoom"
+                            title="Großansicht"
+                            @click=${onZoomClick}>
+                        <typo3-backend-icon identifier="actions-search" size="small"></typo3-backend-icon>
+                    </button>` : nothing}
+            </span>
         `;
   }
 };

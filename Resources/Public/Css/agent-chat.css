@@ -355,3 +355,41 @@ hn-agent-choice .chat-choice-tile-label {
         clip-path: inset(-5px 0px -5px -5px);
     }
 }
+
+/* Image lightbox: thumbnails open a large preview in a TYPO3 modal */
+hn-agent-attachment-chips .panel-thumbnail-zoomable img {
+    cursor: zoom-in;
+}
+
+/* Plain <img> in bubbles (assistant markdown, tool-result media) — the
+   delegated handler in ChatElement skips images inside these containers,
+   so the cursor must not suggest zoom there either. */
+hn-agent-chat-bubble img:not(:is(hn-agent-attachment-chips, hn-agent-choice, typo3-backend-icon, a, button) img) {
+    cursor: zoom-in;
+}
+
+hn-agent-choice .chat-choice-tile-wrap {
+    position: relative;
+    display: block;
+}
+
+hn-agent-choice .chat-choice-tile-wrap .chat-choice-tile {
+    width: 100%;
+    height: 100%;
+}
+
+hn-agent-choice .chat-choice-tile-zoom {
+    position: absolute;
+    top: .55rem;
+    left: .55rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: .15rem;
+    line-height: 1;
+    color: inherit;
+    cursor: zoom-in;
+    background: var(--typo3-card-bg, #fff);
+    border: 1px solid var(--typo3-card-border-color, rgba(0, 0, 0, 0.1));
+    border-radius: 50%;
+}

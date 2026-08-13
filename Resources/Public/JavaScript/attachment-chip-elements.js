@@ -11,7 +11,8 @@ var __decorateClass = (decorators, target, key, kind) => {
 import { html, LitElement, nothing } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import { buildThumbnailUrl } from "@hn/agent/thumbnail.js";
+import { buildPreviewUrl, buildThumbnailUrl } from "@hn/agent/thumbnail.js";
+import { openImageLightbox } from "@hn/agent/image-lightbox.js";
 let AttachmentChipElements = class extends LitElement {
   constructor() {
     super(...arguments);
@@ -19,6 +20,10 @@ let AttachmentChipElements = class extends LitElement {
     this.readonly = false;
     this.renderAttachmentChip = (att, index) => {
       const thumbUrl = buildThumbnailUrl(att.uid ?? att.identifier);
+      const previewUrl = buildPreviewUrl(att.uid ?? att.identifier);
+      const onThumbClick = () => {
+        if (previewUrl) openImageLightbox(previewUrl, att.name);
+      };
       const onThumbError = (e) => {
         const img = e.target;
         img.style.display = "none";
@@ -36,8 +41,8 @@ let AttachmentChipElements = class extends LitElement {
           <div class="panel-heading-row">
 
             ${thumbUrl ? html`
-              <div class="panel-thumbnail">
-                <img src=${thumbUrl} alt="" @error=${onThumbError}/>
+              <div class="panel-thumbnail ${previewUrl ? "panel-thumbnail-zoomable" : ""}">
+                <img src=${thumbUrl} alt="" @error=${onThumbError} @click=${onThumbClick}/>
               </div>
               <div class="panel-icon" style="display:none">
                 ${this.renderFallbackIcon(att)}
