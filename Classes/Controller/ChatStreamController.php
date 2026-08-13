@@ -37,6 +37,20 @@ class ChatStreamController
         private readonly TaskStateMachine    $stateMachine,
     ) {}
 
+    /**
+     * Route web_typo3_agent_tasks.streamMessage — POSTed via fetch() by the
+     * chat web component (Build/Sources/TypeScript/chat-element.ts), which
+     * gets the URL as its stream-uri attribute from {@see ChatController}.
+     *
+     * Runs the agent loop for one turn and streams progress as SSE events:
+     * either processes a freshly created (Pending) task whose messages are
+     * already persisted, or appends the submitted message/attachments to an
+     * existing conversation. Emits incremental events via AgentService,
+     * terminated by a final `done` (full hydrated message list) or `error`
+     * event. Errors (unknown/foreign task, empty input) are also delivered
+     * as SSE `error` events, not HTTP error codes, so the client only needs
+     * one code path.
+     */
     public function streamMessageAction(ServerRequestInterface $request): ResponseInterface
     {
         $body = (array)$request->getParsedBody();
@@ -96,10 +110,15 @@ class ChatStreamController
     }
 
     /**
-     * Atomically transition an in-progress chat task to Cancelled. The
+     * Route web_typo3_agent_tasks.cancelMessage — POSTed fire-and-forget
+     * by the chat web component when the user hits the Stop button (with
+     * keepalive, so it completes even if the tab closes right after); the
+     * URL is passed as its cancel-uri attribute by {@see ChatController}.
+     *
+     * Atomically transitions an in-progress chat task to Cancelled. The
      * agent loop sees the new status at its next iteration and exits
      * without overwriting it. No-op (still 200) when the task is no
-     * longer running — fire-and-forget from the client.
+     * longer running.
      */
     public function cancelMessageAction(ServerRequestInterface $request): ResponseInterface
     {

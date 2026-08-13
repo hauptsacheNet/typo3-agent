@@ -60,6 +60,17 @@ class ChatController
     {
     }
 
+    /**
+     * Route web_typo3_agent_tasks — the module entry point, opened via the
+     * "Agent Tasks" entry in the Web module menu (with the page tree
+     * providing ?id=<pageId>).
+     *
+     * Renders the chat list: tasks on the current page and its subpages,
+     * the prompt box for starting a new chat (posting to {@see newAction}),
+     * and the active instruction records. Admins see all users' tasks with
+     * a creator column and can narrow via ?filterUser=<uid>; non-admins
+     * only ever see their own.
+     */
     public function indexAction(ServerRequestInterface $request): ResponseInterface
     {
         $pageId = $this->getPageId($request);
@@ -192,6 +203,20 @@ class ChatController
         ])->renderResponse('Chat/Index');
     }
 
+    /**
+     * Route web_typo3_agent_tasks.show — the single chat view. Linked from
+     * the task tables in {@see indexAction} and the redirect target of
+     * {@see newAction}; without a valid, accessible ?task=<uid> it
+     * redirects back to the list.
+     *
+     * Renders the conversation page hosting the chat web component: the
+     * persisted messages, the task's context record (shown in the doc
+     * header), the workspace change list, and the streamUri/cancelUri the
+     * component needs to talk to {@see ChatStreamController}. For a fresh
+     * (Pending) task the message list is left empty — the component
+     * auto-starts the stream and receives the initial conversation as SSE
+     * events instead.
+     */
     public function showAction(ServerRequestInterface $request): ResponseInterface
     {
         $pageId = $this->getPageId($request);
@@ -284,6 +309,19 @@ class ChatController
         ])->renderResponse('Chat/Show');
     }
 
+    /**
+     * Route web_typo3_agent_tasks.new — POST target of the
+     * <hn-agent-new-task> prompt box. That form is rendered on the module
+     * index ({@see indexAction}) and, via {@see PromptRenderer}, injected
+     * into other backend modules (page module, record list, FormEngine),
+     * which also pass the context record (table/uid) and a return_url.
+     *
+     * Creates the tx_agent_task record (Pending, bound to the user's
+     * current non-live workspace) and persists the initial conversation
+     * (system prompt, context, user message with attachments), then
+     * redirects to {@see showAction} — where the chat component auto-starts
+     * streaming. The agent itself is NOT run here.
+     */
     public function newAction(ServerRequestInterface $request): ResponseInterface
     {
         $pageId = $this->getPageId($request);
