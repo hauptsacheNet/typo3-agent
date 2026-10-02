@@ -26,12 +26,14 @@ class LlmService implements LoggerAwareInterface
      *
      * @param array $messages The messages array (OpenAI format)
      * @param array $tools    The tools array (OpenAI function calling format)
+     * @param string|null $sessionId Optional conversation identifier, sent as `session_id` so the
+     *                               provider (OpenRouter) can group the requests of one conversation
      * @return array The assistant message from choices[0].message
      * @throws \RuntimeException on HTTP or API errors
      */
-    public function chatCompletion(array $messages, array $tools = [], ?string $modelOverride = null): array
+    public function chatCompletion(array $messages, array $tools = [], ?string $modelOverride = null, ?string $sessionId = null): array
     {
-        $body = $this->buildRequestBody($messages, $tools, false, $modelOverride);
+        $body = $this->buildRequestBody($messages, $tools, false, $modelOverride, $sessionId);
         $response = $this->executeRequest($body, false);
 
         $responseBody = (string)$response->getBody();
@@ -58,6 +60,7 @@ class LlmService implements LoggerAwareInterface
      * $deltaType is one of 'content', 'tool_call', 'finish'.
      *
      * @param callable(string, array): void|null $onDelta
+     * @param string|null $sessionId See chatCompletion()
      * @return array Aggregated assistant message (role + content + tool_calls)
      * @throws \RuntimeException on HTTP or API errors
      */
@@ -65,8 +68,9 @@ class LlmService implements LoggerAwareInterface
         array $messages,
         array $tools = [],
         ?callable $onDelta = null,
+        ?string $sessionId = null,
     ): array {
-        $body = $this->buildRequestBody($messages, $tools, true);
+        $body = $this->buildRequestBody($messages, $tools, true, null, $sessionId);
         $response = $this->executeRequest($body, true);
 
         return $this->parseSseStream(
@@ -84,7 +88,7 @@ class LlmService implements LoggerAwareInterface
      *
      * @return array<string, mixed>
      */
-    protected function buildRequestBody(array $messages, array $tools, bool $stream, ?string $modelOverride = null): array
+    protected function buildRequestBody(array $messages, array $tools, bool $stream, ?string $modelOverride = null, ?string $sessionId = null): array
     {
         $config = $this->getConfig();
         $body = [
@@ -96,6 +100,10 @@ class LlmService implements LoggerAwareInterface
         }
         if (!empty($tools)) {
             $body['tools'] = $tools;
+        }
+        if ($sessionId !== null && $sessionId !== '') {
+            // OpenRouter session_id limit is 256 characters
+            $body['session_id'] = mb_substr($sessionId, 0, 256);
         }
         $this->applyServerTools($body, $config);
         $this->applyReasoning($body, $config);

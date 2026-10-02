@@ -172,6 +172,7 @@ class AgentService implements LoggerAwareInterface
                     $llmPayload,
                     $tools,
                     $onDelta,
+                    'task-' . $taskUid,
                 );
 
                 $this->messageRepository->append($taskUid, $pid, $assistantMessage);
