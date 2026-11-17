@@ -90,4 +90,35 @@ class LlmServiceRequestBodyTest extends FunctionalTestCase
 
         self::assertArrayNotHasKey('tools', $body);
     }
+
+    public function testConfiguredModelIsPassedThroughVerbatim(): void
+    {
+        $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['agent']['apiKey'] = 'test-key';
+        // Free-text field: any provider model ID must be accepted, not only a curated list.
+        $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['agent']['model'] = 'mistralai/mistral-large-4-0';
+
+        $body = $this->buildService()->build([['role' => 'user', 'content' => 'Hi']], [], false);
+
+        self::assertSame('mistralai/mistral-large-4-0', $body['model']);
+    }
+
+    public function testEmptyModelFallsBackToDefault(): void
+    {
+        $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['agent']['apiKey'] = 'test-key';
+        $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['agent']['model'] = '  ';
+
+        $body = $this->buildService()->build([['role' => 'user', 'content' => 'Hi']], [], false);
+
+        self::assertSame(LlmService::DEFAULT_MODEL, $body['model']);
+    }
+
+    public function testDefaultModelMatchesExtConfTemplate(): void
+    {
+        $template = (string)file_get_contents(dirname(__DIR__, 3) . '/ext_conf_template.txt');
+
+        self::assertMatchesRegularExpression(
+            '/^model = ' . preg_quote(LlmService::DEFAULT_MODEL, '/') . '$/m',
+            $template,
+        );
+    }
 }
