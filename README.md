@@ -2,7 +2,7 @@
 
 An AI assistant for TYPO3 editors. Editors describe a task in plain language — *"Shorten the teaser texts on this page"*, *"Create a text element from the attached PDF"*, *"Check all subpages for missing meta descriptions"* — and the agent reads and edits pages, content elements and records on their behalf.
 
-- **Changes go into a workspace:** chats can only be started inside a workspace, not in Live. Every change is reviewed and published through the regular Workspaces module.
+- **Changes go into a workspace:** the agent never writes into Live. Every change is reviewed and published through the regular Workspaces module.
 - **Respects permissions:** the agent acts with the backend permissions of the user who started the chat.
 - **Provider-neutral:** talks to any OpenAI-compatible chat API. [OpenRouter](https://openrouter.ai) is the default and gives access to models from Anthropic, OpenAI, Google, Mistral and others.
 - **Understands files:** images, PDFs and Office documents can be attached to a chat.
@@ -212,9 +212,9 @@ For scheduled or automated runs — batch seeding, cron-driven workflows, extern
 5. Save the record (status defaults to "Pending")
 
 The task's `pid` (page ID) provides context — the agent automatically loads information about that page.
-The task's `cruser_id` determines which backend user's permissions the agent uses for tool execution.
+The backend user who creates the record becomes its owner (`cruser_id`), and the workspace they are in is stored as `workspace_id`. The agent acts with the owner's permissions in that workspace. If no workspace is stored, it uses the first workspace the owner can write to (or creates one if the owner may create workspaces).
 
-**Note:** TYPO3 13.4 no longer auto-populates `cruser_id` via DataHandler. When `cruser_id` is 0 (default), the agent falls back to an **admin context in the Live workspace** — its changes are public immediately. To run the agent as a specific user, set `cruser_id` manually on the task record; the task then runs with that user's permissions and workspace access.
+The agent never runs without an owner and never writes into Live: a task whose `cruser_id` is 0 or points to a missing user, or whose owner has no workspace, fails with an explanatory result instead. Tasks inserted directly into the database (bypassing the List module) must set `cruser_id` themselves.
 
 
 ### Running the Agent from the CLI
@@ -275,6 +275,7 @@ Agent tasks are workspace-aware: each task record stores a `workspace_id` (set a
 | A callout asks you to switch to a workspace before starting a task | You are in the Live workspace. Switch to a workspace in the top toolbar. |
 | Provider error mentioning the model or tool use | The model ID is misspelled or the model does not support tool calling. Check the ID on [openrouter.ai/models](https://openrouter.ai/models). |
 | Attachments cannot be uploaded | The editor's group lacks access to the File list / Media module. |
+| A task fails with `has no valid owner` or `would run in the Live workspace` | The task has no existing backend user as `cruser_id`, or that user has no workspace. See [Creating tasks directly](#creating-tasks-directly-list-module--cli). |
 | A task stays "In Progress" forever | The PHP process was killed (e.g. by a timeout). `bin/typo3 agent:run` resets tasks that have been in progress for longer than `--timeout-seconds` (default 300) and resumes them. |
 | The chat ends with `[Agent stopped: reached maximum of N iterations]` | The task needed more tool calls than `maxIterations` allows. Raise the limit or split the task. |
 
