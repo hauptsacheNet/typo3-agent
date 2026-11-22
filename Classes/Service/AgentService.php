@@ -80,7 +80,23 @@ class AgentService implements LoggerAwareInterface
             throw new \RuntimeException('Task with UID ' . $taskUid . ' not found.');
         }
 
-        $this->setupBackendUserContext((int)($task['cruser_id'] ?? 0), (int)($task['workspace_id'] ?? 0));
+        $workspaceId = $this->setupBackendUserContext((int)($task['cruser_id'] ?? 0), (int)($task['workspace_id'] ?? 0));
+        if ($workspaceId === null) {
+            $this->rejectTask($taskUid, sprintf(
+                'Task #%d has no valid owner (cruser_id = %d). The agent always acts as the backend user who owns the task;'
+                . ' set cruser_id to an existing backend user.',
+                $taskUid,
+                (int)($task['cruser_id'] ?? 0),
+            ));
+        }
+        if ($workspaceId === 0) {
+            $this->rejectTask($taskUid, sprintf(
+                'Task #%d would run in the Live workspace, where changes are public immediately.'
+                . ' Give backend user #%d access to a workspace (or set workspace_id on the task).',
+                $taskUid,
+                (int)$task['cruser_id'],
+            ));
+        }
 
         $pid = (int)($task['pid'] ?? 0);
 
@@ -600,8 +616,14 @@ class AgentService implements LoggerAwareInterface
      * Set up backend user context for tool execution.
      *
      * Follows the pattern from McpEndpoint::setupBackendUserContext().
+     *
+     * There is deliberately no fallback identity: a task without an existing
+     * owner used to run as a synthetic admin in the Live workspace.
+     *
+     * @return int|null The workspace the agent runs in, or null when the
+     *                  task has no existing backend user as owner.
      */
-    private function setupBackendUserContext(int $userId, int $persistedWorkspaceId = 0): void
+    private function setupBackendUserContext(int $userId, int $persistedWorkspaceId = 0): ?int
     {
         if (empty($GLOBALS['TCA'])) {
             $tcaFactory = GeneralUtility::getContainer()->get(TcaFactory::class);
@@ -650,25 +672,26 @@ class AgentService implements LoggerAwareInterface
                 $context->setAspect('backend.user', new UserAspect($beUser));
                 $context->setAspect('workspace', new WorkspaceAspect($workspaceId));
 
-                return;
+                return $workspaceId;
             }
         }
 
-        $beUser->user = [
-            'uid' => 1,
-            'pid' => 0,
-            'admin' => 1,
-            'username' => '_agent_',
-            'usergroup' => '',
-            'lang' => 'default',
-            'workspace_id' => 0,
-            'realName' => 'AI Agent',
-            'TSconfig' => '',
-        ];
-        $beUser->workspace = 0;
-        $GLOBALS['BE_USER'] = $beUser;
+        return null;
+    }
 
-        $languageServiceFactory = GeneralUtility::makeInstance(LanguageServiceFactory::class);
-        $GLOBALS['LANG'] = $languageServiceFactory->create('default');
+    /**
+     * Mark a task as failed with a human-readable reason and abort the run.
+     * The task is claimed first so the Fail transition (InProgress → Failed)
+     * applies; if another process holds the lease, only the exception is thrown.
+     *
+     * @throws \RuntimeException always
+     */
+    private function rejectTask(int $taskUid, string $reason): never
+    {
+        if ($this->repository->claim($taskUid)) {
+            $this->repository->saveResult($taskUid, 'Error: ' . $reason);
+            $this->stateMachine->trigger($taskUid, TaskEvent::Fail);
+        }
+        throw new \RuntimeException($reason);
     }
 }

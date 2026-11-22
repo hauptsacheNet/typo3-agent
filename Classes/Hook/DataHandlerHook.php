@@ -13,6 +13,42 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
 
 class DataHandlerHook
 {
+    /**
+     * Stamp tasks created through DataHandler (List module, record forms)
+     * with their creator and the creator's current workspace.
+     *
+     * TYPO3 >= 12 no longer fills cruser_id, and the agent refuses tasks
+     * without an owner (see AgentService::run), so without this a task created
+     * in the List module could never run. The chat module inserts tasks via
+     * AgentTaskRepository::insert() and sets both fields itself.
+     */
+    public function processDatamap_afterDatabaseOperations(string $status, string $table, string|int $id, array $fieldArray, DataHandler $dataHandler): void
+    {
+        if ($table !== 'tx_agent_task' || $status !== 'new') {
+            return;
+        }
+        $uid = (int)($dataHandler->substNEWwithIDs[$id] ?? 0);
+        $userId = (int)($dataHandler->BE_USER->user['uid'] ?? 0);
+        if ($uid <= 0 || $userId <= 0) {
+            return;
+        }
+
+        $connection = GeneralUtility::makeInstance(ConnectionPool::class)->getConnectionForTable('tx_agent_task');
+        $connection->update(
+            'tx_agent_task',
+            ['cruser_id' => $userId],
+            ['uid' => $uid, 'cruser_id' => 0],
+        );
+        $workspaceId = (int)$dataHandler->BE_USER->workspace;
+        if ($workspaceId > 0) {
+            $connection->update(
+                'tx_agent_task',
+                ['workspace_id' => $workspaceId],
+                ['uid' => $uid, 'workspace_id' => 0],
+            );
+        }
+    }
+
     public function processCmdmap_discardAction(string $table, int $uid, array $record, bool &$recordWasDiscarded): void
     {
         GeneralUtility::makeInstance(AgentTaskRepository::class)

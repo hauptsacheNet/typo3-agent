@@ -11,3 +11,5 @@ if (!class_exists(\PhpOffice\PhpSpreadsheet\Spreadsheet::class) && is_file($bund
 
 $GLOBALS['TYPO3_CONF_VARS']['SC_OPTIONS']['t3lib/class.t3lib_tcemain.php']['processCmdmapClass'][]
     = \Hn\Agent\Hook\DataHandlerHook::class;
+$GLOBALS['TYPO3_CONF_VARS']['SC_OPTIONS']['t3lib/class.t3lib_tcemain.php']['processDatamapClass'][]
+    = \Hn\Agent\Hook\DataHandlerHook::class;

@@ -47,6 +47,10 @@ class AgentServiceTest extends FunctionalTestCase
 
         $this->importCSVDataSet(__DIR__ . '/../Fixtures/be_users.csv');
         $this->importCSVDataSet(__DIR__ . '/../Fixtures/pages.csv');
+        // The agent refuses to run in Live; give the admin a workspace up front
+        // instead of relying on mcp_server creating one on the fly.
+        GeneralUtility::makeInstance(ConnectionPool::class)->getConnectionForTable('sys_workspace')
+            ->insert('sys_workspace', ['uid' => 1, 'pid' => 0, 'title' => 'Agent tests', 'adminusers' => 'be_users_1']);
 
         $backendUser = $this->setUpBackendUser(1);
         $GLOBALS['BE_USER'] = $backendUser;
@@ -296,6 +300,66 @@ class AgentServiceTest extends FunctionalTestCase
         self::assertStringContainsString('- Short sentences', $systemContent);
         self::assertStringNotContainsString('<p>', $systemContent);
         self::assertStringNotContainsString('<li>', $systemContent);
+    }
+
+    /**
+     * @return array{exception: ?\RuntimeException, task: array<string, mixed>}
+     */
+    private function runTaskOwnedBy(int $cruserId): array
+    {
+        $taskUid = $this->createTask('Owner guard', 'Do something');
+        $this->connectionPool->getConnectionForTable('tx_agent_task')
+            ->update('tx_agent_task', ['cruser_id' => $cruserId], ['uid' => $taskUid]);
+
+        // No LLM response queued: the guard must reject before any LLM call.
+        $exception = null;
+        try {
+            $this->buildAgentServiceWithMock([])->run($taskUid);
+        } catch (\RuntimeException $e) {
+            $exception = $e;
+        }
+        return ['exception' => $exception, 'task' => $this->getTask($taskUid)];
+    }
+
+    public function testTaskWithoutOwnerIsRejectedInsteadOfRunningAsAdmin(): void
+    {
+        ['exception' => $exception, 'task' => $task] = $this->runTaskOwnedBy(0);
+
+        self::assertNotNull($exception);
+        self::assertStringContainsString('no valid owner', $exception->getMessage());
+        self::assertSame(3, (int)$task['status'], 'Task must end up as Failed');
+        self::assertStringContainsString('no valid owner', (string)$task['result']);
+        self::assertCount(2, $this->loadMessages((int)$task['uid']), 'No LLM call may happen');
+    }
+
+    public function testTaskOwnedByMissingUserIsRejected(): void
+    {
+        ['exception' => $exception, 'task' => $task] = $this->runTaskOwnedBy(999);
+
+        self::assertNotNull($exception);
+        self::assertStringContainsString('no valid owner', $exception->getMessage());
+        self::assertSame(3, (int)$task['status']);
+    }
+
+    public function testTaskIsRejectedWhenOwnerHasNoWorkspace(): void
+    {
+        // Non-admin without workspace membership and without the Workspaces
+        // module, so the agent can neither pick nor create a workspace.
+        $this->connectionPool->getConnectionForTable('be_users')->insert('be_users', [
+            'uid' => 2,
+            'pid' => 0,
+            'username' => 'editor',
+            'password' => 'x',
+            'admin' => 0,
+            'userMods' => '',
+            'deleted' => 0,
+        ]);
+
+        ['exception' => $exception, 'task' => $task] = $this->runTaskOwnedBy(2);
+
+        self::assertNotNull($exception);
+        self::assertStringContainsString('Live workspace', $exception->getMessage());
+        self::assertSame(3, (int)$task['status']);
     }
 
     public function testNoInstructionsLeavesSystemPromptUntouched(): void
