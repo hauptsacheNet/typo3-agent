@@ -1,73 +1,131 @@
-# TYPO3 AI Agent Extension
+# TYPO3 AI Agent
 
-Integrates an AI agent directly into TYPO3 by calling the MCP `ToolRegistry` natively from PHP and talking to an OpenAI-compatible LLM API. Editors work with the agent through a dedicated backend chat module; a CLI command additionally processes pending task records for scheduled/batch runs.
+An AI assistant for TYPO3 editors. Editors describe a task in plain language — *"Shorten the teaser texts on this page"*, *"Create a text element from the attached PDF"*, *"Check all subpages for missing meta descriptions"* — and the agent reads and edits pages, content elements and records on their behalf.
 
-## Installation
+- **Changes go into a workspace:** chats can only be started inside a workspace, not in Live. Every change is reviewed and published through the regular Workspaces module.
+- **Respects permissions:** the agent acts with the backend permissions of the user who started the chat.
+- **Provider-neutral:** talks to any OpenAI-compatible chat API. [OpenRouter](https://openrouter.ai) is the default and gives access to models from Anthropic, OpenAI, Google, Mistral and others.
+- **Understands files:** images, PDFs and Office documents can be attached to a chat.
+
+> **Status:** beta. Feedback and issues are welcome on [GitHub](https://github.com/hauptsacheNet/typo3-agent/issues).
+
+## Requirements
+
+- TYPO3 13.4 LTS or 14.3
+- PHP 8.1 or newer
+- `EXT:workspaces` (core extension, required)
+- [`hn/typo3-mcp-server`](https://github.com/hauptsacheNet/typo3-mcp-server) — installed automatically as a dependency; it provides the tools the agent uses to read and write TYPO3 data
+- An API key for an OpenAI-compatible LLM provider (we recommend [OpenRouter](https://openrouter.ai))
+
+## Quick start
+
+These steps take you from zero to the first chat. They assume an admin account.
+
+### 1. Install the extension
 
 ```bash
 composer require hn/typo3-agent
+vendor/bin/typo3 extension:setup
 ```
 
-Then activate the extension in TYPO3 backend or via CLI:
+`extension:setup` creates the database tables. In classic (non-composer) installations, install the extension from the TER via the Extension Manager instead. For non-composer TYPO3 installations the TER package bundles the required PHP libraries (PhpOffice, `smalot/pdfparser`); a fallback autoloader in `ext_localconf.php` loads them when no composer autoloader has already provided them.
 
-```bash
-bin/typo3 extension:activate agent
+### 2. Get an API key
+
+Create an account at [openrouter.ai](https://openrouter.ai), add credits and create an API key under **Keys**. Setting a credit limit on the key is a good idea while you try things out.
+
+### 3. Configure the extension
+
+Open the **Settings** module → **Extension Configuration** → **agent**, paste the key into **API Key** and save. The defaults for everything else work out of the box (model: `anthropic/claude-haiku-5.5`).
+
+To keep the key out of the database dump and version control, set it from an environment variable instead, e.g. in `config/system/additional.php`:
+
+```php
+$GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['agent']['apiKey'] = getenv('OPENROUTER_API_KEY');
 ```
 
-For non-composer TYPO3 installations the TER package bundles the required PHP libraries (PhpOffice, `smalot/pdfparser`); a fallback autoloader in `ext_localconf.php` loads them when no composer autoloader has already provided them.
+### 4. Create a workspace
+
+The agent refuses to work in the Live workspace, because changes there would be public immediately.
+
+1. Open the **Workspaces** module and create a workspace (e.g. "AI drafts").
+2. Add the editors who will use the agent as members.
+3. Switch to the new workspace with the workspace selector in the top toolbar.
+
+### 5. Start your first chat
+
+1. Open **AI Tasks** (German: *KI-Aufgaben*). It sits in the **Web** module group in TYPO3 13 and in **Content** in TYPO3 14.
+2. Select a page in the page tree — it becomes the context of the chat.
+3. Type a task, for example *"Summarize the content of this page in three bullet points"*, and send it.
+
+The agent answers in the chat and lists the records it changed. Review those changes in the **Workspaces** module and publish them when you are happy.
+
+## Giving editors access
+
+Admins can use the agent right away. For editors, grant the following in **Backend Users → Groups**:
+
+| What | Where | Why |
+|------|-------|-----|
+| Module **AI Tasks** | *Module Permissions* | Opens the chat module |
+| Workspace membership | Workspace record → *Members* | Chats can only be started inside a workspace |
+| Page and table permissions | *DB Mounts*, *Tables (modify)*, page permissions | The agent can only read and change what the editor may read and change |
+| **File list** / Media module | *Module Permissions* | Needed to upload attachments in the chat (see [Attachments](#attachments--multimodal)) |
+| Table **Agent Instruction** (optional) | *Tables (modify)* | Lets the group maintain [agent instructions](#agent-instructions) |
 
 ## Configuration
 
-Go to **Settings > Extension Configuration > agent** and configure:
+All settings live in **Settings → Extension Configuration → agent**.
 
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `apiUrl` | `https://openrouter.ai/api/v1/` | OpenAI-compatible API base URL |
-| `apiKey` | *(empty)* | API key for authentication |
+| `apiKey` | *(empty)* | API key for authentication (required) |
 | `model` | `anthropic/claude-haiku-5.5` | Model ID as expected by the provider (free text). Empty falls back to the default |
-| `systemPrompt` | *(built-in)* | System prompt for the agent |
-| `maxIterations` | `20` | Safety limit for the agent loop |
+| `systemPrompt` | *(built-in)* | System prompt for the agent. Prefer [agent instructions](#agent-instructions) for project-specific rules |
+| `maxIterations` | `20` | Safety limit for tool calls per agent run |
 | `reasoningEffort` | `medium` | Extended-reasoning strength (`off`, `low`, `medium`, `high`) |
-| `webFetch` | `1` | Enable OpenRouter's server-side `web_fetch` tool so the agent can retrieve and read URLs (executed by OpenRouter, no local handler needed) |
+| `webFetch` | `1` | Enable OpenRouter's server-side `web_fetch` tool so the agent can retrieve and read URLs (OpenRouter only) |
+| `pdfimagesPath` | *(empty)* | Absolute path to poppler-utils `pdfimages`. Enables extracting embedded images from PDFs; leave empty to disable |
 
-### Provider Examples
+### Choosing a model
 
-The `model` field is free text: enter any model ID your provider offers. Agent work relies on tool calling, so pick a model that supports tools (on OpenRouter, filter by *Tools* under [openrouter.ai/models](https://openrouter.ai/models)).
+The `model` field is free text: enter any model ID your provider offers. The agent works by calling tools, so the model **must support tool calling** (on OpenRouter, filter by *Tools* under [openrouter.ai/models](https://openrouter.ai/models)).
 
-**OpenRouter** (default — access to many models):
-```
-apiUrl: https://openrouter.ai/api/v1/
-model: anthropic/claude-haiku-5.5
-```
-
-Recommended OpenRouter models:
-
-| Model ID | When to use |
-|----------|-------------|
+| Model ID (OpenRouter) | When to use |
+|-----------------------|-------------|
 | `anthropic/claude-haiku-5.5` | Default. Fast and cheap, good enough for everyday editing tasks |
 | `anthropic/claude-sonnet-5.5` | Complex, multi-step tasks where Haiku struggles |
+
+Other models work too, but smaller models tend to stop after the first tool call or skip verifying their changes. Try them on a test page first.
+
+### Other providers
 
 **OpenAI**:
 ```
 apiUrl: https://api.openai.com/v1/
-model: gpt-5.2
+model: <an OpenAI model ID>
 ```
 
-**Any OpenAI-compatible API**:
+**Any OpenAI-compatible API** (EU-hosted, self-hosted, …):
 ```
 apiUrl: https://your-provider.com/v1/
 model: your-model-id
 ```
 
+Disable `webFetch` for providers other than OpenRouter: the `openrouter:web_fetch` tool type is OpenRouter-specific, and other providers may reject requests that contain it.
+
+### Data privacy
+
+Prompts, the content of the pages and records the agent reads, and attached files are sent to the configured provider. Check the provider's data retention policy before using the agent with personal data. If data must not leave a specific region, point `apiUrl` at a provider hosted there.
+
 ## Usage
 
-### Backend Chat Module
+### Backend chat module
 
-The primary UX is the **Web > TYPO3 Agent Tasks** backend module. It offers:
+The **AI Tasks** module offers:
 
-- An **overview of the agent instructions** that shape the assistant's behavior (see the Agent Instructions section below).
-- An **overview of chats scoped to the current page**, 
-- An **overview of chats on any subpage** 
+- An **overview of the agent instructions** that shape the assistant's behavior (see [Agent instructions](#agent-instructions)).
+- An **overview of chats scoped to the current page** and of **chats on any subpage**.
 - An **individual chat view** that shows the full conversation together with the **associated workspace changes** — the records the agent touched in the current workspace.
 
 ### Attachments & Multimodal
@@ -88,22 +146,8 @@ Files can be dragged onto the composer or picked via the file browser. The chat 
 
 Attachments enter the conversation as multimodal tool messages via the `ReadFile` tool listed under **Architecture** below (image bytes inline, extracted text/pages for PDF and Office files).
 
-### Creating Tasks Directly (List Module / CLI)
 
-For scheduled or automated runs — batch seeding, cron-driven workflows, external triggers — you can also create task records directly:
-
-1. Open the **List module** in TYPO3 backend
-2. Navigate to the page you want the agent to work on
-3. Create a new **Agent Task** record
-4. Fill in the **Title** and **Prompt** fields
-5. Save the record (status defaults to "Pending")
-
-The task's `pid` (page ID) provides context — the agent automatically loads information about that page.
-The task's `cruser_id` determines which backend user's permissions the agent uses for tool execution.
-
-**Note:** TYPO3 13.4 no longer auto-populates `cruser_id` via DataHandler. When `cruser_id` is 0 (default), the agent falls back to admin context. To run the agent as a specific user, set `cruser_id` manually on the task record.
-
-### Agent Instructions
+### Agent instructions
 
 Editors can maintain reusable **instructions** for the agent — tone of voice,
 wording rules, or how to handle specific content elements or records — as
@@ -153,6 +197,25 @@ visible in the List module and in the chat info panel.
 **Viewing:** the instructions appear in a collapsible panel at the top of the AI
 chat (both the chat list and individual chats), and — like any record — in the
 **List module**.
+
+
+## Automation (CLI and Scheduler)
+
+### Creating Tasks Directly (List Module / CLI)
+
+For scheduled or automated runs — batch seeding, cron-driven workflows, external triggers — you can also create task records directly:
+
+1. Open the **List module** in TYPO3 backend
+2. Navigate to the page you want the agent to work on
+3. Create a new **Agent Task** record
+4. Fill in the **Title** and **Prompt** fields
+5. Save the record (status defaults to "Pending")
+
+The task's `pid` (page ID) provides context — the agent automatically loads information about that page.
+The task's `cruser_id` determines which backend user's permissions the agent uses for tool execution.
+
+**Note:** TYPO3 13.4 no longer auto-populates `cruser_id` via DataHandler. When `cruser_id` is 0 (default), the agent falls back to an **admin context in the Live workspace** — its changes are public immediately. To run the agent as a specific user, set `cruser_id` manually on the task record; the task then runs with that user's permissions and workspace access.
+
 
 ### Running the Agent from the CLI
 
@@ -204,6 +267,17 @@ The `agent:run` command is schedulable — you can set it up as a recurring task
 
 Agent tasks are workspace-aware: each task record stores a `workspace_id` (set automatically) and the agent runs against that workspace's data. Two event listeners hook into the workspace lifecycle: one clears change tracking on publish, the other filters the workspace diff view to the records the task actually touched. In the chat UI, the workspace-changes drawer surfaces those tracked records inline.
 
+## Troubleshooting
+
+| Symptom | Cause and fix |
+|---------|---------------|
+| `Agent extension: apiKey is not configured` | Set the API key in the extension configuration (or via environment variable, see [Quick start](#3-configure-the-extension)). |
+| A callout asks you to switch to a workspace before starting a task | You are in the Live workspace. Switch to a workspace in the top toolbar. |
+| Provider error mentioning the model or tool use | The model ID is misspelled or the model does not support tool calling. Check the ID on [openrouter.ai/models](https://openrouter.ai/models). |
+| Attachments cannot be uploaded | The editor's group lacks access to the File list / Media module. |
+| A task stays "In Progress" forever | The PHP process was killed (e.g. by a timeout). `bin/typo3 agent:run` resets tasks that have been in progress for longer than `--timeout-seconds` (default 300) and resumes them. |
+| The chat ends with `[Agent stopped: reached maximum of N iterations]` | The task needed more tool calls than `maxIterations` allows. Raise the limit or split the task. |
+
 ## Architecture
 
 The extension uses the `ToolRegistry` from `hn/typo3-mcp-server` to access the core TYPO3 tools (GetPage, GetPageTree, Search, ReadTable, WriteTable, …) natively from PHP without MCP protocol overhead.
@@ -222,6 +296,7 @@ Each conversation turn is persisted as a `tx_agent_message` record (role, conten
 ### Upgrading from the JSON-column era
 
 Versions that stored the whole conversation in a `tx_agent_task.messages` JSON column are migrated by the **"Migrate agent task chat histories to tx_agent_message records"** upgrade wizard (`agent_migrateTaskMessages`). Run the database schema update first (it leaves the legacy `messages` column untouched — the new counter is deliberately named `chat_messages`), then execute the wizard in the Install Tool or via `bin/typo3 upgrade:run agent_migrateTaskMessages`. Afterwards the emptied `messages` column can be removed via the database analyzer.
+
 
 ## Development
 
