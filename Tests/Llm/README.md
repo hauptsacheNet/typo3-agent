@@ -31,7 +31,7 @@ from the roster battle-tested in `hn/typo3-mcp-server`'s LLM suite
 Override per run:
 
 ```bash
-LLM_TEST_MODEL="anthropic/claude-haiku-4.5" composer test:llm
+LLM_TEST_MODEL="anthropic/claude-haiku-5.5" composer test:llm
 ```
 
 ## Writing tests
