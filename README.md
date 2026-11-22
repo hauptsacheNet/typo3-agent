@@ -24,7 +24,7 @@ Go to **Settings > Extension Configuration > agent** and configure:
 |---------|---------|-------------|
 | `apiUrl` | `https://openrouter.ai/api/v1/` | OpenAI-compatible API base URL |
 | `apiKey` | *(empty)* | API key for authentication |
-| `model` | `anthropic/claude-haiku-4.5` | Model identifier (dropdown: Claude Opus 4.8 / Claude Haiku 4.5) |
+| `model` | `anthropic/claude-haiku-5.5` | Model ID as expected by the provider (free text). Empty falls back to the default |
 | `systemPrompt` | *(built-in)* | System prompt for the agent |
 | `maxIterations` | `20` | Safety limit for the agent loop |
 | `reasoningEffort` | `medium` | Extended-reasoning strength (`off`, `low`, `medium`, `high`) |
@@ -32,13 +32,20 @@ Go to **Settings > Extension Configuration > agent** and configure:
 
 ### Provider Examples
 
-The `model` field ships as a curated dropdown. To use another provider or model ID, adjust `ext_conf_template.txt` (or ship a site-specific override).
+The `model` field is free text: enter any model ID your provider offers. Agent work relies on tool calling, so pick a model that supports tools (on OpenRouter, filter by *Tools* under [openrouter.ai/models](https://openrouter.ai/models)).
 
 **OpenRouter** (default — access to many models):
 ```
 apiUrl: https://openrouter.ai/api/v1/
-model: anthropic/claude-haiku-4.5
+model: anthropic/claude-haiku-5.5
 ```
+
+Recommended OpenRouter models:
+
+| Model ID | When to use |
+|----------|-------------|
+| `anthropic/claude-haiku-5.5` | Default. Fast and cheap, good enough for everyday editing tasks |
+| `anthropic/claude-sonnet-5.5` | Complex, multi-step tasks where Haiku struggles |
 
 **OpenAI**:
 ```

@@ -36,11 +36,11 @@ class ScratchFileTest extends AgentLlmTestCase
      * and the promote flow needs multi-step tool discipline (promote →
      * write → verify) that budget models fail at more often than the
      * 3-attempt retry absorbs (tested 2026-07: gemini-2.5-flash-lite and
-     * gpt-5-nano regularly stop after the first tool call). claude-haiku-4.5
+     * gpt-5-nano regularly stop after the first tool call). claude-haiku-5.5
      * is the extension's production default model, so this is also the most
      * honest acceptance check; a run costs a few cents.
      */
-    protected const DEFAULT_MODEL = 'anthropic/claude-haiku-4.5';
+    protected const DEFAULT_MODEL = 'anthropic/claude-haiku-5.5';
 
     /**
      * 1×1 transparent PNG — enough for FAL, small enough to embed here.

@@ -16,6 +16,12 @@ class LlmService implements LoggerAwareInterface
 {
     use LoggerAwareTrait;
 
+    /**
+     * Used when the `model` extension setting is missing or empty. Keep in
+     * sync with the default in ext_conf_template.txt.
+     */
+    public const DEFAULT_MODEL = 'anthropic/claude-haiku-5.5';
+
     public function __construct(
         private readonly RequestFactory $requestFactory,
         private readonly ExtensionConfiguration $extensionConfiguration,
@@ -437,7 +443,7 @@ class LlmService implements LoggerAwareInterface
         return [
             'apiUrl' => (string)($config['apiUrl'] ?? ''),
             'apiKey' => (string)$apiKey,
-            'model' => (string)($config['model'] ?? 'anthropic/claude-haiku-4-5'),
+            'model' => trim((string)($config['model'] ?? '')) ?: self::DEFAULT_MODEL,
             'reasoningEffort' => (string)($config['reasoningEffort'] ?? 'off'),
             'webFetch' => (bool)($config['webFetch'] ?? true),
         ];
