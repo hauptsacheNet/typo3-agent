@@ -45,6 +45,7 @@ class LlmServiceRequestBodyTest extends FunctionalTestCase
     public function testWebFetchServerToolIsAppendedWhenEnabled(): void
     {
         $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['agent']['apiKey'] = 'test-key';
+        $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['agent']['apiUrl'] = 'https://openrouter.ai/api/v1/';
         $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['agent']['webFetch'] = '1';
 
         $functionTool = [
@@ -66,6 +67,7 @@ class LlmServiceRequestBodyTest extends FunctionalTestCase
     public function testWebFetchServerToolIsAppendedEvenWithoutFunctionTools(): void
     {
         $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['agent']['apiKey'] = 'test-key';
+        $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['agent']['apiUrl'] = 'https://openrouter.ai/api/v1/';
         $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['agent']['webFetch'] = '1';
 
         $body = $this->buildService()->build(
@@ -80,6 +82,7 @@ class LlmServiceRequestBodyTest extends FunctionalTestCase
     public function testWebFetchServerToolIsOmittedWhenDisabled(): void
     {
         $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['agent']['apiKey'] = 'test-key';
+        $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['agent']['apiUrl'] = 'https://openrouter.ai/api/v1/';
         $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['agent']['webFetch'] = '0';
 
         $body = $this->buildService()->build(
@@ -120,5 +123,78 @@ class LlmServiceRequestBodyTest extends FunctionalTestCase
             '/^model = ' . preg_quote(LlmService::DEFAULT_MODEL, '/') . '$/m',
             $template,
         );
+    }
+
+    /**
+     * @return array<string, array{string}>
+     */
+    public static function providersWithoutServerToolsProvider(): array
+    {
+        return [
+            'OpenAI' => ['https://api.openai.com/v1/'],
+            'Mistral' => ['https://api.mistral.ai/v1/'],
+            'Cortecs' => ['https://api.cortecs.ai/v1/'],
+            // Regional OpenRouter endpoints reject web_fetch with HTTP 403.
+            'OpenRouter EU' => ['https://eu.openrouter.ai/api/v1/'],
+            'unknown / self-hosted' => ['http://localhost:1234/v1/'],
+        ];
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('providersWithoutServerToolsProvider')]
+    public function testWebFetchIsNotSentToProvidersWithoutIt(string $apiUrl): void
+    {
+        $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['agent']['apiKey'] = 'test-key';
+        $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['agent']['apiUrl'] = $apiUrl;
+        $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['agent']['webFetch'] = '1';
+
+        $body = $this->buildService()->build([['role' => 'user', 'content' => 'Hi']], [], false);
+
+        self::assertArrayNotHasKey('tools', $body);
+    }
+
+    /**
+     * @return array<string, array{string, array<string, mixed>}>
+     */
+    public static function reasoningFormatProvider(): array
+    {
+        return [
+            'OpenRouter' => ['https://openrouter.ai/api/v1/', ['reasoning' => ['effort' => 'high']]],
+            'OpenRouter EU' => ['https://eu.openrouter.ai/api/v1/', ['reasoning' => ['effort' => 'high']]],
+            'OpenAI' => ['https://api.openai.com/v1/', ['reasoning_effort' => 'high']],
+            'Mistral' => ['https://api.mistral.ai/v1/', ['reasoning_effort' => 'high']],
+            'Cortecs' => ['https://api.cortecs.ai/v1/', ['reasoning_effort' => 'high']],
+            'unknown / self-hosted' => ['http://localhost:1234/v1/', ['reasoning_effort' => 'high']],
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $expected
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('reasoningFormatProvider')]
+    public function testReasoningEffortUsesProviderFormat(string $apiUrl, array $expected): void
+    {
+        $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['agent']['apiKey'] = 'test-key';
+        $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['agent']['apiUrl'] = $apiUrl;
+        $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['agent']['reasoningEffort'] = 'high';
+
+        $body = $this->buildService()->build([['role' => 'user', 'content' => 'Hi']], [], false);
+
+        foreach ($expected as $key => $value) {
+            self::assertSame($value, $body[$key] ?? null);
+        }
+        // Never both formats at once — strict providers reject unknown parameters.
+        self::assertFalse(isset($body['reasoning'], $body['reasoning_effort']));
+    }
+
+    public function testReasoningOffSendsNoReasoningParameter(): void
+    {
+        $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['agent']['apiKey'] = 'test-key';
+        $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['agent']['apiUrl'] = 'https://api.openai.com/v1/';
+        $GLOBALS['TYPO3_CONF_VARS']['EXTENSIONS']['agent']['reasoningEffort'] = 'off';
+
+        $body = $this->buildService()->build([['role' => 'user', 'content' => 'Hi']], [], false);
+
+        self::assertArrayNotHasKey('reasoning', $body);
+        self::assertArrayNotHasKey('reasoning_effort', $body);
     }
 }
