@@ -13,10 +13,10 @@ systemPrompt = You are a helpful TYPO3 CMS assistant. You have access to tools t
 # cat=basic/agent/050; type=int+; label=Max Iterations: Safety limit for the agent loop
 maxIterations = 20
 
-# cat=basic/agent/060; type=options[off,low,medium,high]; label=Reasoning Effort: Stärke des Reasonings (off = deaktiviert)
+# cat=basic/agent/060; type=options[off,low,medium,high]; label=Reasoning Effort: Stärke des Reasonings (off = deaktiviert). Wird im Format des Providers gesendet (OpenRouter: reasoning.effort, sonst reasoning_effort)
 reasoningEffort = medium
 
-# cat=basic/agent/070; type=boolean; label=Web Fetch: OpenRouters serverseitiges web_fetch-Tool aktivieren (der Agent kann URLs direkt abrufen und lesen)
+# cat=basic/agent/070; type=boolean; label=Web Fetch: Serverseitiges web_fetch-Tool aktivieren (der Agent kann URLs direkt abrufen und lesen). Nur bei Providern wirksam, die es anbieten (aktuell openrouter.ai); bei anderen Providern wird die Einstellung ignoriert
 webFetch = 1
 
 # cat=basic/tools/080; type=string; label=pdfimages Binary Path: absoluter Pfad zu poppler-utils pdfimages (leer lassen, um Bildextraktion aus PDFs zu deaktivieren)

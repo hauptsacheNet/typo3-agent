@@ -103,33 +103,35 @@ class LlmService implements LoggerAwareInterface
         if (!empty($tools)) {
             $body['tools'] = $tools;
         }
-        $this->applyServerTools($body, $config);
-        $this->applyReasoning($body, $config);
+        $profile = ProviderProfile::forApiUrl($config['apiUrl']);
+        $this->applyServerTools($body, $config, $profile);
+        $this->applyReasoning($body, $config, $profile);
         return $body;
     }
 
     /**
-     * Append OpenRouter's server-side tools to the request when enabled.
+     * Append the provider's server-side tools that are enabled in the config.
      *
-     * Server tools carry a `openrouter:<name>` type and are executed by
-     * OpenRouter itself: the model may call them, OpenRouter runs them and
-     * feeds the result straight back into the model's context. The client
-     * never receives a tool_call to execute, so the agent loop needs no
-     * counterpart handler — enabling the tool is purely additive here.
-     *
-     * `web_fetch` lets the agent retrieve and read the content of a URL.
+     * Server tools are executed by the provider itself (e.g. OpenRouter's
+     * `openrouter:web_fetch`, which retrieves and reads a URL): the model calls
+     * them, the provider runs them and feeds the result straight back. The
+     * client never receives a tool_call for them, so the agent loop needs no
+     * handler. Which tools exist depends on the provider (see ProviderProfile);
+     * an enabled setting is silently ignored for providers without the tool.
      *
      * @param array<string, mixed> $body
-     * @param array{webFetch: bool} $config
+     * @param array<string, mixed> $config
      */
-    private function applyServerTools(array &$body, array $config): void
+    private function applyServerTools(array &$body, array $config, ProviderProfile $profile): void
     {
-        if (empty($config['webFetch'])) {
-            return;
+        foreach ($profile->serverTools as $setting => $toolDefinition) {
+            if (empty($config[$setting])) {
+                continue;
+            }
+            $tools = $body['tools'] ?? [];
+            $tools[] = $toolDefinition;
+            $body['tools'] = $tools;
         }
-        $tools = $body['tools'] ?? [];
-        $tools[] = ['type' => 'openrouter:web_fetch'];
-        $body['tools'] = $tools;
     }
 
     /**
@@ -409,14 +411,15 @@ class LlmService implements LoggerAwareInterface
     }
 
     /**
-     * Inject OpenRouter's `reasoning` parameter into the request body when an
-     * effort level is configured. Off / empty leaves the body unchanged so
+     * Request the configured reasoning effort in the provider's format:
+     * OpenRouter takes `reasoning: {effort}`, OpenAI-style providers a
+     * top-level `reasoning_effort`. Off / empty leaves the body unchanged so
      * provider defaults apply.
      *
      * @param array<string, mixed> $body
      * @param array{reasoningEffort: string} $config
      */
-    private function applyReasoning(array &$body, array $config): void
+    private function applyReasoning(array &$body, array $config, ProviderProfile $profile): void
     {
         $effort = strtolower(trim($config['reasoningEffort'] ?? ''));
         if ($effort === '' || $effort === 'off') {
@@ -425,7 +428,11 @@ class LlmService implements LoggerAwareInterface
         if (!in_array($effort, ['low', 'medium', 'high'], true)) {
             return;
         }
-        $body['reasoning'] = ['effort' => $effort];
+        if ($profile->reasoningStyle === ProviderProfile::REASONING_OBJECT) {
+            $body['reasoning'] = ['effort' => $effort];
+        } else {
+            $body['reasoning_effort'] = $effort;
+        }
     }
 
     /**

@@ -83,8 +83,8 @@ All settings live in **Settings → Extension Configuration → agent**.
 | `model` | `anthropic/claude-haiku-5.5` | Model ID as expected by the provider (free text). Empty falls back to the default |
 | `systemPrompt` | *(built-in)* | System prompt for the agent. Prefer [agent instructions](#agent-instructions) for project-specific rules |
 | `maxIterations` | `20` | Safety limit for tool calls per agent run |
-| `reasoningEffort` | `medium` | Extended-reasoning strength (`off`, `low`, `medium`, `high`) |
-| `webFetch` | `1` | Enable OpenRouter's server-side `web_fetch` tool so the agent can retrieve and read URLs (OpenRouter only) |
+| `reasoningEffort` | `medium` | Extended-reasoning strength (`off`, `low`, `medium`, `high`), sent in the provider's format |
+| `webFetch` | `1` | Enable the provider's server-side `web_fetch` tool so the agent can retrieve and read URLs. Only used where the provider offers it (see [Other providers](#other-providers)) |
 | `pdfimagesPath` | *(empty)* | Absolute path to poppler-utils `pdfimages`. Enables extracting embedded images from PDFs; leave empty to disable |
 
 ### Choosing a model
@@ -100,19 +100,18 @@ Other models work too, but smaller models tend to stop after the first tool call
 
 ### Other providers
 
-**OpenAI**:
-```
-apiUrl: https://api.openai.com/v1/
-model: <an OpenAI model ID>
-```
+Any provider with an OpenAI-compatible chat-completions API works — set `apiUrl` and `model`. The extension recognizes the following providers by the host in `apiUrl` and adapts the request automatically, so you do not have to look up what each one supports:
 
-**Any OpenAI-compatible API** (EU-hosted, self-hosted, …):
-```
-apiUrl: https://your-provider.com/v1/
-model: your-model-id
-```
+| Provider | `apiUrl` | `webFetch` | Reasoning sent as |
+|----------|----------|------------|-------------------|
+| OpenRouter | `https://openrouter.ai/api/v1/` | ✓ | `reasoning: {effort}` |
+| OpenRouter EU / US region | `https://eu.openrouter.ai/api/v1/` | — (rejected by the regional endpoints) | `reasoning: {effort}` |
+| OpenAI | `https://api.openai.com/v1/` | — | `reasoning_effort` |
+| Mistral | `https://api.mistral.ai/v1/` | — | `reasoning_effort` |
+| [Cortecs](https://cortecs.ai) (EU-hosted router) | `https://api.cortecs.ai/v1/` | — | `reasoning_effort` |
+| Anything else (self-hosted, LM Studio, …) | your endpoint | — | `reasoning_effort` |
 
-Disable `webFetch` for providers other than OpenRouter: the `openrouter:web_fetch` tool type is OpenRouter-specific, and other providers may reject requests that contain it.
+The `webFetch` setting is ignored for providers that do not offer the tool. Set `reasoningEffort` to `off` if your endpoint rejects the `reasoning_effort` parameter. The provider profiles live in `Classes/Service/ProviderProfile.php`.
 
 ### Data privacy
 
