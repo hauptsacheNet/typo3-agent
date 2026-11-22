@@ -17,7 +17,7 @@
     "prepare-types:v14": "npm run setup-types:v14 && npm run generate-dts"
   },
   "devDependencies": {
-    "@playwright/test": "1.52.0",
+    "@playwright/test": "1.65.1",
     "dompurify": "^3.4.2",
     "esbuild": "^0.25.0",
     "lit": "^3.2.0",
