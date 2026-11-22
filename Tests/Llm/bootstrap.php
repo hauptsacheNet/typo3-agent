@@ -36,3 +36,9 @@ require_once __DIR__ . '/../../vendor/autoload.php';
         }
     }
 })();
+
+// Without a key every test skips, which CI would report as a green run.
+// On GitHub Actions, surface that as a visible annotation instead.
+if ((string)getenv('OPENROUTER_API_KEY') === '' && getenv('GITHUB_ACTIONS') === 'true') {
+    echo "::warning title=LLM tests skipped::OPENROUTER_API_KEY is not set, so no LLM test was executed. Add it as a repository secret to run them.\n";
+}
