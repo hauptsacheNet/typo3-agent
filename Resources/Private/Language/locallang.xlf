@@ -24,6 +24,9 @@
             <trans-unit id="index.empty" resname="index.empty">
                 <source>No tasks yet on this page. Start one above.</source>
             </trans-unit>
+            <trans-unit id="index.emptyWithoutPrompt" resname="index.emptyWithoutPrompt">
+                <source>No tasks yet on this page.</source>
+            </trans-unit>
             <trans-unit id="index.section.current" resname="index.section.current">
                 <source>Tasks on this page</source>
             </trans-unit>

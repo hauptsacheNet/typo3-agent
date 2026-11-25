@@ -9,13 +9,15 @@
     <f:asset.module identifier="@hn/agent/user-filter.js"/>
     <f:asset.module identifier="@typo3/backend/recordlist.js"/>
     <f:asset.css identifier="hn-agent-chat" href="EXT:agent/Resources/Public/Css/agent-chat.css"/>
-    <hn-agent-new-task action-uri="{newUri}"
-                       table="pages"
-                       uid="{pageId}"
-                       placeholder="{placeholder}"
-                       workspace-id="{workspace.id}"
-                       workspace-title="{workspace.title}">
-    </hn-agent-new-task>
+    <f:if condition="{canStartTask}">
+        <hn-agent-new-task action-uri="{newUri}"
+                           table="pages"
+                           uid="{pageId}"
+                           placeholder="{placeholder}"
+                           workspace-id="{workspace.id}"
+                           workspace-title="{workspace.title}">
+        </hn-agent-new-task>
+    </f:if>
     <h1>
         <f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:index.heading"/>
     </h1>
@@ -64,7 +66,7 @@
         </f:then>
         <f:else>
             <p class="text-muted">
-                <f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:index.empty"/>
+                <f:translate key="LLL:EXT:agent/Resources/Private/Language/locallang.xlf:{f:if(condition: canStartTask, then: 'index.empty', else: 'index.emptyWithoutPrompt')}"/>
             </p>
         </f:else>
     </f:if>

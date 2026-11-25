@@ -8,6 +8,7 @@ use Hn\Agent\Service\AgentScratchStorage;
 use TYPO3\CMS\Backend\Routing\UriBuilder;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Page\PageRenderer;
+use TYPO3\CMS\Workspaces\Service\WorkspaceService;
 
 class PromptRenderer
 {
@@ -15,6 +16,7 @@ class PromptRenderer
         private readonly UriBuilder $uriBuilder,
         private readonly PageRenderer $pageRenderer,
         private readonly AgentScratchStorage $scratchStorage,
+        private readonly WorkspaceService $workspaceService,
     ) {}
 
     /**
@@ -34,6 +36,24 @@ class PromptRenderer
             'id' => $workspaceId,
             'title' => (string)($record['title'] ?? ('#' . $workspaceId)),
         ];
+    }
+
+    /**
+     * Whether the current backend user is in, or can switch to, any non-live
+     * workspace. The agent only writes in workspaces, so without one the
+     * new-task prompt is not rendered at all — the user could not act on it.
+     */
+    public function userHasWorkspace(): bool
+    {
+        if ((int)($GLOBALS['BE_USER']->workspace ?? 0) > 0) {
+            return true;
+        }
+        foreach (array_keys($this->workspaceService->getAvailableWorkspaces()) as $uid) {
+            if ((int)$uid > 0) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -77,8 +97,13 @@ class PromptRenderer
             return '';
         }
 
-        $actionUri = (string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks.new', ['id' => $pageId]);
+        if (!$this->userHasWorkspace()) {
+            return '';
+        }
+
         $workspace = $this->getCurrentWorkspaceInfo();
+
+        $actionUri = (string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks.new', ['id' => $pageId]);
         $this->registerUploadContext($pageId, $tableName);
 
         $this->pageRenderer->addInlineLanguageLabelFile('EXT:agent/Resources/Private/Language/locallang.xlf');
@@ -105,8 +130,12 @@ class PromptRenderer
             return;
         }
 
-        $actionUri = (string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks.new', ['id' => $pageId]);
+        if (!$this->userHasWorkspace()) {
+            return;
+        }
+
         $workspace = $this->getCurrentWorkspaceInfo();
+        $actionUri = (string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks.new', ['id' => $pageId]);
         $this->registerUploadContext($pageId, $tableName);
 
         $this->pageRenderer->addInlineSetting('Agent', 'newTaskUri', $actionUri);
@@ -114,8 +143,7 @@ class PromptRenderer
         $this->pageRenderer->addInlineSetting('Agent', 'uid', (string)$uid);
         $this->pageRenderer->addInlineSetting('Agent', 'placeholder', $placeholder);
         $this->pageRenderer->addInlineSetting('Agent', 'workspaceId', (string)$workspace['id']);
-        $this->pageRenderer->addInlineSetting('Agent', 'workspaceTitle', $workspace['title']);
-        $this->pageRenderer->addInlineLanguageLabelFile('EXT:agent/Resources/Private/Language/locallang.xlf');
+        $this->pageRenderer->addInlineSetting('Agent', 'workspaceTitle', $workspace['title']);        $this->pageRenderer->addInlineLanguageLabelFile('EXT:agent/Resources/Private/Language/locallang.xlf');
         $this->pageRenderer->addCssFile('EXT:agent/Resources/Public/Css/agent-chat.css');
         $this->pageRenderer->loadJavaScriptModule('@hn/agent/auto-insert-new-task.js');
     }
