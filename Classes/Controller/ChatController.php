@@ -193,6 +193,7 @@ class ChatController
             'newUri' => (string)$this->uriBuilder->buildUriFromRoute('web_typo3_agent_tasks.new', ['id' => $pageId]),
             'placeholder' => $placeholder,
             'workspace' => $workspace,
+            'canStartTask' => $this->promptRenderer->userHasWorkspace(),
             'collapsed' => $collapsed,
             'instructions' => $instructions,
             'canEditInstructions' => $canEditInstructions,

@@ -31,6 +31,10 @@
                 <source>No tasks yet on this page. Start one above.</source>
                 <target>Noch keine Aufgaben auf dieser Seite. Starte eine oben.</target>
             </trans-unit>
+            <trans-unit id="index.emptyWithoutPrompt" resname="index.emptyWithoutPrompt">
+                <source>No tasks yet on this page.</source>
+                <target>Noch keine Aufgaben auf dieser Seite.</target>
+            </trans-unit>
             <trans-unit id="index.section.current" resname="index.section.current">
                 <source>Tasks on this page</source>
                 <target>Aufgaben auf dieser Seite</target>
