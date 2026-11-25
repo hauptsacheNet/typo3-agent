@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Hn\Agent\Renderer;
 
 use Hn\Agent\Service\AgentScratchStorage;
+use TYPO3\CMS\Backend\Module\ModuleProvider;
 use TYPO3\CMS\Backend\Routing\UriBuilder;
 use TYPO3\CMS\Backend\Utility\BackendUtility;
 use TYPO3\CMS\Core\Page\PageRenderer;
@@ -12,12 +13,34 @@ use TYPO3\CMS\Workspaces\Service\WorkspaceService;
 
 class PromptRenderer
 {
+    /**
+     * The new-task form posts to a route of this module, so the core
+     * BackendModuleValidator rejects it for users without access to it.
+     */
+    private const TASK_MODULE = 'web_typo3_agent_tasks';
+
     public function __construct(
         private readonly UriBuilder $uriBuilder,
         private readonly PageRenderer $pageRenderer,
         private readonly AgentScratchStorage $scratchStorage,
         private readonly WorkspaceService $workspaceService,
+        private readonly ModuleProvider $moduleProvider,
     ) {}
+
+    /**
+     * Whether the current backend user can start an agent task at all: they
+     * need access to the AI Tasks module (the form posts there — without
+     * access the core silently redirects to the first accessible module) and
+     * a workspace to work in. Otherwise the prompt is not rendered.
+     */
+    public function canStartTask(): bool
+    {
+        $backendUser = $GLOBALS['BE_USER'] ?? null;
+        if ($backendUser === null || !$this->moduleProvider->accessGranted(self::TASK_MODULE, $backendUser)) {
+            return false;
+        }
+        return $this->userHasWorkspace();
+    }
 
     /**
      * Resolve the current backend user's workspace into [id, title] for the UI.
@@ -43,7 +66,7 @@ class PromptRenderer
      * workspace. The agent only writes in workspaces, so without one the
      * new-task prompt is not rendered at all — the user could not act on it.
      */
-    public function userHasWorkspace(): bool
+    private function userHasWorkspace(): bool
     {
         if ((int)($GLOBALS['BE_USER']->workspace ?? 0) > 0) {
             return true;
@@ -97,7 +120,7 @@ class PromptRenderer
             return '';
         }
 
-        if (!$this->userHasWorkspace()) {
+        if (!$this->canStartTask()) {
             return '';
         }
 
@@ -130,7 +153,7 @@ class PromptRenderer
             return;
         }
 
-        if (!$this->userHasWorkspace()) {
+        if (!$this->canStartTask()) {
             return;
         }
 
