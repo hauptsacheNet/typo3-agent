@@ -11,8 +11,9 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\TestingFramework\Core\Functional\FunctionalTestCase;
 
 /**
- * The agent only writes in workspaces. Users without any workspace to switch
- * to get no new-task prompt at all, because they could not act on it.
+ * Users who cannot start an agent task get no new-task prompt at all: the
+ * agent only writes in workspaces, and the form posts to the AI Tasks module,
+ * which the core blocks for users without access to it.
  */
 class PromptRendererTest extends FunctionalTestCase
 {
@@ -40,6 +41,7 @@ class PromptRendererTest extends FunctionalTestCase
                 'password' => 'not-used',
                 'admin' => 0,
                 'workspace_perms' => 1,
+                'userMods' => 'web_typo3_agent_tasks',
             ]);
         $GLOBALS['LANG'] = GeneralUtility::makeInstance(LanguageServiceFactory::class)->create('default');
     }
@@ -60,7 +62,7 @@ class PromptRendererTest extends FunctionalTestCase
         $this->createWorkspace('');
         $GLOBALS['BE_USER'] = $this->setUpBackendUser(self::EDITOR_UID);
 
-        self::assertFalse($this->renderer()->userHasWorkspace());
+        self::assertFalse($this->renderer()->canStartTask());
         self::assertSame('', $this->renderer()->renderHtml(1, 'Ask the agent'));
     }
 
@@ -68,7 +70,7 @@ class PromptRendererTest extends FunctionalTestCase
     {
         $GLOBALS['BE_USER'] = $this->setUpBackendUser(1);
 
-        self::assertFalse($this->renderer()->userHasWorkspace());
+        self::assertFalse($this->renderer()->canStartTask());
         self::assertSame('', $this->renderer()->renderHtml(1, 'Ask the agent'));
     }
 
@@ -77,7 +79,7 @@ class PromptRendererTest extends FunctionalTestCase
         $this->createWorkspace('be_users_' . self::EDITOR_UID);
         $GLOBALS['BE_USER'] = $this->setUpBackendUser(self::EDITOR_UID);
 
-        self::assertTrue($this->renderer()->userHasWorkspace());
+        self::assertTrue($this->renderer()->canStartTask());
         self::assertStringContainsString('workspace-id="0"', $this->renderer()->renderHtml(1, 'Ask the agent'));
     }
 
@@ -88,7 +90,20 @@ class PromptRendererTest extends FunctionalTestCase
         $backendUser->setWorkspace(5);
         $GLOBALS['BE_USER'] = $backendUser;
 
-        self::assertTrue($this->renderer()->userHasWorkspace());
+        self::assertTrue($this->renderer()->canStartTask());
         self::assertStringContainsString('workspace-id="5"', $this->renderer()->renderHtml(1, 'Ask the agent'));
+    }
+
+    public function testEditorWithoutAccessToTaskModuleGetsNoPrompt(): void
+    {
+        GeneralUtility::makeInstance(ConnectionPool::class)->getConnectionForTable('be_users')
+            ->update('be_users', ['userMods' => 'web_layout'], ['uid' => self::EDITOR_UID]);
+        $this->createWorkspace('be_users_' . self::EDITOR_UID);
+        $backendUser = $this->setUpBackendUser(self::EDITOR_UID);
+        $backendUser->setWorkspace(5);
+        $GLOBALS['BE_USER'] = $backendUser;
+
+        self::assertFalse($this->renderer()->canStartTask());
+        self::assertSame('', $this->renderer()->renderHtml(1, 'Ask the agent'));
     }
 }
